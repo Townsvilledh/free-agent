@@ -1,0 +1,6 @@
+# Core (vault encryption) — everything else is stdlib-first
+cryptography>=42
+# Optional, install when enabling the feature:
+# playwright>=1.44            # browser tool (+ `playwright install chromium`)
+# google-api-python-client    # Gmail live path
+# google-auth-oauthlib        # Gmail OAuth flow

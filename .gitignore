@@ -1,0 +1,13 @@
+.env
+*.vault
+vault.bin
+vault.bin.key
+*.key
+*token*.json
+credentials*.json
+browser-profile/
+.freeagent/
+logs/
+*.log
+__pycache__/
+.venv/

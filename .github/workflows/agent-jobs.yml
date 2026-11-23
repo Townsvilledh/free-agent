@@ -1,0 +1,35 @@
+name: agent-jobs
+
+# Scheduled NON-PRIVATE jobs only. This is a public repo: workflow
+# logs are public, so nothing private ever runs here — no Gmail, no
+# account sessions, no private content (see HOSTING.md Layer 1 and
+# SECURITY.md privacy routing). Secrets, when later needed, come only
+# from GitHub Secrets and are never printed.
+
+on:
+  schedule:
+    # 06:17 UTC daily — an odd minute, deliberately not on the hour
+    # (on-the-hour schedules are the most delayed/dropped under load).
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daily-checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Daily AgentRouter check-in (placeholder, non-private)
+        env:
+          # Presence is reported by the job; values are never logged.
+          AGENTROUTER_API_KEY: ${{ secrets.AGENTROUTER_API_KEY }}
+        run: python jobs/daily_checkin.py --dry-run

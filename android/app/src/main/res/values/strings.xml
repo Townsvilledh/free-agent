@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FreeAgent</string>
+    <string name="message_hint">Message FreeAgent…</string>
+    <string name="send">Send</string>
+</resources>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FreeAgent" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <!-- Brand: black + Bitcoin orange, matching the user's other apps. -->
+        <item name="colorPrimary">#F7931A</item>
+        <item name="colorPrimaryVariant">#1A1A1A</item>
+        <item name="colorOnPrimary">#000000</item>
+    </style>
+</resources>
