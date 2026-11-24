@@ -17,7 +17,7 @@ by plain code here, never by asking the model to behave.
   against sandbox state before accepting them.
 """
 import json, os
-from . import sandbox
+from . import gittools, sandbox
 from .tools import search_tool
 
 FINISH = "finish"
@@ -53,6 +53,40 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
+        "name": "git_clone",
+        "description": "Clone a github.com repo (https or ssh URL only) into the sandbox as repo/.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}}, "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "repo_tree",
+        "description": "List the files in the cloned repo (capped).",
+        "parameters": {"type": "object", "properties": {
+            "repo": {"type": "string", "description": "Repo subdir, default 'repo'"}}}}},
+    {"type": "function", "function": {
+        "name": "run_tests",
+        "description": "Run the repo's test suite (auto-detected: python unittest/pytest or npm test) inside the sandbox rules. Returns the command, exit code and output.",
+        "parameters": {"type": "object", "properties": {
+            "repo": {"type": "string", "description": "Repo subdir, default 'repo'"},
+            "command": {"type": "string", "description": "Optional spec-named test command (allowlisted executables only)"}}}}},
+    {"type": "function", "function": {
+        "name": "git_diff",
+        "description": "Show a summary (or full) diff of uncommitted work in the repo.",
+        "parameters": {"type": "object", "properties": {
+            "repo": {"type": "string", "description": "Repo subdir, default 'repo'"},
+            "full": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "git_commit",
+        "description": "Commit all changes in the repo with the given message. BLOCKED automatically if the staged diff trips the secret scan.",
+        "parameters": {"type": "object", "properties": {
+            "repo": {"type": "string", "description": "Repo subdir, default 'repo'"},
+            "message": {"type": "string"}}, "required": ["message"]}}},
+    {"type": "function", "function": {
+        "name": "git_push",
+        "description": "Push the current HEAD to the given branch on origin. Only works when the task's spec explicitly authorises that exact branch; never force-pushes; main/master need explicit spec authorisation.",
+        "parameters": {"type": "object", "properties": {
+            "repo": {"type": "string", "description": "Repo subdir, default 'repo'"},
+            "branch": {"type": "string"}}, "required": ["branch"]}}},
+    {"type": "function", "function": {
         "name": FINISH,
         "description": "Declare the task complete. List any output files you claim to have produced in 'outputs' — they are verified to exist before the task is accepted as done.",
         "parameters": {"type": "object", "properties": {
@@ -82,8 +116,11 @@ def default_approver(name, summary):
     return name in ALLOWLIST
 
 class Sentinel:
-    def __init__(self, approver=None):
+    def __init__(self, approver=None, spec_context=None):
         self.approver = approver or default_approver
+        # v0.5 spec mode: {"push_branches": [...], "main_authorised": bool}
+        # Without a spec context, git_push is always denied.
+        self.spec_context = spec_context or {}
 
     def check(self, name, args, task_dir):
         """Return (allowed, reason). Deterministic; no model involved."""
@@ -96,6 +133,23 @@ class Sentinel:
                 sandbox.resolve_inside(task_dir, args.get("path", "."))
             except sandbox.SandboxError as e:
                 return False, str(e)
+        if name in ("repo_tree", "run_tests", "git_diff", "git_commit", "git_push"):
+            try:
+                gittools.repo_dir_of(task_dir, args.get("repo"))
+            except sandbox.SandboxError as e:
+                return False, str(e)
+        if name == "git_clone":
+            if not gittools.is_github_url(args.get("url", "")):
+                return False, "git_clone accepts github.com URLs only"
+        if name == "git_push":
+            branch = str(args.get("branch", ""))
+            authorised = self.spec_context.get("push_branches", [])
+            if branch not in authorised:
+                return False, (f"push to {branch!r} is not authorised by the spec "
+                               f"(authorised: {authorised or 'none'})")
+            if branch in ("main", "master") and not self.spec_context.get("main_authorised"):
+                return False, (f"push to {branch} needs the spec to explicitly "
+                               "authorise that exact branch")
         if name == FINISH:
             for rel in args.get("outputs", []) or []:
                 try:
@@ -158,12 +212,36 @@ def _h_web_search(task_dir, args):
         return f"[{res.get('source', 'web')}] {res['text']}"
     return "No result from any search route. " + str(res.get("note", ""))
 
+def _h_git_clone(task_dir, args):
+    return gittools.clone(task_dir, args.get("url", ""))
+
+def _h_repo_tree(task_dir, args):
+    return gittools.repo_tree(task_dir, args.get("repo"))
+
+def _h_run_tests(task_dir, args):
+    return gittools.run_tests(task_dir, args.get("repo"), args.get("command"))
+
+def _h_git_diff(task_dir, args):
+    return gittools.diff(task_dir, args.get("repo"), bool(args.get("full")))
+
+def _h_git_commit(task_dir, args):
+    return gittools.commit(task_dir, args.get("repo"), args.get("message", ""))
+
+def _h_git_push(task_dir, args):
+    return gittools.push(task_dir, args.get("repo"), str(args.get("branch", "")))
+
 HANDLERS = {
     "write_file": _h_write_file,
     "read_file": _h_read_file,
     "list_files": _h_list_files,
     "run_python": _h_run_python,
     "web_search": _h_web_search,
+    "git_clone": _h_git_clone,
+    "repo_tree": _h_repo_tree,
+    "run_tests": _h_run_tests,
+    "git_diff": _h_git_diff,
+    "git_commit": _h_git_commit,
+    "git_push": _h_git_push,
 }
 
 def execute(name, args, task_dir):

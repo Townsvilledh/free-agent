@@ -74,7 +74,7 @@ python -m unittest discover tests -v
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.4**:
+style/face differs". Status as of **v0.5**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -93,6 +93,8 @@ style/face differs". Status as of **v0.4**:
 | Autonomous tool use (plan → act → observe → verified finish) | **Built in Python core (v0.3)** — tool-call loop with native + text-fallback tool calls, deterministic Sentinel, sandboxed code/file tools, live-proven end-to-end (`live-tests/2026-11-24-v03-proof.md`, LOOP.md) |
 | Background / offline tasks (works while the user is away) | **Built (v0.4)** — durable checkpointed task engine in core (`--task/--resume/--tasks/--pause/--cancel`; waiting_network/waiting_route instead of fake failures) AND in the app (Tasks screen, WorkManager foreground workers, boot recovery, `needs_runner` spec export for code tasks). Runner lane for fully-offline completion: `lille-task.yml` on Actions, non-private only (OFFLINE.md, `live-tests/2026-11-24-v04-proof.md`) |
 | Files on device / workspace tools | Built in core (v0.3, sandboxed task dirs); on-device note files inside the app sandbox (v0.4 task runner) |
+| Repo work (clone / read / edit / test / diff / commit / push) | **Built in core (v0.5)** — deterministic git wrappers, never a raw shell: github-only clone, auto-detected `run_tests`, secret-scan commit block (pattern name reported, value never), push gated to spec-authorised branches only |
+| Spec-following (spec pack in → shipped-with-proof report out) | **Built in core (v0.5)** — `--spec spec.md [--repo …]`; criteria graded deterministically from trace + git evidence; report is SHIPPED / BLOCKED / NEEDS ETHURAM with the `Cost: $0 — keyless routes only` line on every report (BENCHMARK.md bar 1). Core + runner-lane for now; not in the app yet |
 | Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
 
 ## Get the app (APK)

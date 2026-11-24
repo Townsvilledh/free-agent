@@ -1,4 +1,34 @@
-# LOOP.md — the tool-call loop (v0.3)
+# LOOP.md — the tool-call loop (v0.3; repo tools + spec mode v0.5)
+
+## Repo tools + spec mode (v0.5)
+
+The loop's tool set grew deterministic repo wrappers (`gittools.py`)
+— the model never gets a raw shell:
+
+- `git_clone` — github.com URLs only (https/ssh), into `repo/`.
+- `repo_tree`, `git_diff` — capped listings/diffs of the cloned repo.
+- `run_tests` — auto-detects python unittest/pytest or `npm test`
+  (or a spec-named command from an allowlist of executables); runs
+  under the same sandbox rules as `run_python`.
+- `git_commit` — **blocked by a secret scan** over the staged diff:
+  a hit aborts the commit and reports the pattern name + file, never
+  the value.
+- `git_push` — Sentinel-gated: the branch must be authorised by the
+  task's spec; `main`/`master` additionally need the spec to name
+  that exact branch; force-push does not exist.
+
+Spec mode (`--spec spec.md [--repo <github-url|local-path>]`) parses
+Goal / Hard rules / Acceptance criteria / Deliverables / Push,
+works the spec as a durable task, then grades every criterion
+deterministically from the trace + git state and emits the enforced
+report shape: `SHIPPED` / `BLOCKED` / `NEEDS ETHURAM`, per-criterion
+evidence, and the `Cost: $0 — keyless routes only` line (BENCHMARK.md
+bar 1). A spec-mode finish is also *guarded*: if the criteria demand
+tests/commit/push, the loop rejects a `finish` until the trace holds
+that evidence. Local repo paths are pre-cloned host-side (the model
+cannot clone local paths); github URLs are cloned by the model with
+`git_clone`.
+
 
 v0.3 is the rung that turns Lille from chat into an agent. The Python
 core can now run a task end-to-end: the model plans, calls tools,

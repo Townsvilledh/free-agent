@@ -47,18 +47,28 @@ before it is claimed — no rung is described as done from intention:
 3. Code & file tools — **built in core (v0.3)** as the loop's first
    tool set (sandboxed `run_python`, file tools, keyless search);
    the live proof (below) exercised exactly these.
-4. Background / offline task mode — **built (v0.4); Lille stands
-   here.** Durable checkpointed tasks in core AND in the app:
+4. Background / offline task mode — **built (v0.4).** Durable
+   checkpointed tasks in core AND in the app:
    the user can leave, the network can drop, the process can die —
    tasks wait (`waiting_network` / `waiting_route`, never fake-fail)
    and resume with continuous step numbering; non-private
    code-execution tasks can finish on the free Actions runner lane
    while the phone is fully offline (OFFLINE.md).
-5. Build-and-deliver via Actions
-6. Browser control (structural perception first — principle 2)
-7. Scheduling / proactivity
-8. Sub-agent delegation
-9. Memory / goals system
+5. Repo work + spec-following — **built in core (v0.5); Lille
+   stands here.** Deterministic repo tools (clone/tree/test/diff/
+   commit with a secret-scan block/push gated to spec-authorised
+   branches) and spec mode: a spec pack in → worked → graded from
+   evidence → a SHIPPED / BLOCKED / NEEDS ETHURAM report out, with
+   the Cost line from BENCHMARK.md bar 1 on every report. Repo/spec
+   mode is core + runner-lane for now; the app carries the version
+   and this roadmap only. Live proofs: live-tests/2026-11-24-v05-proof.md.
+   The standing benchmark against Manus (7 bars, measured) is
+   BENCHMARK.md.
+6. Build-and-deliver via Actions
+7. Browser control (structural perception first — principle 2)
+8. Scheduling / proactivity
+9. Sub-agent delegation
+10. Memory / goals system
 
 **Live proof for rung 2 (2026-11-24):** the v0.3 loop ran a real
 Fibonacci task end-to-end on the live keyless endpoint — wrote the

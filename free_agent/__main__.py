@@ -35,11 +35,24 @@ def main(argv=None):
     ap.add_argument("--tasks", action="store_true", help="list durable tasks and their states")
     ap.add_argument("--pause", metavar="ID", help="pause a task (takes effect at the next step)")
     ap.add_argument("--cancel", metavar="ID", help="cancel a task (takes effect at the next step)")
+    ap.add_argument("--spec", metavar="FILE", help="run a spec pack (v0.5 spec mode): spec in -> worked -> verified -> STATUS report")
+    ap.add_argument("--repo", metavar="URL_OR_PATH", help="repo for --spec: a github.com URL or a local path (pre-cloned host-side)")
     ap.add_argument("--max-steps", type=int, default=12, help="step budget for --task/--resume (default 12)")
     ap.add_argument("--pace", type=float, default=None,
                     help="seconds to wait between model calls (keyless tier: ~50)")
     args = ap.parse_args(argv)
     cfg = Config.from_env()
+
+    if args.spec:
+        from .specmode import run_spec
+        with open(args.spec) as f:
+            spec_text = f.read()
+        report, result, task_dir = run_spec(
+            spec_text, repo=args.repo, config=cfg,
+            pace_seconds=args.pace, max_steps=max(args.max_steps, 25))
+        print(report)
+        print(f"(task dir: {task_dir})")
+        return 0 if report.startswith("STATUS: SHIPPED") else 1
 
     if args.tasks or args.resume or args.pause or args.cancel or args.task:
         from .taskstore import TaskEngine

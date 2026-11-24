@@ -97,7 +97,14 @@ def parse_text_tool_call(content):
         obj = json.loads(candidate)
     except ValueError as e:
         return None, f"JSON did not parse: {e}"
-    if not isinstance(obj, dict) or "tool" not in obj:
+    if not isinstance(obj, dict):
+        return None, "JSON block is not an object"
+    if "tool" not in obj:
+        # Dialect seen live (v0.5 proof): the model emits the finish
+        # tool's ARGS as bare JSON ({"summary": ..., "outputs": [...]})
+        # with no wrapper. Treat exactly that shape as a finish call.
+        if "summary" in obj and ("outputs" in obj or len(obj) <= 3):
+            return {"name": "finish", "args": obj}, None
         return None, "JSON block has no 'tool' field"
     args = obj.get("args", {})
     if not isinstance(args, dict):
@@ -126,7 +133,8 @@ class TaskLoop:
     def __init__(self, config=None, model_call=None, workspace_root=None,
                  max_steps=DEFAULT_MAX_STEPS, approver=None,
                  max_total_chars=DEFAULT_MAX_TOTAL_CHARS, clock=None,
-                 pace_seconds=None, on_checkpoint=None, control_check=None):
+                 pace_seconds=None, on_checkpoint=None, control_check=None,
+                 sentinel_context=None, finish_guard=None):
         """model_call(messages, tools) -> {"content": str|None,
         "tool_calls": [{"id","name","args"}] | None, "provider": str}
         When omitted, one is built on the Router (Fallback Law)."""
@@ -134,7 +142,8 @@ class TaskLoop:
             "FREEAGENT_WORKSPACE", os.path.expanduser("~/.freeagent/tasks"))
         self.max_steps = max_steps
         self.max_total_chars = max_total_chars
-        self.sentinel = tasktools.Sentinel(approver=approver)
+        self.sentinel = tasktools.Sentinel(approver=approver,
+                                           spec_context=sentinel_context)
         self.clock = clock or time.time
         # Pacing: the keyless anonymous tier allows ~1 request per
         # ~45s per IP. pace_seconds (or FREEAGENT_PACE_SECONDS) makes
@@ -150,6 +159,9 @@ class TaskLoop:
         # "run" | "pause" | "cancel" and is consulted between steps.
         self.on_checkpoint = on_checkpoint
         self.control_check = control_check
+        # v0.5 spec mode: optional deterministic finish guard —
+        # callable(steps_so_far, finish_args) -> rejection str | None.
+        self.finish_guard = finish_guard
         if model_call is not None:
             self.model_call = model_call
         else:
@@ -409,6 +421,14 @@ class TaskLoop:
                     self._observe(messages, c, obs)
                     continue
                 if name == tasktools.FINISH:
+                    if self.finish_guard is not None:
+                        rejection = self.finish_guard(steps, args)
+                        if rejection:
+                            obs = f"finish REJECTED: {rejection}"
+                            record("finish-rejected", name,
+                                   tasktools.args_summary(name, args), obs)
+                            self._observe(messages, c, obs)
+                            continue
                     outputs = args.get("outputs", []) or []
                     missing = [rel for rel in outputs
                                if not os.path.isfile(
