@@ -1,6 +1,6 @@
 # KEYLESS.md — the no-keys doctrine
 
-FreeAgent works **with no API key at all**. No key is collected from
+Lille works **with no API key at all**. No key is collected from
 the user, from the developer, or from anybody else. No key is shipped
 in the APK, in this repo, or in any config file. This is a design
 doctrine (decided by Ethuram, 2026-11-24), not a missing feature.
@@ -81,6 +81,6 @@ in it receives private content, however available it is.
 
 ## The rule, in one line
 
-> If FreeAgent stops working when every API key is deleted, the
+> If Lille stops working when every API key is deleted, the
 > build is wrong. Keyless first; personal keys optional; shared keys
 > never.

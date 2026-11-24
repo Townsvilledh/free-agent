@@ -1,4 +1,4 @@
-# android/ — FreeAgent app
+# android/ — Lille app (project: FreeAgent)
 
 Standard Android Gradle project (Kotlin, single activity). See
 **../APP.md** for the design, **../KEYLESS.md** for the no-keys

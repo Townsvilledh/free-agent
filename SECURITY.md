@@ -1,4 +1,4 @@
-# SECURITY.md — FreeAgent threat model & rules
+# SECURITY.md — Lille threat model & rules
 
 Security is the top requirement for this project. The design goal: at least
 as safe as a managed assistant, and safer on logins/sessions because

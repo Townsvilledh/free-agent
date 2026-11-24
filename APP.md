@@ -1,4 +1,4 @@
-# APP.md — FreeAgent Android app (APK-first)
+# APP.md — Lille Android app (APK-first)
 
 The primary interface is a native Android app, distributed as a direct
 APK download from the GitHub repo's Releases — open source, **no Play

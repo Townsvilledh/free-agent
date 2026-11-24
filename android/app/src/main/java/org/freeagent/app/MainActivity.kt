@@ -28,7 +28,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * FreeAgent — single-activity chat UI (v0.2).
+ * Lille (project: FreeAgent) — single-activity chat UI (v0.2).
  *
  * Chat is wired to the KEYLESS free brain: POST
  * https://text.pollinations.ai/openai (OpenAI-compatible, no API key,
@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         private const val TEXT_ENDPOINT = "https://text.pollinations.ai/openai"
         private const val MODEL = "openai" // default from GET /models
         private const val SYSTEM_PROMPT =
-            "You are FreeAgent, a helpful personal AI assistant running in an " +
+            "You are Lille, a helpful personal AI assistant running in an " +
             "open-source app on the user's own phone. You run on free public " +
             "models with no account and no key. Be concise, practical and " +
             "honest about your limits."
@@ -119,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.clearAttachmentButton).setOnClickListener { clearAttachment() }
 
         appendLine(
-            "FreeAgent",
+            "Lille",
             "Ready — free keyless brain, no account, no API key needed. " +
                 "Optional: your OWN AgentRouter/Groq key can be added later in Settings " +
                 "(encrypted vault) — never required, never shared."
@@ -168,7 +168,7 @@ class MainActivity : AppCompatActivity() {
     private fun send() {
         val raw = input.text.toString().trim()
         if (busy) {
-            appendLine("FreeAgent", "(Still waiting on the free brain — one request at a time. Your message will be sendable in a moment.)")
+            appendLine("Lille", "(Still waiting on the free brain — one request at a time. Your message will be sendable in a moment.)")
             return
         }
         if (raw.isEmpty() && pendingAttachment == null) return
@@ -196,7 +196,7 @@ class MainActivity : AppCompatActivity() {
     private fun askBrain(userText: String, attempt: Int) {
         busy = true
         setInputEnabled(false)
-        appendLine("FreeAgent", "…thinking")
+        appendLine("Lille", "…thinking")
 
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
@@ -277,11 +277,11 @@ class MainActivity : AppCompatActivity() {
     /** Replace the trailing "…thinking" line with the real reply. */
     private fun replaceThinking(text: String) {
         val current = transcript.text.toString()
-        val marker = "\nFreeAgent: …thinking\n"
+        val marker = "\nLille: …thinking\n"
         transcript.text = if (current.endsWith(marker)) {
-            current.removeSuffix(marker) + "\nFreeAgent: $text\n"
+            current.removeSuffix(marker) + "\nLille: $text\n"
         } else {
-            current + "\nFreeAgent: $text\n"
+            current + "\nLille: $text\n"
         }
         scrollToBottom()
     }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">FreeAgent</string>
-    <string name="message_hint">Message FreeAgent…</string>
+    <string name="app_name">Lille</string>
+    <string name="message_hint">Message Lille…</string>
     <string name="send">Send</string>
     <string name="attach">Attach</string>
     <string name="attachment">Attachment</string>

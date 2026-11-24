@@ -1,12 +1,20 @@
-# FreeAgent
+# Lille
 
-An open-source, **completely-free-stack** autonomous agent for one user (Ethuram),
-built 2026-11-23. Working name only — it is **not** Muse, not affiliated with
-Meta, and not an exact clone of anything. It aims at the same *jobs*: chat with
-long-term memory, browse the web, use tools, read Gmail (read-only first), run
-scheduled jobs, and act from a phone. **APK-first**: the product is an Android
-app for Ethuram's Galaxy A12 (design in APP.md), built for free by GitHub
-Actions and installed from a direct APK download — no Play Store fee.
+![Lille mascot](assets/lille-mascot-jacket.webp)
+
+**Lille** is an open-source, **completely-free-stack** autonomous agent for
+one user (Ethuram), built 2026-11-23. It is **not** Muse, not affiliated
+with Meta, and not an exact clone of anything. It aims at the same *jobs*:
+chat with long-term memory, browse the web, use tools, read Gmail
+(read-only first), run scheduled jobs, and act from a phone. **APK-first**:
+the product is an Android app for Ethuram's Galaxy A12 (design in APP.md),
+built for free by GitHub Actions and installed from a direct APK download
+— no Play Store fee.
+
+> **Names:** the product is **Lille**. The GitHub repo stays
+> `free-agent`, and the Python package / Android applicationId keep the
+> `freeagent` name — renaming those would break the build and the
+> download links for no user benefit.
 
 ## The free stack
 | Layer | Choice | Cost |
@@ -58,10 +66,10 @@ python -m unittest discover tests -v
 ```
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
-FreeAgent's scope is "everything Muse has that the app needs — only the
+Lille's scope is "everything Muse has that the app needs — only the
 style/face differs". Status as of **v0.2**:
 
-| Muse capability | FreeAgent status |
+| Muse capability | Lille status |
 |---|---|
 | Chat with an AI brain | **Built (v0.2)** — keyless public brain wired into the app + Python core |
 | Attachments — pictures & files picker | **Built (v0.2)** — picker + image thumbnail preview; attachment noted by name in the conversation |
@@ -86,6 +94,8 @@ A12. No Android SDK is needed on the phone or on any local machine. The
 is produced by that workflow (see android/README.md).
 
 ## Layout
+- `DESIGN.md` — evidence-based design principles (phone-as-computer, structural perception, macros, the non-LLM sentinel, quota transparency, verify-by-state)
+- `assets/` — Lille mascot (jacket / cap / working poses)
 - `KEYLESS.md` — the no-keys doctrine: keyless endpoints, their real limits, why no shared key is ever shipped
 - `ROUTES.md` — the Fallback Law: per-capability route chains (4–5 deep), public rate limits, cooldown/recovery/queue behaviour
 - `free_agent/routes.py` — the route tables as data (live / stub / candidate / planned, per capability)

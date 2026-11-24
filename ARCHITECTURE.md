@@ -1,4 +1,31 @@
-# ARCHITECTURE.md / SPEC
+# ARCHITECTURE.md / SPEC — Lille
+
+## Design principles (full text: DESIGN.md)
+From the 2026-11-24 deep-research synthesis; these bind every
+component below:
+1. **Phone is the computer; model is a rented brain** — all state
+   on-device in readable formats (Markdown + SQLite).
+2. **Perceive structurally first** — API → accessibility/DOM list →
+   vision only as a budgeted last resort (~1–1.8k tokens/screenshot
+   is why).
+3. **Every successful task becomes a macro** — recorded traces
+   replay deterministically at zero model cost (planned; tools must
+   emit replayable traces from now on).
+4. **A deterministic non-LLM sentinel owns permissions +
+   credentials** — credentials never enter model context or env
+   vars (the Manus/Gmail-token breach is the counterexample);
+   approvals, privacy routing, redaction and the vault are its seed.
+5. **Show the quota meter before a task runs** — pre-run estimate +
+   hard budget + post-run receipt (Manus's top complaint is the
+   absence of exactly this).
+6. **Verify by state, not narration** — done = a state check passed.
+7. **Proactive = prepared drafts** — sends stay approval-gated.
+8. **Router ordered by cap scarcity, degrading to queue + macros +
+   on-device model** — the Fallback Law (ROUTES.md).
+9. **OSI licences only, pinned deps, no telemetry** — AutoGPT
+   Platform (PolyForm, not OSI) and Skyvern (AGPL) are not copied.
+10. **Distribution via GitHub/F-Droid, not Play** — Play has
+    rejected an autonomous-accessibility agent before.
 
 ## Components
 1. **Agent core loop** (`free_agent/agent.py`, mirrored on-device in the
@@ -87,6 +114,7 @@ leave the phone (or, later, the user's own server).
 ## Milestones
 - [x] v0.1 router + privacy routing + vault + redaction + Gmail/browser skeletons + tests
 - [x] v0.2 **Keyless brain wired into app chat** (Pollinations POST, no keys anywhere) + **attachments picker** (preview + name note; multimodal understanding still planned) + **Fallback Law** (ROUTES.md: per-capability chains, route cooldowns + automatic recovery, honest all-routes-down queueing; live for text + search) + Actions APK build live. Personal keys remain optional, vault-only.
-- [ ] v0.2.5 **Attachments understanding + image generation in-app** (keyless multimodal/image endpoints), voice in/out
+- [ ] v0.2.5 **Attachments understanding + image generation in-app** (keyless multimodal/image endpoints), voice in/out (on-device first, per DESIGN.md §2/voice chains)
+- [ ] v0.3+ **Sentinel hardening + macro recorder + pre-run quota meter** (DESIGN.md §3/§4/§5) — design recorded now, scope not in v0.2
 - [ ] v0.3 **Actions scheduled jobs live** (daily check-in, health) + **Cloudflare Workers relay**; Gmail triage live on-phone (readonly)
 - [ ] v0.4 **Optional Oracle layer** (if the card check can be passed): 24/7 browser autonomy; opt-in Gmail send scope with approval UI; X posting via on-device session with approval
