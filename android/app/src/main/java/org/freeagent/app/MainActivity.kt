@@ -36,8 +36,9 @@ import java.util.concurrent.TimeUnit
  * GET URL get logged and cached by intermediaries.
  *
  * Anonymous keyless limits are real (~1 request at a time, roughly 45s
- * between requests per IP): a 402/429 is handled by telling the user and
- * retrying once after the wait — never a crash, never silent loss.
+ * between requests per IP): a 402/429 cools the route down and the same
+ * task auto-retries after the wait (fallback law, ROUTES.md) — never a
+ * crash, never silent loss, never a raw provider error shown.
  *
  * Attachments (v0.2): the picker lets the user attach an image or file;
  * its name/type ride along as a text note and images get a thumbnail
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
             "honest about your limits."
         private const val RATE_LIMIT_WAIT_SECONDS = 45L
         private const val MAX_HISTORY = 20
+        private const val MAX_AUTO_RETRIES = 3
     }
 
     private lateinit var transcript: TextView
@@ -85,6 +87,10 @@ class MainActivity : AppCompatActivity() {
 
     /** True while a request is in flight — the keyless tier is 1-at-a-time. */
     private var busy = false
+
+    /** Fallback law: when the keyless route is cooling down after a
+     *  rate limit, this holds the wall-clock time it recovers. */
+    private var cooldownUntilMs = 0L
 
     private val pickAttachment =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -178,10 +184,16 @@ class MainActivity : AppCompatActivity() {
 
         input.text.clear()
         clearAttachment()
-        askBrain(outgoing, isRetry = false)
+        askBrain(outgoing, attempt = 0)
     }
 
-    private fun askBrain(userText: String, isRetry: Boolean) {
+    /**
+     * Fallback-law mirror (see ROUTES.md): on a rate limit the route
+     * cools down and the SAME task auto-continues after the wait —
+     * the user never re-sends. After MAX_AUTO_RETRIES the app says so
+     * plainly instead of dying silently.
+     */
+    private fun askBrain(userText: String, attempt: Int) {
         busy = true
         setInputEnabled(false)
         appendLine("FreeAgent", "…thinking")
@@ -229,12 +241,14 @@ class MainActivity : AppCompatActivity() {
                             history.add(JSONObject().put("role", "assistant").put("content", text))
                             replaceThinking(text)
                         }
-                        (code == 402 || code == 429) && !isRetry -> {
+                        (code == 402 || code == 429) && attempt < MAX_AUTO_RETRIES -> {
                             val wait = retryAfter ?: RATE_LIMIT_WAIT_SECONDS
-                            replaceThinking("The free brain is rate-limited right now (anonymous tier). Queued — retrying automatically in about ${wait}s…")
+                            cooldownUntilMs = System.currentTimeMillis() + wait * 1000
+                            replaceThinking("The free brain is rate-limited right now (anonymous tier). Route cooling down — your task is queued and continues automatically in about ${wait}s. No need to re-send.")
                             mainHandler.postDelayed({
-                                // Retry once; askBrain re-enters with busy still true.
-                                askBrain(userText, isRetry = true)
+                                // Auto-continue the SAME task after cooldown;
+                                // askBrain re-enters with busy still true.
+                                askBrain(userText, attempt + 1)
                             }, wait * 1000)
                         }
                         else -> {
@@ -242,7 +256,7 @@ class MainActivity : AppCompatActivity() {
                             setInputEnabled(true)
                             replaceThinking(
                                 if (code == 402 || code == 429)
-                                    "Still rate-limited by the free tier. Give it a minute and send again — your message wasn't lost, it just wasn't answered yet."
+                                    "All free routes are still cooling down after several automatic retries. Your message is safe — wait a few minutes and send it again; nothing was routed anywhere else."
                                 else
                                     "The free brain returned an error (HTTP $code). It's a best-effort free service — try again shortly."
                             )

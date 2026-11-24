@@ -19,6 +19,11 @@ class ProviderCfg:
     # takes the POST at the base URL itself ("" = POST to base_url).
     chat_path: str = "/chat/completions"
     keyless: bool = False               # True = works with NO key at all
+    # Fallback law: when this route answers 402/429/503, the router
+    # cools it down for this many seconds (or the provider's
+    # Retry-After, when the transport reports one) and moves on.
+    # The route is automatically re-probed after the cooldown.
+    cooldown_seconds: int = 60
     def key(self):
         if self.keyless or not self.api_key_env:
             return ""
@@ -47,7 +52,8 @@ class Config:
             # beyond that) — the router falls through on 402/429.
             # It is a PUBLIC endpoint => NOT trusted for private content.
             ProviderCfg("keyless-pollinations", "https://text.pollinations.ai/openai", "",
-                        ["openai"], trusted_for_private=False, chat_path="", keyless=True),
+                        ["openai"], trusted_for_private=False, chat_path="", keyless=True,
+                        cooldown_seconds=45),
             # OPTIONAL personal keys (user's own, vault-only, never shipped
             # in the app and never collected by us). Enabled only when the
             # user has actually supplied their own key.
@@ -55,7 +61,8 @@ class Config:
             # => NOT trusted for private content.
             ProviderCfg("agentrouter", "https://agentrouter.org/v1", "AGENTROUTER_API_KEY",
                         ["claude-opus-4-8", "gpt-5.6-sol", "deepseek-v4-flash"], trusted_for_private=False,
-                        enabled=bool(os.environ.get("AGENTROUTER_API_KEY"))),
+                        enabled=bool(os.environ.get("AGENTROUTER_API_KEY")),
+                        cooldown_seconds=1800),  # daily batch quota: cool longer
             # Groq free tier. Also an external provider => not trusted by default.
             ProviderCfg("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY",
                         ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False,

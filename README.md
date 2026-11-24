@@ -68,7 +68,9 @@ style/face differs". Status as of **v0.2**:
 | Attachment understanding (model actually reads the image/file) | Planned — multimodal keyless models are the next step; v0.2 does **not** fake it |
 | Image generation | In progress — keyless endpoint chosen (`image.pollinations.ai`, see KEYLESS.md); in-app UI lands next |
 | Voice in / voice out | Planned |
+| Web search | **Built (v0.2)** — keyless chain: DuckDuckGo Instant → Wikipedia → Open Library (`tools/search_tool.py`); full web results are a candidate, honestly marked in ROUTES.md |
 | Web browsing / browser tasks | In progress — skeleton in Python core (Playwright, server host); WebView/Custom Tabs on phone |
+| Fallback routing (every capability, 4–5 routes deep, cooldowns, honest queueing) | **Built (v0.2, text + search)** — the Fallback Law, see ROUTES.md; image/voice chains defined with honest gaps |
 | Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
 | Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist; live jobs are v0.3 |
@@ -85,6 +87,8 @@ is produced by that workflow (see android/README.md).
 
 ## Layout
 - `KEYLESS.md` — the no-keys doctrine: keyless endpoints, their real limits, why no shared key is ever shipped
+- `ROUTES.md` — the Fallback Law: per-capability route chains (4–5 deep), public rate limits, cooldown/recovery/queue behaviour
+- `free_agent/routes.py` — the route tables as data (live / stub / candidate / planned, per capability)
 - `APP.md` — Android app design (Kotlin, Keystore vault, approvals, WorkManager)
 - `HOSTING.md` — the $0 layered hosting stack and its honest caveats
 - `android/` — Android app (v0.2: live keyless chat + attachments picker; built by Actions)

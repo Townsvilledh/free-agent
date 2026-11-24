@@ -5,16 +5,27 @@
    Android app): load memory files → build messages → route → (future:
    tool calls) → reply. v0.2 is live chat + routing in both the Python
    core and the Android app; the tool-call loop is a later milestone.
-2. **Provider router** (`free_agent/router.py`): ordered fallback
-   **keyless Pollinations (default, no key — see KEYLESS.md)** →
-   AgentRouter → Groq (both only when the user supplied their OWN key)
-   → Gemini-free / OpenRouter-:free / Cloudflare stubs. Falls back on
-   402/429/503/network error (falling through is how Retry-After is
-   respected). Enforces privacy routing — keyless public endpoints are
-   untrusted for private content, same as the relays; writes a
+2. **Provider router** (`free_agent/router.py` + `free_agent/routes.py`):
+   the **Fallback Law** (full spec in ROUTES.md). Per-capability route
+   chains, tried in order: **keyless Pollinations (default, no key —
+   see KEYLESS.md)** → AgentRouter → Groq (both only when the user
+   supplied their OWN key) → Gemini-free / OpenRouter-:free /
+   Cloudflare stubs. On 402/429/503/network error a route **cools
+   down** (Retry-After when given, else its configured cooldown), is
+   skipped while cooling, and is automatically re-probed after —
+   switching happens inside one call, so multi-step tasks continue
+   without re-sending. If **all** routes are cooling down, the router
+   returns an honest **queued** result with the earliest retry time
+   instead of an error. Enforces privacy routing — keyless public
+   endpoints are untrusted for private content, same as the relays,
+   and privacy overrides availability (a cooling trusted route queues
+   a private task; it never spills to an untrusted one); writes a
    metadata-only audit trail. The Android app calls the same keyless
-   endpoint directly (POST, never prompt-in-URL) and enforces the same
-   policy on-device before any request leaves the phone.
+   endpoint directly (POST, never prompt-in-URL), mirrors the
+   cooldown/auto-continue behaviour, and enforces the same policy
+   on-device before any request leaves the phone. Search has its own
+   live keyless chain (`tools/search_tool.py`): DuckDuckGo Instant →
+   Wikipedia → Open Library.
 3. **Memory** (`memory/`): `SOUL.md` persona, `USER.md` user facts,
    `MEMORY.md` durable facts — plain files, user-editable, **no
    secrets**. On the phone these sync as ordinary files (never the
@@ -75,7 +86,7 @@ leave the phone (or, later, the user's own server).
 
 ## Milestones
 - [x] v0.1 router + privacy routing + vault + redaction + Gmail/browser skeletons + tests
-- [x] v0.2 **Keyless brain wired into app chat** (Pollinations POST, no keys anywhere) + **attachments picker** (preview + name note; multimodal understanding still planned) + Actions APK build live. Personal keys remain optional, vault-only.
+- [x] v0.2 **Keyless brain wired into app chat** (Pollinations POST, no keys anywhere) + **attachments picker** (preview + name note; multimodal understanding still planned) + **Fallback Law** (ROUTES.md: per-capability chains, route cooldowns + automatic recovery, honest all-routes-down queueing; live for text + search) + Actions APK build live. Personal keys remain optional, vault-only.
 - [ ] v0.2.5 **Attachments understanding + image generation in-app** (keyless multimodal/image endpoints), voice in/out
 - [ ] v0.3 **Actions scheduled jobs live** (daily check-in, health) + **Cloudflare Workers relay**; Gmail triage live on-phone (readonly)
 - [ ] v0.4 **Optional Oracle layer** (if the card check can be passed): 24/7 browser autonomy; opt-in Gmail send scope with approval UI; X posting via on-device session with approval

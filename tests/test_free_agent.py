@@ -73,6 +73,108 @@ class TestKeylessProvider(unittest.TestCase):
             r.chat([{"role": "user", "content": "mail"}], category="private:gmail", private=True)
         self.assertEqual(seen, [])  # public endpoint never saw private content
 
+class FakeClock:
+    def __init__(self, t=1_000_000.0):
+        self.t = t
+    def __call__(self):
+        return self.t
+    def advance(self, seconds):
+        self.t += seconds
+
+class TestFallbackLaw(unittest.TestCase):
+    def test_chain_falls_through_two_failures_to_third(self):
+        calls = []
+        statuses = {"r1": 503, "r2": 402}
+        def transport(p, messages):
+            calls.append(p.name)
+            if p.name in statuses:
+                return statuses[p.name], ""
+            return 200, "third-route-answer"
+        r = Router(cfg_with([prov("r1"), prov("r2"), prov("r3")]), transport=transport)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["provider"], "r3")
+        self.assertEqual(out["text"], "third-route-answer")
+        self.assertEqual(calls, ["r1", "r2", "r3"])
+
+    def test_cooldown_skips_then_recovers(self):
+        clock = FakeClock()
+        state = {"r1_limited": True}
+        calls = []
+        def transport(p, messages):
+            calls.append(p.name)
+            if p.name == "r1" and state["r1_limited"]:
+                return 429, ""
+            return 200, f"from-{p.name}"
+        r1 = prov("r1"); r1.cooldown_seconds = 60
+        r = Router(cfg_with([r1, prov("r2")]), transport=transport, clock=clock)
+        # t0: r1 limited (cools down 60s), r2 serves
+        self.assertEqual(r.chat([])["provider"], "r2")
+        # t+10: r1 must be SKIPPED (not even called), r2 serves again
+        clock.advance(10); calls.clear()
+        self.assertEqual(r.chat([])["provider"], "r2")
+        self.assertNotIn("r1", calls)
+        # t+61: cooldown expired -> preferred route re-probed and,
+        # now healthy, serves again (automatic recovery)
+        state["r1_limited"] = False
+        clock.advance(51); calls.clear()
+        out = r.chat([])
+        self.assertEqual(out["provider"], "r1")
+        self.assertEqual(calls[0], "r1")
+
+    def test_all_routes_down_returns_queued_not_exception(self):
+        clock = FakeClock()
+        r = Router(cfg_with([prov("only")]),
+                   transport=lambda p, m: (429, ""), clock=clock)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertTrue(out["queued"])
+        self.assertIsNone(out["provider"])
+        self.assertIn("queued", out["text"])
+        self.assertIn("Earliest retry", out["text"])
+        self.assertGreater(out["retry_at"], clock.t)
+
+    def test_retry_after_header_wins_over_default_cooldown(self):
+        clock = FakeClock()
+        r1 = prov("r1"); r1.cooldown_seconds = 60
+        r = Router(cfg_with([r1]),
+                   transport=lambda p, m: (402, "", 900), clock=clock)
+        out = r.chat([])
+        self.assertEqual(out["retry_at"], clock.t + 900)
+
+    def test_private_trusted_cooling_queues_never_falls_to_untrusted(self):
+        clock = FakeClock()
+        trusted = prov("local-ollama", trusted=True); trusted.cooldown_seconds = 60
+        state = {"limited": True}
+        seen = []
+        def transport(p, messages):
+            seen.append(p.name)
+            if p.name == "local-ollama" and state["limited"]:
+                return 429, ""
+            return 200, f"from-{p.name}"
+        r = Router(cfg_with([prov("keyless-pollinations"), trusted]),
+                   transport=transport, clock=clock)
+        out = r.chat([], category="private:gmail", private=True)
+        self.assertTrue(out["queued"])          # trusted limited -> queued honestly
+        self.assertNotIn("keyless-pollinations", seen)  # untrusted NEVER tried
+
+class TestSearchChain(unittest.TestCase):
+    def test_search_falls_through_and_reports_honestly(self):
+        from free_agent.tools.search_tool import search
+        def miss(q):
+            return None
+        def hit(q):
+            return {"route": "wikipedia-api", "title": "T", "text": "fact",
+                    "source": "Wikipedia", "url": "u"}
+        out = search("anything", routes=[miss, hit])
+        self.assertEqual(out["route"], "wikipedia-api")
+        out = search("anything", routes=[miss])
+        self.assertIsNone(out["route"])
+        self.assertIn("No live keyless search route", out["text"])
+    def test_route_tables_have_depth_or_honest_gap(self):
+        from free_agent.routes import ROUTE_TABLES
+        for cap in ("text", "search", "voice_stt", "voice_tts", "hosting"):
+            self.assertGreaterEqual(len(ROUTE_TABLES[cap]), 3, cap)
+        self.assertGreaterEqual(len(ROUTE_TABLES["text"]), 5)
+
 class TestPrivacyRouting(unittest.TestCase):
     def test_private_blocked_from_agentrouter(self):
         seen = []

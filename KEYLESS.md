@@ -66,6 +66,19 @@ AgentRouter token or Groq key — for higher limits or stronger models:
 - The app must remain fully functional with the vault empty. Keys are
   an upgrade, never a requirement.
 
+## The fallback law (why one keyless endpoint is not a single point of failure)
+
+Keyless-first does not mean keyless-only. Under the **fallback law**
+(ROUTES.md), every capability has an ordered route chain — for text:
+keyless Pollinations → your own AgentRouter → your own Groq →
+Gemini free → OpenRouter `:free` → Cloudflare Workers AI. Routes
+cool down on `402/429/503` instead of being hammered, recover
+automatically, and if *all* routes are cooling down the agent queues
+the task and says so plainly with the earliest retry time. Keyless
+is simply the default first route — the one that needs nothing from
+anybody. Privacy routing still overrides the whole chain: no route
+in it receives private content, however available it is.
+
 ## The rule, in one line
 
 > If FreeAgent stops working when every API key is deleted, the
