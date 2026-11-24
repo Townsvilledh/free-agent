@@ -76,6 +76,7 @@ class Router:
             self.stream_transport = self._http_stream_transport
         else:
             self.stream_transport = None
+        self.raw_transport = self._http_raw_transport     # injectable in tests
         self.audit = audit if audit is not None else []   # list[RouteEvent]
         self.clock = clock or time.time                   # injectable for tests
         self.cooldowns = {}                               # provider -> unlock ts
@@ -211,6 +212,81 @@ class Router:
         if self.stream_transport is not None:
             return self._call_streamed(provider, messages)
         return self._call(provider, messages)
+
+    # ---------- raw completion (v0.3: tool-call loop) ----------
+    def _http_raw_transport(self, provider, messages, tools=None):
+        """Non-streaming chat call returning the RAW assistant message
+        (content + tool_calls). Tool calls need a whole body, so the
+        loop path does not stream. Returns (status, message|None,
+        retry_after)."""
+        body = {"model": provider.models[0], "messages": messages}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        data = json.dumps(body).encode()
+        url = provider.base_url.rstrip("/") + provider.chat_path
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        key = provider.key()
+        if key:
+            req.add_header("Authorization", "Bearer " + key)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                payload = json.loads(r.read().decode())
+                return r.status, payload["choices"][0]["message"], None
+        except urllib.error.HTTPError as e:
+            ra = e.headers.get("Retry-After") if e.headers else None
+            try:
+                ra = float(ra) if ra is not None else None
+            except (TypeError, ValueError):
+                ra = None
+            return e.code, None, ra
+        except Exception:
+            return 0, None, None
+
+    def complete(self, messages, tools=None, category="task", private=False,
+                 override_privacy=False):
+        """Route one raw completion (Fallback Law + privacy routing,
+        same rules as _chat_once) for the tool-call loop. Returns
+        {"provider", "message"} or a queued dict; raises
+        PrivacyBlocked / AllProvidersFailed exactly like chat()."""
+        now = self.clock()
+        tried, unlock_times, saw_trusted = [], [], False
+        for p in self.config.providers:
+            if not p.enabled or not p.models:
+                continue
+            if private and not p.trusted_for_private and not override_privacy:
+                self.audit.append(RouteEvent(p.name, category, "skipped-privacy"))
+                continue
+            if private and not p.trusted_for_private and override_privacy:
+                self.audit.append(RouteEvent(p.name, category, "override-used"))
+            if private:
+                saw_trusted = True
+            unlock = self.cooldowns.get(p.name, 0)
+            if unlock > now:
+                self.audit.append(RouteEvent(p.name, category, "cooldown-skip"))
+                unlock_times.append(unlock)
+                continue
+            status, message, retry_after = self.raw_transport(p, messages, tools)
+            if status == 200 and message is not None and (
+                    message.get("content") or message.get("tool_calls")):
+                self.cooldowns.pop(p.name, None)
+                self.audit.append(RouteEvent(p.name, category, "ok"))
+                return {"provider": p.name, "message": message}
+            self.audit.append(RouteEvent(p.name, category, f"http-{status}"))
+            tried.append((p.name, status))
+            if status in FALLBACK_STATUSES or status == 0:
+                cd = retry_after if retry_after else p.cooldown_seconds
+                unlock = self.clock() + cd
+                self.cooldowns[p.name] = unlock
+                unlock_times.append(unlock)
+        if private and not override_privacy and not saw_trusted:
+            raise PrivacyBlocked(
+                "Private content has no trusted provider enabled. Enable local-ollama "
+                "or pass an explicit per-task override.")
+        if unlock_times:
+            return self._queued_result(category, unlock_times, private=private)
+        raise AllProvidersFailed(f"All providers failed: {tried}")
 
     # ---------- routing ----------
     def _queued_result(self, category, unlock_times, private=False):

@@ -62,12 +62,15 @@ approval.
 pip install -r requirements.txt
 python -m free_agent --demo     # no keys, no network — proves the wiring
 python -m free_agent            # live chat via the keyless brain — still no keys
+python -m free_agent --task "Create a Python program that ..." --pace 50
+                                # v0.3 tool-call loop: Lille plans, runs tools
+                                # in a sandbox, verifies, finishes (LOOP.md)
 python -m unittest discover tests -v
 ```
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.2**:
+style/face differs". Status as of **v0.3**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -81,9 +84,10 @@ style/face differs". Status as of **v0.2**:
 | Fallback routing (every capability, 4–5 routes deep, cooldowns, honest queueing) | **Built (v0.2, text + search)** — the Fallback Law, see ROUTES.md; image/voice chains defined with honest gaps |
 | Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
-| Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist; live jobs are v0.3 |
+| Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist |
 | Approval gates (send/post/delete/money) | Built (core policy) — Android approvals UI planned |
-| Files on device / workspace tools | Planned |
+| Autonomous tool use (plan → act → observe → verified finish) | **Built in Python core (v0.3)** — tool-call loop with native + text-fallback tool calls, deterministic Sentinel, sandboxed code/file tools, live-proven end-to-end (`live-tests/2026-11-24-v03-proof.md`, LOOP.md). In-app task mode is next — the v0.3 APK does **not** contain the loop yet |
+| Files on device / workspace tools | Built in core (v0.3, sandboxed task dirs) — on-device workspace planned |
 | Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
 
 ## Get the app (APK)
@@ -101,7 +105,9 @@ is produced by that workflow (see android/README.md).
 - `free_agent/routes.py` — the route tables as data (live / stub / candidate / planned, per capability)
 - `APP.md` — Android app design (Kotlin, Keystore vault, approvals, WorkManager)
 - `HOSTING.md` — the $0 layered hosting stack and its honest caveats
-- `android/` — Android app (v0.2: live keyless chat + attachments picker; built by Actions)
+- `LOOP.md` — the v0.3 tool-call loop: tool protocol, the tool set, Sentinel rules, and the sandbox's honest limits
+- `free_agent/loop.py` — plan-act-observe loop; `free_agent/tasktools.py` — tools + Sentinel; `free_agent/sandbox.py` — confined execution
+- `android/` — Android app (v0.3 label; live keyless chat + attachments picker; built by Actions — the loop is core-only for now)
 - `.github/workflows/build-apk.yml` — free APK build + Python tests on Actions
 - `.github/workflows/agent-jobs.yml` — scheduled non-private jobs on Actions
 - `jobs/daily_checkin.py` — placeholder non-private check-in job (no real logins)

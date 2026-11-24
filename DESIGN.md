@@ -40,14 +40,28 @@ the work is widening what she can direct.
 **The staged parity ladder.** Each rung is shipped and live-tested
 before it is claimed — no rung is described as done from intention:
 
-1. Chat + fallback routing — **Lille stands here (v0.2.1).**
-2. Tool-call loop
-3. Code & file tools
+1. Chat + fallback routing — built (v0.2/v0.2.1).
+2. Tool-call loop — **built in the Python core (v0.3); Lille stands
+   here.** Plan-act-observe with native + text-fallback tool calls,
+   a deterministic Sentinel, and verified finishes (LOOP.md).
+3. Code & file tools — **built in core (v0.3)** as the loop's first
+   tool set (sandboxed `run_python`, file tools, keyless search);
+   the live proof (below) exercised exactly these.
 4. Build-and-deliver via Actions
 5. Browser control (structural perception first — principle 2)
 6. Scheduling / proactivity
 7. Sub-agent delegation
 8. Memory / goals system
+
+**Live proof for rung 2 (2026-11-24):** the v0.3 loop ran a real
+Fibonacci task end-to-end on the live keyless endpoint — wrote the
+program, hit a failing self-test (wrong starting convention),
+diagnosed it, rewrote it, and finished with the self-test passing
+and the output file verified (`live-tests/2026-11-24-v03-proof.md`).
+The same trace shows the Sentinel denying a corrupted tool name
+from the model. In-app task mode is NOT built yet: the loop lives
+in the Python core, and the v0.3 APK only bumps the version and
+this roadmap.
 
 The ladder is the honest distance between "chat that routes well"
 and the North Star. Every release names the rung it stands on.
@@ -77,8 +91,11 @@ Record the trace of a task that worked; compile repeat runs into
 deterministic macros that execute with **no model call** and stop on
 first mismatch. The model is for novel situations, not routines —
 and a macro library is a growing stock of *free* tasks.
-*Lille today: planned (post-v0.2 roadmap). Design constraint on the
-tool layer from now on: tools must emit replayable step traces.*
+*Lille today: macros still planned, but the precondition landed in
+v0.3 — the tool loop records a full step trace for every task
+(persisted per task), which is the raw material macros compile
+from. Design constraint on the tool layer: tools must emit
+replayable step traces.*
 
 ### 4. A deterministic non-LLM sentinel owns permissions + credentials
 Credentials never enter model context or environment variables —
