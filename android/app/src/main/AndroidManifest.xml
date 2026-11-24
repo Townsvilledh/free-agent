@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Provider APIs (AgentRouter/Groq) and Gmail OAuth -->
+    <!-- Keyless free provider API (no key) + optional personal-key
+         providers, and Gmail OAuth -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Approval notifications with Approve/Reject actions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

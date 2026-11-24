@@ -1,15 +1,22 @@
 """Provider router: fallback + PRIVACY ROUTING.
 
-Fallback: AgentRouter first; on HTTP 402 (daily batch quota exhausted),
-429, 503, or a network error, fall through to Groq, then other enabled
-free providers in config order.
+Fallback: the KEYLESS public provider (Pollinations) is the default first
+brain — no key, no signup (see KEYLESS.md). On HTTP 402 (quota /
+rate-limit, e.g. Pollinations anonymous limits or AgentRouter's daily
+batch quota), 429, 503, or a network error, fall through to the next
+enabled provider in config order (optional personal-key providers —
+AgentRouter, Groq — only when the user supplied their own key).
+For a rate-limited keyless endpoint, falling through IS how Retry-After
+is respected here: we do not hammer the endpoint again in this call.
 
 Privacy routing (strict mode): if content is marked private (Gmail, other
 account data), providers NOT marked trusted_for_private are SKIPPED —
-AgentRouter is a community relay with unknown retention, Groq is external.
-Private content goes to a trusted provider (e.g. local Ollama) or is
-handled by the local redacted-summarisation path. A per-task explicit
-override flag is the only way past this, and it is logged (metadata only).
+the keyless endpoint is PUBLIC, AgentRouter is a community relay with
+unknown retention, Groq is external; none of them may receive private
+content. Private content goes to a trusted provider (e.g. local Ollama)
+or is handled by the local redacted-summarisation path. A per-task
+explicit override flag is the only way past this, and it is logged
+(metadata only).
 
 Audit log: provider name + content category + timestamp ONLY. Never content.
 """
@@ -37,10 +44,15 @@ class Router:
         self.audit = audit if audit is not None else []   # list[RouteEvent]
 
     def _http_transport(self, provider, messages):
-        """OpenAI-compatible chat call. Returns (status, text)."""
+        """OpenAI-compatible chat call. Returns (status, text).
+
+        POST (never GET-with-prompt-in-URL): prompts in URLs get logged
+        and cached by intermediaries. Keyless providers send no
+        Authorization header at all.
+        """
         body = json.dumps({"model": provider.models[0], "messages": messages}).encode()
-        req = urllib.request.Request(provider.base_url.rstrip("/") + "/chat/completions",
-                                     data=body, method="POST")
+        url = provider.base_url.rstrip("/") + provider.chat_path
+        req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
         key = provider.key()
         if key:

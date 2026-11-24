@@ -11,8 +11,8 @@ Actions and installed from a direct APK download — no Play Store fee.
 ## The free stack
 | Layer | Choice | Cost |
 |---|---|---|
-| Brain (primary) | AgentRouter free credit (OpenAI-compatible `https://agentrouter.org/v1`) | $0 — signup + daily check-in credit |
-| Brain (fallback) | Groq free tier (`https://api.groq.com/openai/v1`) | $0 within free limits |
+| Brain (default) | **Keyless public API** — Pollinations (`POST https://text.pollinations.ai/openai`) | $0 — **no key, no signup, nothing collected (see KEYLESS.md)** |
+| Brain (optional upgrade) | Your OWN AgentRouter free-credit key (`https://agentrouter.org/v1`) and/or Groq free-tier key — added by you, in the app's vault only | $0 within free limits; never required, never shipped, never shared |
 | Brain (more fallbacks) | Gemini free, OpenRouter `:free`, Cloudflare Workers AI (config stubs) | $0 within free limits |
 | Brain (private content) | Trusted path only (local model where available) — never community relays by default | $0 |
 | App | Native Android (Kotlin) in `android/` — chat, approvals, Keystore vault | $0 |
@@ -22,10 +22,14 @@ Actions and installed from a direct APK download — no Play Store fee.
 | Memory / scheduler / tools | This repo (Python core, MIT) + WorkManager on-device | $0 |
 
 ## Honest limits
-- Free tiers are **capped and changeable**: AgentRouter releases premium-model
-  quota in daily batches (a `402` means the batch is gone until the next one);
-  Groq free has per-model daily token caps. The router falls back automatically,
-  but no free stack is unlimited.
+- The keyless anonymous tier is **slow by design**: ~1 request at a time,
+  roughly 45s between requests per IP, `402` + `Retry-After` beyond that,
+  best-effort with no uptime guarantee. The app queues/retries and the
+  router falls through — but it will never feel like a paid tier.
+- Keyed free tiers are **capped and changeable**: AgentRouter releases
+  premium-model quota in daily batches (a `402` means the batch is gone
+  until the next one); Groq free has per-model daily token caps. The
+  router falls back automatically, but no free stack is unlimited.
 - Model quality varies by provider/model; this will not match a frontier
   product on every hard task.
 - Free providers can shrink or shut down. The design is multi-provider from
@@ -38,17 +42,39 @@ Actions and installed from a direct APK download — no Play Store fee.
   are public, so Gmail/private content never runs there.
 
 ## Security first
-Read **SECURITY.md** before adding any key or account. Short version: secrets
-live only in an encrypted vault, Gmail starts read-only, private content is
-**not** routed to community relays by default, and sending/posting/deleting/
-money always needs your approval.
+Read **SECURITY.md** before adding any key or account. Short version: **no
+API key is needed at all** (KEYLESS.md); any personal key you choose to add
+lives only in the encrypted vault on your device, Gmail starts read-only,
+private content is **not** routed to public/keyless endpoints or community
+relays by default, and sending/posting/deleting/money always needs your
+approval.
 
 ## Run (Python core)
 ```bash
 pip install -r requirements.txt
 python -m free_agent --demo     # no keys, no network — proves the wiring
+python -m free_agent            # live chat via the keyless brain — still no keys
 python -m unittest discover tests -v
 ```
+
+## Muse-twin roadmap — capability status (honest, updated per release)
+FreeAgent's scope is "everything Muse has that the app needs — only the
+style/face differs". Status as of **v0.2**:
+
+| Muse capability | FreeAgent status |
+|---|---|
+| Chat with an AI brain | **Built (v0.2)** — keyless public brain wired into the app + Python core |
+| Attachments — pictures & files picker | **Built (v0.2)** — picker + image thumbnail preview; attachment noted by name in the conversation |
+| Attachment understanding (model actually reads the image/file) | Planned — multimodal keyless models are the next step; v0.2 does **not** fake it |
+| Image generation | In progress — keyless endpoint chosen (`image.pollinations.ai`, see KEYLESS.md); in-app UI lands next |
+| Voice in / voice out | Planned |
+| Web browsing / browser tasks | In progress — skeleton in Python core (Playwright, server host); WebView/Custom Tabs on phone |
+| Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
+| Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
+| Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist; live jobs are v0.3 |
+| Approval gates (send/post/delete/money) | Built (core policy) — Android approvals UI planned |
+| Files on device / workspace tools | Planned |
+| Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
 
 ## Get the app (APK)
 Push to the public repo → **Actions → build-apk** builds the debug APK for
@@ -58,9 +84,10 @@ A12. No Android SDK is needed on the phone or on any local machine. The
 is produced by that workflow (see android/README.md).
 
 ## Layout
+- `KEYLESS.md` — the no-keys doctrine: keyless endpoints, their real limits, why no shared key is ever shipped
 - `APP.md` — Android app design (Kotlin, Keystore vault, approvals, WorkManager)
 - `HOSTING.md` — the $0 layered hosting stack and its honest caveats
-- `android/` — Android Gradle scaffold (chat UI stub; built by Actions)
+- `android/` — Android app (v0.2: live keyless chat + attachments picker; built by Actions)
 - `.github/workflows/build-apk.yml` — free APK build + Python tests on Actions
 - `.github/workflows/agent-jobs.yml` — scheduled non-private jobs on Actions
 - `jobs/daily_checkin.py` — placeholder non-private check-in job (no real logins)
@@ -69,5 +96,5 @@ is produced by that workflow (see android/README.md).
 - `free_agent/redact.py` — strips emails, codes, cards, keys before any LLM sees text
 - `free_agent/tools/gmail_tool.py` — least-privilege Gmail (readonly first; AppAuth on Android)
 - `free_agent/tools/browser_tool.py` — Playwright, server-host profile (phone uses WebView/Custom Tabs instead)
-- `free_agent/scheduler.py` — job definitions incl. daily AgentRouter check-in
+- `free_agent/scheduler.py` — job definitions (incl. optional AgentRouter check-in for users who added their own key)
 - `memory/` — SOUL.md / USER.md / MEMORY.md equivalents (no secrets, ever)

@@ -14,7 +14,14 @@ class ProviderCfg:
     models: list
     trusted_for_private: bool = False   # may this provider receive private content?
     enabled: bool = True
+    # Path appended to base_url for the chat call. OpenAI-compatible
+    # gateways use "/chat/completions"; Pollinations' keyless endpoint
+    # takes the POST at the base URL itself ("" = POST to base_url).
+    chat_path: str = "/chat/completions"
+    keyless: bool = False               # True = works with NO key at all
     def key(self):
+        if self.keyless or not self.api_key_env:
+            return ""
         return os.environ.get(self.api_key_env, "")
 
 @dataclass
@@ -32,13 +39,27 @@ class Config:
             gmail_send_enabled=os.environ.get("FREEAGENT_GMAIL_SEND", "0") == "1",
         )
         c.providers = [
-            # Primary: AgentRouter free credit. Community relay, unknown retention
+            # DEFAULT brain (v0.2, NO-KEYS DOCTRINE): Pollinations keyless
+            # public endpoint. No key, no signup, nothing to collect from
+            # anybody. POST https://text.pollinations.ai/openai
+            # (OpenAI-compatible). Anonymous limits are real (~1 concurrent
+            # request, ~45s between requests per IP, 402 + Retry-After
+            # beyond that) — the router falls through on 402/429.
+            # It is a PUBLIC endpoint => NOT trusted for private content.
+            ProviderCfg("keyless-pollinations", "https://text.pollinations.ai/openai", "",
+                        ["openai"], trusted_for_private=False, chat_path="", keyless=True),
+            # OPTIONAL personal keys (user's own, vault-only, never shipped
+            # in the app and never collected by us). Enabled only when the
+            # user has actually supplied their own key.
+            # AgentRouter free credit. Community relay, unknown retention
             # => NOT trusted for private content.
             ProviderCfg("agentrouter", "https://agentrouter.org/v1", "AGENTROUTER_API_KEY",
-                        ["claude-opus-4-8", "gpt-5.6-sol", "deepseek-v4-flash"], trusted_for_private=False),
-            # Fallback: Groq free tier. Also an external provider => not trusted by default.
+                        ["claude-opus-4-8", "gpt-5.6-sol", "deepseek-v4-flash"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("AGENTROUTER_API_KEY"))),
+            # Groq free tier. Also an external provider => not trusted by default.
             ProviderCfg("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY",
-                        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False),
+                        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("GROQ_API_KEY"))),
             # Config stubs for more free tiers (enable when keys exist).
             ProviderCfg("gemini-free", "https://generativelanguage.googleapis.com/v1beta/openai/",
                         "GEMINI_API_KEY", ["gemini-flash-latest"], trusted_for_private=False, enabled=False),

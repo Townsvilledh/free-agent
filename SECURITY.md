@@ -8,7 +8,8 @@ everything runs on a host the user controls.
 | Threat | Mitigation |
 |---|---|
 | Key/token leaks via chat, code, git, logs | Secrets only in the encrypted vault; `.gitignore` covers `.env`, vault, tokens, browser profiles, logs; audit logs are metadata-only |
-| A free provider retaining/reading private mail | **Privacy routing**: private content never goes to AgentRouter (community relay, unknown retention) or Groq by default; only trusted providers (local model) or a redacted local summary path |
+| A free provider retaining/reading private mail | **Privacy routing**: private content never goes to the keyless public endpoint, AgentRouter (community relay, unknown retention) or Groq by default; only trusted providers (local model) or a redacted local summary path |
+| A leaked/shared API key killing the app for everyone | **No-keys doctrine (KEYLESS.md)**: the app ships with NO embedded or shared key; the default brain is a keyless public endpoint; the only keys that may exist are the user's own, in their own vault |
 | Over-broad Google access | Gmail OAuth starts with `gmail.readonly` only; send scope is a separate opt-in (`FREEAGENT_GMAIL_SEND=1`) plus per-send approval |
 | Stolen session cookies (= stolen accounts) | Browser profile lives only on the host, dir 0700, never exported/committed/synced; treat it like a password file |
 | Agent acting on its own (sending, posting, paying) | Approval gates: send/post/delete/money always require explicit user approval by default |

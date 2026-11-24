@@ -3,13 +3,18 @@
 ## Components
 1. **Agent core loop** (`free_agent/agent.py`, mirrored on-device in the
    Android app): load memory files → build messages → route → (future:
-   tool calls) → reply. v0.1 is chat + routing; the tool-call loop is a
-   later milestone.
+   tool calls) → reply. v0.2 is live chat + routing in both the Python
+   core and the Android app; the tool-call loop is a later milestone.
 2. **Provider router** (`free_agent/router.py`): ordered fallback
-   AgentRouter → Groq → Gemini-free / OpenRouter-:free / Cloudflare
-   stubs. Falls back on 402/429/503/network error. Enforces privacy
-   routing; writes a metadata-only audit trail. The Android app enforces
-   the same policy on-device before any request leaves the phone.
+   **keyless Pollinations (default, no key — see KEYLESS.md)** →
+   AgentRouter → Groq (both only when the user supplied their OWN key)
+   → Gemini-free / OpenRouter-:free / Cloudflare stubs. Falls back on
+   402/429/503/network error (falling through is how Retry-After is
+   respected). Enforces privacy routing — keyless public endpoints are
+   untrusted for private content, same as the relays; writes a
+   metadata-only audit trail. The Android app calls the same keyless
+   endpoint directly (POST, never prompt-in-URL) and enforces the same
+   policy on-device before any request leaves the phone.
 3. **Memory** (`memory/`): `SOUL.md` persona, `USER.md` user facts,
    `MEMORY.md` durable facts — plain files, user-editable, **no
    secrets**. On the phone these sync as ordinary files (never the
@@ -70,6 +75,7 @@ leave the phone (or, later, the user's own server).
 
 ## Milestones
 - [x] v0.1 router + privacy routing + vault + redaction + Gmail/browser skeletons + tests
-- [ ] v0.2 **GitHub Actions APK build live** (debug APK artifact) + **on-device chat** wired to the router; keys via the Android Keystore vault
+- [x] v0.2 **Keyless brain wired into app chat** (Pollinations POST, no keys anywhere) + **attachments picker** (preview + name note; multimodal understanding still planned) + Actions APK build live. Personal keys remain optional, vault-only.
+- [ ] v0.2.5 **Attachments understanding + image generation in-app** (keyless multimodal/image endpoints), voice in/out
 - [ ] v0.3 **Actions scheduled jobs live** (daily check-in, health) + **Cloudflare Workers relay**; Gmail triage live on-phone (readonly)
 - [ ] v0.4 **Optional Oracle layer** (if the card check can be passed): 24/7 browser autonomy; opt-in Gmail send scope with approval UI; X posting via on-device session with approval

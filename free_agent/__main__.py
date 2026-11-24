@@ -6,7 +6,7 @@ from .config import Config
 from .agent import Agent
 
 def demo_transport(provider, messages):
-    return 200, f"[demo:{provider.name}] FreeAgent is wired. Add keys via the vault to go live."
+    return 200, f"[demo:{provider.name}] FreeAgent is wired. The keyless brain works with zero keys; personal keys are optional (vault only)."
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="free_agent")

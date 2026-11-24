@@ -1,14 +1,21 @@
-# android/ — FreeAgent app scaffold
+# android/ — FreeAgent app
 
 Standard Android Gradle project (Kotlin, single activity). See
-**../APP.md** for the design and **../HOSTING.md** for how hosting
-stays at $0.
+**../APP.md** for the design, **../KEYLESS.md** for the no-keys
+doctrine, and **../HOSTING.md** for how hosting stays at $0.
 
-## Status: scaffold, not a compiled APK
-This tree is **source-complete structure** — manifest, Gradle files,
-MainActivity chat stub, resources. The compiled `.apk` binary requires
-an Android SDK build. There is **no Android SDK/JDK in the current dev
-environment** and none should be installed on the phone.
+## Status: v0.2 — live keyless chat + attachments picker
+MainActivity is wired to the keyless public brain
+(`POST https://text.pollinations.ai/openai`, no API key), with
+conversation history, a thinking state, and graceful handling of the
+anonymous rate limit (queue + one retry). The Attach button opens the
+system document picker (images + files) with a thumbnail/name preview;
+attachments are noted by name in the conversation — the model does not
+read their contents yet (multimodal is a planned step, never faked).
+
+The compiled `.apk` binary requires an Android SDK build. There is
+**no Android SDK/JDK in the current dev environment** and none should
+be installed on the phone — GitHub Actions builds it (below).
 
 ## Chosen build path: GitHub Actions (free)
 `.github/workflows/build-apk.yml` (repo root) builds the debug APK on

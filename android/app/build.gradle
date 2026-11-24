@@ -11,8 +11,8 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 1
-        versionName "0.2.0-scaffold"
+        versionCode 2
+        versionName "0.2.0"
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]
@@ -43,6 +43,7 @@ dependencies {
     implementation "androidx.work:work-runtime-ktx:2.9.0"
     // Gmail OAuth (gmail.readonly) via AppAuth
     implementation "net.openid:appauth:0.11.1"
-    // HTTP to the free provider APIs (AgentRouter / Groq)
+    // HTTP to the free provider APIs (keyless Pollinations by default;
+    // optional personal AgentRouter / Groq keys if the user adds their own)
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
 }

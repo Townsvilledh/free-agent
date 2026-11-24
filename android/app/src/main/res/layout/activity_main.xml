@@ -6,6 +6,7 @@
     android:padding="16dp">
 
     <ScrollView
+        android:id="@+id/scrollView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
@@ -16,10 +17,46 @@
             android:textSize="15sp" />
     </ScrollView>
 
+    <!-- Attachment preview: shown above the input when a file/image
+         has been picked. Thumbnail (images) + display name + remove. -->
+    <LinearLayout
+        android:id="@+id/attachmentBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="4dp"
+        android:visibility="gone">
+        <ImageView
+            android:id="@+id/attachmentThumb"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/attachment"
+            android:scaleType="centerCrop" />
+        <TextView
+            android:id="@+id/attachmentName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:textSize="13sp" />
+        <Button
+            android:id="@+id/clearAttachmentButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/remove" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal">
+        <Button
+            android:id="@+id/attachButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/attach" />
         <EditText
             android:id="@+id/messageInput"
             android:layout_width="0dp"
