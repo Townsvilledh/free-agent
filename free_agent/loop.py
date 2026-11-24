@@ -104,11 +104,29 @@ def parse_text_tool_call(content):
         return None, "'args' is not a JSON object"
     return {"name": str(obj["tool"]), "args": args}, None
 
+class WaitingRouteError(RuntimeError):
+    """All routes are cooling down (Fallback Law). NOT a failure:
+    the task waits and resumes at/after retry_at."""
+    def __init__(self, retry_at=None, message="all routes cooling down"):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+class WaitingNetworkError(RuntimeError):
+    """Transport/network failure reaching every route. NOT a failure:
+    the task waits and resumes at/after retry_at."""
+    def __init__(self, retry_at=None, message="network unreachable"):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+class TaskPausedSignal(BaseException):
+    """Raised inside the loop when the durable store says pause/cancel.
+    BaseException so ordinary error handling cannot swallow it."""
+
 class TaskLoop:
     def __init__(self, config=None, model_call=None, workspace_root=None,
                  max_steps=DEFAULT_MAX_STEPS, approver=None,
                  max_total_chars=DEFAULT_MAX_TOTAL_CHARS, clock=None,
-                 pace_seconds=None):
+                 pace_seconds=None, on_checkpoint=None, control_check=None):
         """model_call(messages, tools) -> {"content": str|None,
         "tool_calls": [{"id","name","args"}] | None, "provider": str}
         When omitted, one is built on the Router (Fallback Law)."""
@@ -126,6 +144,12 @@ class TaskLoop:
             pace_seconds = float(os.environ.get("FREEAGENT_PACE_SECONDS", "0") or 0)
         self.pace_seconds = pace_seconds
         self._last_call_ts = 0.0
+        # v0.4 durable tasks: on_checkpoint(state_dict) is called after
+        # EVERY step (and before the first) so a killed process loses
+        # at most the in-flight model call; control_check() returns
+        # "run" | "pause" | "cancel" and is consulted between steps.
+        self.on_checkpoint = on_checkpoint
+        self.control_check = control_check
         if model_call is not None:
             self.model_call = model_call
         else:
@@ -136,9 +160,26 @@ class TaskLoop:
     @staticmethod
     def _router_model_call(router):
         def call(messages, tools):
-            out = router.complete(messages, tools=tools, category="task")
+            try:
+                out = router.complete(messages, tools=tools, category="task")
+            except AllProvidersFailed as e:
+                # Distinguish "network down" (every attempt status 0)
+                # from a real provider failure: both are WAITING
+                # states for a durable task, never silent failures.
+                text = str(e)
+                now = time.time()
+                unlocks = [u for u in router.cooldowns.values() if u > now]
+                retry_at = min(unlocks) if unlocks else now + 60
+                if ", 0)" in text or text.rstrip().endswith(", 0)]"):
+                    raise WaitingNetworkError(retry_at,
+                        f"network unreachable (all transports failed): {e}")
+                if unlocks:
+                    raise WaitingRouteError(retry_at,
+                        f"routes unavailable, cooling down: {e}")
+                raise
             if out.get("queued"):
-                raise AllProvidersFailed(out.get("text", "all routes cooling down"))
+                raise WaitingRouteError(out.get("retry_at"),
+                                        out.get("text", "all routes cooling down"))
             msg = out["message"]
             calls = []
             for tc in msg.get("tool_calls") or []:
@@ -163,32 +204,113 @@ class TaskLoop:
         self._last_call_ts = time.time()
         return self.model_call(messages, tasktools.TOOL_SCHEMAS)
 
+    # ---------- checkpointing (v0.4 durable tasks) ----------
+    def _checkpoint(self, state):
+        if self.on_checkpoint is None:
+            return
+        snap = {
+            "task_id": state["task_id"], "task_text": state["task_text"],
+            "task_dir": state["task_dir"],
+            "messages": state["messages"],
+            "steps": [vars(s) for s in state["steps"]],
+            "iterations_done": state["iterations_done"],
+            "total_chars": state["total_chars"],
+            "reframed": state["reframed"], "nudged": state["nudged"],
+            "provider": state.get("provider"),
+            "ts": self.clock(),
+        }
+        try:
+            self.on_checkpoint(snap)
+        except Exception:
+            pass  # checkpointing must never kill the loop itself
+
+    def _control(self):
+        if self.control_check is None:
+            return "run"
+        try:
+            return self.control_check() or "run"
+        except Exception:
+            return "run"
+
     # ---------- the loop ----------
-    def run(self, task_text):
-        task_id, task_dir = sandbox.make_task_dir(self.workspace_root)
-        steps = []
-        total_chars = 0
+    def run(self, task_text, task_id=None):
+        if task_id is None:
+            task_id, task_dir = sandbox.make_task_dir(self.workspace_root)
+        else:
+            task_dir = os.path.join(self.workspace_root, task_id)
+            os.makedirs(task_dir, exist_ok=True)
+        state = {
+            "task_id": task_id, "task_text": task_text, "task_dir": task_dir,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": task_text},
+            ],
+            "steps": [], "iterations_done": 0, "total_chars": 0,
+            "reframed": False, "nudged": False, "provider": None,
+        }
+        return self._execute(state)
+
+    def resume(self, snap):
+        """Continue a checkpointed task in THIS (new) process. Step
+        numbering continues from the checkpoint — completed steps are
+        never repeated because the full message state is restored."""
+        state = {
+            "task_id": snap["task_id"], "task_text": snap["task_text"],
+            "task_dir": snap["task_dir"], "messages": snap["messages"],
+            "steps": [Step(**s) for s in snap.get("steps", [])],
+            "iterations_done": snap.get("iterations_done", 0),
+            "total_chars": snap.get("total_chars", 0),
+            "reframed": snap.get("reframed", False),
+            "nudged": snap.get("nudged", False),
+            "provider": snap.get("provider"),
+        }
+        return self._execute(state)
+
+    def _execute(self, state):
+        task_id = state["task_id"]
+        task_dir = state["task_dir"]
+        task_text = state["task_text"]
+        steps = state["steps"]
+        messages = state["messages"]
+        total_chars = state["total_chars"]
+        reframed = state["reframed"]
+        nudged = state["nudged"]
+        result = None
 
         def record(kind, tool="", args_summary="", result_summary=""):
             steps.append(Step(len(steps) + 1, kind, tool, args_summary,
                               _summarise(result_summary)))
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": task_text},
-        ]
-        reframed = False
-        nudged = False
-        result = None
+        def sync():
+            state.update(total_chars=total_chars, reframed=reframed,
+                         nudged=nudged)
+            self._checkpoint(state)
 
-        for step_no in range(1, self.max_steps + 1):
+        self._checkpoint(state)
+        for step_no in range(state["iterations_done"] + 1, self.max_steps + 1):
+            ctl = self._control()
+            if ctl in ("pause", "cancel"):
+                record("stop", result_summary=f"task {ctl}led by user")
+                state.update(total_chars=total_chars, reframed=reframed,
+                             nudged=nudged)
+                self._checkpoint(state)
+                raise TaskPausedSignal(ctl)
             try:
                 reply = self._call_model(messages)
+            except (WaitingRouteError, WaitingNetworkError):
+                state.update(total_chars=total_chars, reframed=reframed,
+                             nudged=nudged)
+                self._checkpoint(state)
+                raise
             except (PrivacyBlocked, AllProvidersFailed) as e:
                 record("stop", result_summary=f"model unavailable: {e}")
                 result = TaskResult("error", f"Model unavailable: {e}",
                                     task_dir, task_id, steps)
                 break
+            state["iterations_done"] = step_no
+            state["provider"] = reply.get("provider")
+            total_chars += len(reply.get("content") or "")
+            content = reply.get("content")
             total_chars += len(reply.get("content") or "")
             content = reply.get("content")
             calls = reply.get("tool_calls") or []
@@ -241,6 +363,7 @@ class TaskLoop:
                     messages[1] = {"role": "user", "content": new_task}
                     record("refusal-reframe",
                            result_summary="task rephrased once after a phrasing refusal")
+                    sync()
                     continue
                 if not nudged:
                     nudged = True
@@ -249,6 +372,7 @@ class TaskLoop:
                         "You replied with plain text. If the task is done, call the "
                         "finish tool; otherwise call a tool to continue."})
                     record("text", result_summary="plain-text reply; nudged to use tools/finish")
+                    sync()
                     continue
                 record("stop", result_summary="model ended with plain text, no finish call")
                 result = TaskResult("stopped",
@@ -308,6 +432,7 @@ class TaskLoop:
                 record("tool", name, tasktools.args_summary(name, args), obs)
                 self._observe(messages, c, obs)
 
+            sync()
             if finished is not None:
                 result = finished
                 break

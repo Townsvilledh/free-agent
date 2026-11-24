@@ -65,12 +65,16 @@ python -m free_agent            # live chat via the keyless brain — still no k
 python -m free_agent --task "Create a Python program that ..." --pace 50
                                 # v0.3 tool-call loop: Lille plans, runs tools
                                 # in a sandbox, verifies, finishes (LOOP.md)
+python -m free_agent --tasks    # v0.4: durable tasks — checkpointed after
+python -m free_agent --resume <id>   # every step, resumable in a new process,
+python -m free_agent --pause <id>    # waiting (not failing) when the network
+python -m free_agent --cancel <id>   # or a free route drops (OFFLINE.md)
 python -m unittest discover tests -v
 ```
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.3**:
+style/face differs". Status as of **v0.4**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -86,8 +90,9 @@ style/face differs". Status as of **v0.3**:
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
 | Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist |
 | Approval gates (send/post/delete/money) | Built (core policy) — Android approvals UI planned |
-| Autonomous tool use (plan → act → observe → verified finish) | **Built in Python core (v0.3)** — tool-call loop with native + text-fallback tool calls, deterministic Sentinel, sandboxed code/file tools, live-proven end-to-end (`live-tests/2026-11-24-v03-proof.md`, LOOP.md). In-app task mode is next — the v0.3 APK does **not** contain the loop yet |
-| Files on device / workspace tools | Built in core (v0.3, sandboxed task dirs) — on-device workspace planned |
+| Autonomous tool use (plan → act → observe → verified finish) | **Built in Python core (v0.3)** — tool-call loop with native + text-fallback tool calls, deterministic Sentinel, sandboxed code/file tools, live-proven end-to-end (`live-tests/2026-11-24-v03-proof.md`, LOOP.md) |
+| Background / offline tasks (works while the user is away) | **Built (v0.4)** — durable checkpointed task engine in core (`--task/--resume/--tasks/--pause/--cancel`; waiting_network/waiting_route instead of fake failures) AND in the app (Tasks screen, WorkManager foreground workers, boot recovery, `needs_runner` spec export for code tasks). Runner lane for fully-offline completion: `lille-task.yml` on Actions, non-private only (OFFLINE.md, `live-tests/2026-11-24-v04-proof.md`) |
+| Files on device / workspace tools | Built in core (v0.3, sandboxed task dirs); on-device note files inside the app sandbox (v0.4 task runner) |
 | Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
 
 ## Get the app (APK)
@@ -106,9 +111,12 @@ is produced by that workflow (see android/README.md).
 - `APP.md` — Android app design (Kotlin, Keystore vault, approvals, WorkManager)
 - `HOSTING.md` — the $0 layered hosting stack and its honest caveats
 - `LOOP.md` — the v0.3 tool-call loop: tool protocol, the tool set, Sentinel rules, and the sandbox's honest limits
+- `OFFLINE.md` — the v0.4 background/offline task modes (A: user away, B: network drops, C: fully-offline runner lane) and the honest Android limits
 - `free_agent/loop.py` — plan-act-observe loop; `free_agent/tasktools.py` — tools + Sentinel; `free_agent/sandbox.py` — confined execution
-- `android/` — Android app (v0.3 label; live keyless chat + attachments picker; built by Actions — the loop is core-only for now)
-- `.github/workflows/build-apk.yml` — free APK build + Python tests on Actions
+- `free_agent/taskstore.py` — durable task engine (v0.4): persistent store, per-step checkpoints, kill/resume, waiting-state classification
+- `android/` — Android app (v0.4; live keyless chat + attachments picker + durable background Tasks screen; built by Actions)
+- `.github/workflows/build-apk.yml` — free APK build + Python/Android tests on Actions
+- `.github/workflows/lille-task.yml` — runner lane: one non-private durable task per dispatch, artifact `lille-task-<id>` (OFFLINE.md mode C)
 - `.github/workflows/agent-jobs.yml` — scheduled non-private jobs on Actions
 - `jobs/daily_checkin.py` — placeholder non-private check-in job (no real logins)
 - `free_agent/router.py` — provider fallback + privacy routing + metadata-only audit

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Keyless free provider API (no key) + optional personal-key
          providers, and Gmail OAuth -->
@@ -8,7 +9,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Opt-in foreground service for long tasks (user-started only) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- v0.4: re-queue unfinished durable tasks after reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -27,6 +31,27 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- v0.4: durable background tasks screen -->
+        <activity
+            android:name=".TasksActivity"
+            android:exported="false" />
+
+        <!-- v0.4: WorkManager foreground workers (tasks run with a
+             persistent notification while active) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- v0.4: reboot recovery for unfinished tasks -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- AppAuth OAuth redirect (Gmail, gmail.readonly) -->
         <activity

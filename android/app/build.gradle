@@ -11,8 +11,8 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 3
-        versionName "0.3.0"
+        versionCode 4
+        versionName "0.4.0"
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]
@@ -46,4 +46,6 @@ dependencies {
     // HTTP to the free provider APIs (keyless Pollinations by default;
     // optional personal AgentRouter / Groq keys if the user adds their own)
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // JVM unit tests (task state machine — pure Kotlin, no device needed)
+    testImplementation "junit:junit:4.13.2"
 }

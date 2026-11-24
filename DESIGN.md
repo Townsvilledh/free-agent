@@ -41,17 +41,24 @@ the work is widening what she can direct.
 before it is claimed — no rung is described as done from intention:
 
 1. Chat + fallback routing — built (v0.2/v0.2.1).
-2. Tool-call loop — **built in the Python core (v0.3); Lille stands
-   here.** Plan-act-observe with native + text-fallback tool calls,
+2. Tool-call loop — **built in the Python core (v0.3).**
+   Plan-act-observe with native + text-fallback tool calls,
    a deterministic Sentinel, and verified finishes (LOOP.md).
 3. Code & file tools — **built in core (v0.3)** as the loop's first
    tool set (sandboxed `run_python`, file tools, keyless search);
    the live proof (below) exercised exactly these.
-4. Build-and-deliver via Actions
-5. Browser control (structural perception first — principle 2)
-6. Scheduling / proactivity
-7. Sub-agent delegation
-8. Memory / goals system
+4. Background / offline task mode — **built (v0.4); Lille stands
+   here.** Durable checkpointed tasks in core AND in the app:
+   the user can leave, the network can drop, the process can die —
+   tasks wait (`waiting_network` / `waiting_route`, never fake-fail)
+   and resume with continuous step numbering; non-private
+   code-execution tasks can finish on the free Actions runner lane
+   while the phone is fully offline (OFFLINE.md).
+5. Build-and-deliver via Actions
+6. Browser control (structural perception first — principle 2)
+7. Scheduling / proactivity
+8. Sub-agent delegation
+9. Memory / goals system
 
 **Live proof for rung 2 (2026-11-24):** the v0.3 loop ran a real
 Fibonacci task end-to-end on the live keyless endpoint — wrote the
@@ -62,6 +69,15 @@ The same trace shows the Sentinel denying a corrupted tool name
 from the model. In-app task mode is NOT built yet: the loop lives
 in the Python core, and the v0.3 APK only bumps the version and
 this roadmap.
+
+**v0.4 update (2026-11-24):** the loop is now durable in the core
+(checkpoint after every step, kill/resume proven across processes)
+and the app gained its own background task mode (Tasks screen,
+WorkManager foreground workers, boot recovery, honest
+`needs_runner` export for code tasks). The Actions runner lane
+(`lille-task.yml`) is built and dispatched for real — see
+`live-tests/2026-11-24-v04-proof.md` for what is proven and what
+only Ethuram's A12 can prove (on-device background behaviour).
 
 The ladder is the honest distance between "chat that routes well"
 and the North Star. Every release names the rung it stands on.

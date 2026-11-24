@@ -1,0 +1,90 @@
+name: lille-task
+
+# Runner lane (OFFLINE.md mode C): run ONE durable Lille task on a
+# free GitHub Actions runner. Dispatching needs one online moment;
+# after that the phone can go fully offline — the task runs here,
+# checkpoints are uploaded with the run, and the trace + produced
+# files come back as a workflow artifact named lille-task-<task_id>
+# to fetch when the user is back.
+#
+# NON-PRIVATE ONLY: a spec flagged private is refused by the guard
+# step below. Private content never runs on shared CI (public logs,
+# provider routing) — that is the privacy-routing law, enforced here
+# in plain workflow code, not by trusting the dispatcher.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "Task id (names the artifact: lille-task-<task_id>)"
+        required: true
+        type: string
+      task_text:
+        description: "The task for Lille's tool-call loop"
+        required: true
+        type: string
+      private:
+        description: "Flag as private (true = refused: non-private tasks only)"
+        required: false
+        default: "false"
+        type: string
+      pace_seconds:
+        description: "Seconds between model calls (keyless tier ~50)"
+        required: false
+        default: "50"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Guard — refuse private tasks
+        run: |
+          if [ "${{ inputs.private }}" = "true" ]; then
+            echo "::error::Refused: lille-task runs NON-PRIVATE tasks only. Private content never runs on shared CI."
+            exit 1
+          fi
+          echo "Non-private task accepted: ${{ inputs.task_id }}"
+
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Write task spec
+        run: |
+          mkdir -p task-run
+          cat > task-run/spec.json <<'EOF'
+          {"task_id": "${{ inputs.task_id }}", "private": false, "runner": "github-actions"}
+          EOF
+          cat task-run/spec.json
+
+      - name: Run the durable task loop (checkpointed)
+        env:
+          FREEAGENT_WORKSPACE: ${{ github.workspace }}/task-run/workspace
+        run: |
+          python -m free_agent --task "${{ inputs.task_text }}" \
+            --task-id "${{ inputs.task_id }}" \
+            --pace "${{ inputs.pace_seconds }}" \
+            --max-steps 12 || true
+          echo "--- task store ---"
+          python -m free_agent --tasks || true
+
+      - name: Upload trace + outputs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lille-task-${{ inputs.task_id }}
+          path: |
+            task-run/spec.json
+            task-run/workspace/task_store/
+            task-run/workspace/task_logs/
+            task-run/workspace/${{ inputs.task_id }}/
+          if-no-files-found: warn

@@ -121,6 +121,11 @@ class MainActivity : AppCompatActivity() {
         attachmentThumb = findViewById(R.id.attachmentThumb)
         attachmentName = findViewById(R.id.attachmentName)
 
+        findViewById<Button>(R.id.tasksButton).setOnClickListener {
+            // v0.4: durable background tasks (OFFLINE.md) — create a
+            // task there, run it, then close the app / go offline.
+            startActivity(android.content.Intent(this, TasksActivity::class.java))
+        }
         sendButton.setOnClickListener { send() }
         attachButton.setOnClickListener {
             // Images AND files; the note in the outgoing message says what
