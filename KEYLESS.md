@@ -79,6 +79,36 @@ is simply the default first route — the one that needs nothing from
 anybody. Privacy routing still overrides the whole chain: no route
 in it receives private content, however available it is.
 
+## v0.2.1 — smart fixes (2026-11-24)
+
+Fixes from the live tough-task battery (`live-tests/`), all solved by
+making Lille smarter — none by hard-coding content:
+
+- **Refusal recovery.** The free model refuses some phrasings
+  ("autonomous profitable agent") while doing the identical work
+  phrased concretely. On a refusal, Lille reframes the request ONCE
+  into a concrete task form and retries, telling the user it did so.
+  Refusals of genuinely harmful/illegal requests are never reframed.
+  (Two live lessons baked in: refusals arrive with curly apostrophes
+  — detection normalises quotes; and the reframe must *replace* the
+  trigger wording, not wrap it.)
+- **Streaming with auto-continue.** Chat now streams (SSE); if the
+  connection drops mid-answer, the partial text is preserved and the
+  task auto-continues up to 3 times, stitching one whole answer —
+  the battery lost 3 of 8 first attempts to mid-body transport cuts.
+- **Extraction verification.** JSON extractions are checked field by
+  field against the source text; a mismatch (the battery's
+  "Mr." → "M.") triggers one correction retry naming the field.
+- **Grounding rule.** System prompts (Python + Android) now forbid
+  inventing features/facts/steps, require unknowns to be labelled,
+  and require safe, standard-practice advice.
+- **No hard-coded branding.** A battery task had baked another
+  project's X-profile sign-off into Lille as if it were a rule. It
+  was corrected with a dated note; branding lives in per-user
+  config/memory only (DESIGN.md #11).
+
+Live re-runs of both affected cases: `live-tests/2026-11-24-v021-fixes.md`.
+
 ## The rule, in one line
 
 > If Lille stops working when every API key is deleted, the

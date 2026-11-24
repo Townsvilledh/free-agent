@@ -18,6 +18,40 @@ computer lives (the phone), how the meter runs (free, visible,
 fallback-routed), and how trust is enforced (deterministically, not
 by the model).
 
+## North Star
+
+Lille's destination, in Ethuram's terms (restated 2026-11-24): a
+**fully autonomous universal agent that handles every task Muse
+handles — including building whole products and delivering them.**
+His example: he says "build me X", and Lille answers *"send me an
+APK of something I said you should do"* made real — the finished
+thing comes back to his phone, not a plan, not a code dump, a
+deliverable. An agent capable of creating something like Fluid is
+the bar.
+
+**The build-and-deliver pattern.** Lille directs from the phone;
+free cloud runners (GitHub Actions) act as her build hands; she
+delivers the finished artifact or link back. This is not a fantasy
+architecture — it is the exact loop that built Lille herself:
+specified from a phone, built and tested on GitHub's free runners,
+and delivered back as a one-tap APK link. The pattern is proven;
+the work is widening what she can direct.
+
+**The staged parity ladder.** Each rung is shipped and live-tested
+before it is claimed — no rung is described as done from intention:
+
+1. Chat + fallback routing — **Lille stands here (v0.2.1).**
+2. Tool-call loop
+3. Code & file tools
+4. Build-and-deliver via Actions
+5. Browser control (structural perception first — principle 2)
+6. Scheduling / proactivity
+7. Sub-agent delegation
+8. Memory / goals system
+
+The ladder is the honest distance between "chat that routes well"
+and the North Star. Every release names the rung it stands on.
+
 ## The principles
 
 ### 1. The phone is the computer; the model is a rented brain
@@ -118,6 +152,19 @@ Lille ships as a direct GitHub APK download now; F-Droid is the
 store path if any. Play is later/never, and accessibility
 permissions get honest plain-language disclosure in-product.
 *Lille today: GitHub APK distribution live (v0.1+); F-Droid planned.*
+
+### 11. No hard-coded branding — identity lives in user config/memory
+Sign-offs, brand lines, house style and persona flourishes belong to
+the *user's* config and memory files (SOUL.md / USER.md / MEMORY.md,
+per-user settings), never to code, shipped prompts, or tests. The
+lesson is dated 2026-11-24: a test once baked one project's X-profile
+sign-off into a Lille task as if it were a Lille rule — it was that
+profile's branding, nothing more. Code that hard-codes branding
+breaks the moment the same agent serves a different user, project,
+or mood; config that carries branding travels with its owner.
+*Lille today: in force — v0.2.1 audited the repo (code, prompts,
+docs) for hard-coded sign-offs; the one occurrence was a test file,
+corrected with a dated note.*
 
 ## What we deliberately do NOT copy
 - Opaque credit meters (Manus/Devin lesson).

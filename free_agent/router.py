@@ -40,7 +40,10 @@ import json, time, urllib.request, urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from . import recovery
+
 FALLBACK_STATUSES = {402, 429, 503}
+MAX_STREAM_CONTINUATIONS = 3
 
 @dataclass
 class RouteEvent:
@@ -58,9 +61,21 @@ def _fmt_ts(ts):
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S UTC")
 
 class Router:
-    def __init__(self, config, transport=None, audit=None, clock=None):
+    def __init__(self, config, transport=None, audit=None, clock=None, stream_transport=None):
         self.config = config
         self.transport = transport or self._http_transport
+        # Streaming (v0.2.1): used when available so a connection that
+        # dies mid-answer preserves the partial text and auto-continues
+        # instead of losing the whole reply (battery finding: 3 of 8
+        # first attempts died in transport). The real HTTP transport
+        # streams by default; injected test transports opt in by
+        # passing stream_transport explicitly.
+        if stream_transport is not None:
+            self.stream_transport = stream_transport
+        elif transport is None:
+            self.stream_transport = self._http_stream_transport
+        else:
+            self.stream_transport = None
         self.audit = audit if audit is not None else []   # list[RouteEvent]
         self.clock = clock or time.time                   # injectable for tests
         self.cooldowns = {}                               # provider -> unlock ts
@@ -101,6 +116,102 @@ class Router:
             return status, text, None
         return out
 
+    # ---------- streaming transport (v0.2.1) ----------
+    def _http_stream_transport(self, provider, messages):
+        """SSE streaming chat call (stream=true). Returns
+        (status, text, retry_after) on a clean finish; raises
+        recovery.StreamDropped(partial) if the connection dies
+        mid-body, so the caller can auto-continue instead of losing
+        the whole answer. A provider that ignores stream=true and
+        answers with one plain JSON body is handled too."""
+        body = json.dumps({"model": provider.models[0], "messages": messages,
+                           "stream": True}).encode()
+        url = provider.base_url.rstrip("/") + provider.chat_path
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        key = provider.key()
+        if key:
+            req.add_header("Authorization", "Bearer " + key)
+        try:
+            resp = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            ra = e.headers.get("Retry-After") if e.headers else None
+            try:
+                ra = float(ra) if ra is not None else None
+            except (TypeError, ValueError):
+                ra = None
+            return e.code, "", ra
+        except Exception:
+            return 0, "", None
+        partial = ""
+        saw_sse = False
+        try:
+            with resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        saw_sse = True
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            delta = json.loads(payload)["choices"][0]["delta"].get("content") or ""
+                        except Exception:
+                            delta = ""
+                        partial += delta
+                    elif line.startswith("{") and not saw_sse:
+                        # Non-streaming JSON body despite stream=true.
+                        rest = line + resp.read().decode("utf-8", "replace")
+                        try:
+                            data = json.loads(rest)
+                            return resp.status, data["choices"][0]["message"]["content"], None
+                        except Exception:
+                            return resp.status, "", None
+            return resp.status, partial, None
+        except Exception:
+            if partial:
+                raise recovery.StreamDropped(partial)
+            return 0, "", None
+
+    def _call_streamed(self, provider, messages):
+        """One logical call over the streaming transport: if the
+        stream drops mid-body, auto-continue ('continue from where
+        you stopped') up to MAX_STREAM_CONTINUATIONS times and stitch
+        the parts into one whole answer."""
+        parts = []
+        msgs = messages
+        continuations = 0
+        while True:
+            try:
+                out = self.stream_transport(provider, msgs)
+            except recovery.StreamDropped as dropped:
+                parts.append(dropped.partial)
+                continuations += 1
+                if continuations > MAX_STREAM_CONTINUATIONS:
+                    return 200, recovery.stitch(parts), None
+                so_far = recovery.stitch(parts)
+                msgs = messages + [
+                    {"role": "assistant", "content": so_far},
+                    {"role": "user", "content": recovery.CONTINUE_PROMPT},
+                ]
+                continue
+            if len(out) == 2:
+                status, text = out
+                retry_after = None
+            else:
+                status, text, retry_after = out
+            if status == 200 and text:
+                parts.append(text)
+                return 200, recovery.stitch(parts), None
+            return status, text, retry_after
+
+    def _dispatch(self, provider, messages):
+        if self.stream_transport is not None:
+            return self._call_streamed(provider, messages)
+        return self._call(provider, messages)
+
     # ---------- routing ----------
     def _queued_result(self, category, unlock_times, private=False):
         earliest = min(unlock_times)
@@ -121,6 +232,47 @@ class Router:
         return {"provider": None, "text": text, "queued": True, "retry_at": earliest}
 
     def chat(self, messages, category="public", private=False, override_privacy=False):
+        """Route one request, with refusal recovery (v0.2.1).
+
+        If the serving model refuses the *phrasing* of a vague outcome
+        request, Lille reframes it ONCE into a concrete task form and
+        retries through the chain, telling the user it did so.
+        Refusals of genuinely harmful/illegal requests are never
+        reframed — they are delivered plainly, as are second refusals
+        (with a suggested manual rephrase appended)."""
+        result = self._chat_once(messages, category=category,
+                                 private=private, override_privacy=override_privacy)
+        text = result.get("text") or ""
+        if result.get("queued") or not recovery.is_refusal(text):
+            return result
+        user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                user_text = m.get("content", "")
+                break
+        if recovery.is_harmful_request(user_text):
+            self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-harmful-stands"))
+            return result
+        reframed = recovery.reframe_request(user_text)
+        new_messages = list(messages)
+        for i in range(len(new_messages) - 1, -1, -1):
+            if new_messages[i].get("role") == "user":
+                new_messages[i] = {"role": "user", "content": reframed}
+                break
+        self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-reframed-retry"))
+        retry = self._chat_once(new_messages, category=category,
+                                private=private, override_privacy=override_privacy)
+        retry_text = retry.get("text") or ""
+        if retry.get("queued"):
+            return retry
+        if recovery.is_refusal(retry_text):
+            retry["text"] = retry_text + recovery.REFUSAL_STILL
+            return retry
+        retry["text"] = recovery.REFUSAL_NOTE + "\n\n" + retry_text
+        retry["reframed_from_refusal"] = True
+        return retry
+
+    def _chat_once(self, messages, category="public", private=False, override_privacy=False):
         now = self.clock()
         tried = []            # (provider, status) actually attempted
         unlock_times = []     # unlock ts of every route that is cooling
@@ -143,7 +295,7 @@ class Router:
                 unlock_times.append(unlock)
                 continue
 
-            status, text, retry_after = self._call(p, messages)
+            status, text, retry_after = self._dispatch(p, messages)
             if status == 200 and text:
                 self.cooldowns.pop(p.name, None)
                 self.audit.append(RouteEvent(p.name, category, "ok"))

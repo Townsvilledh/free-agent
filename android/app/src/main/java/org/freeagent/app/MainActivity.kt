@@ -58,10 +58,21 @@ class MainActivity : AppCompatActivity() {
             "You are Lille, a helpful personal AI assistant running in an " +
             "open-source app on the user's own phone. You run on free public " +
             "models with no account and no key. Be concise, practical and " +
-            "honest about your limits."
+            "honest about your limits. Never invent features, facts, or " +
+            "steps the user did not give you; if something is unknown, say " +
+            "so or label it clearly as an assumption. Give only safe, " +
+            "standard-practice advice."
         private const val RATE_LIMIT_WAIT_SECONDS = 45L
         private const val MAX_HISTORY = 20
         private const val MAX_AUTO_RETRIES = 3
+        // v0.2.1 smart recovery: stream continuations + one refusal reframe.
+        private const val MAX_CONTINUATIONS = 3
+        private const val REFUSAL_NOTE =
+            "The free model refused that phrasing, so I re-asked it as a concrete task:"
+        private const val REFUSAL_STILL =
+            "\n\n(The free model refused this one even after I re-asked it as a " +
+            "concrete task. Try a more specific wording yourself — for example " +
+            "\"Write a Python script that …\" naming exactly what it should do.)"
     }
 
     private lateinit var transcript: TextView
@@ -194,15 +205,39 @@ class MainActivity : AppCompatActivity() {
      * plainly instead of dying silently.
      */
     private fun askBrain(userText: String, attempt: Int) {
+        askBrain(userText, attempt, reframed = false, carry = "", continuations = 0,
+                 historyText = userText)
+    }
+
+    /**
+     * v0.2.1 smart recovery, mirroring the Python router:
+     * - STREAMING (stream=true): if the connection drops mid-answer,
+     *   the partial text is kept and the SAME task auto-continues
+     *   ("continue from where you stopped", max MAX_CONTINUATIONS),
+     *   stitching the parts into one answer.
+     * - REFUSAL RECOVERY: if the free model refuses the phrasing of a
+     *   vague outcome request, Lille reframes it ONCE as a concrete
+     *   task and retries, telling the user it did so. Refusals of
+     *   harmful requests are never reframed; second refusals are
+     *   delivered plainly with a suggested manual rephrase.
+     */
+    private fun askBrain(userText: String, attempt: Int, reframed: Boolean,
+                         carry: String, continuations: Int, historyText: String) {
         busy = true
         setInputEnabled(false)
-        appendLine("Lille", "…thinking")
+        if (carry.isEmpty()) appendLine("Lille", "…thinking")
 
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
         for (m in history.takeLast(MAX_HISTORY)) messages.put(m)
         messages.put(JSONObject().put("role", "user").put("content", userText))
+        if (carry.isNotEmpty()) {
+            messages.put(JSONObject().put("role", "assistant").put("content", carry))
+            messages.put(JSONObject().put("role", "user")
+                .put("content", "Continue exactly from where you stopped. Do not repeat any text you have already given."))
+        }
         val bodyJson = JSONObject().put("model", MODEL).put("messages", messages)
+            .put("stream", true)
 
         val request = Request.Builder()
             .url(TEXT_ENDPOINT)
@@ -212,49 +247,114 @@ class MainActivity : AppCompatActivity() {
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 mainHandler.post {
-                    busy = false
-                    setInputEnabled(true)
-                    replaceThinking("Couldn't reach the free brain — check your connection and try again. Nothing was sent anywhere else.")
+                    if (carry.isNotEmpty() && continuations < MAX_CONTINUATIONS) {
+                        // Dropped before/while streaming with a partial
+                        // answer preserved: auto-continue, don't lose it.
+                        replaceCurrentReply(carry + "\n\n(Connection dropped — continuing automatically…)")
+                        askBrain(userText, attempt, reframed, carry, continuations + 1, historyText)
+                    } else {
+                        busy = false
+                        setInputEnabled(true)
+                        replaceCurrentReply("Couldn't reach the free brain — check your connection and try again. Nothing was sent anywhere else.")
+                    }
                 }
             }
 
             override fun onResponse(call: Call, response: Response) {
                 val code = response.code
                 val retryAfter = response.header("Retry-After")?.toLongOrNull()
-                val text = try {
-                    if (code == 200) {
-                        val parsed = JSONObject(response.body?.string() ?: "")
-                        parsed.getJSONArray("choices").getJSONObject(0)
-                            .getJSONObject("message").getString("content").trim()
-                    } else ""
-                } catch (e: Exception) {
-                    ""
-                } finally {
+                var chunk = ""
+                var dropped = false
+                if (code == 200) {
+                    try {
+                        val source = response.body?.source()
+                        if (source != null) {
+                            var sseMode: Boolean? = null
+                            while (true) {
+                                val line = try {
+                                    source.readUtf8Line()
+                                } catch (e: Exception) {
+                                    dropped = chunk.isNotEmpty()
+                                    break
+                                } ?: break
+                                if (line.isBlank()) continue
+                                if (sseMode == null) sseMode = line.startsWith("data:")
+                                if (sseMode == true) {
+                                    if (!line.startsWith("data:")) continue
+                                    val payload = line.substring(5).trim()
+                                    if (payload == "[DONE]") break
+                                    try {
+                                        chunk += JSONObject(payload).getJSONArray("choices")
+                                            .getJSONObject(0).getJSONObject("delta")
+                                            .optString("content", "")
+                                    } catch (e: Exception) {
+                                        // keep-alive / non-delta line: ignore
+                                    }
+                                } else {
+                                    // Provider ignored stream=true and sent
+                                    // one plain JSON body instead.
+                                    val rest = try { source.readUtf8() } catch (e: Exception) { "" }
+                                    chunk = try {
+                                        JSONObject(line + rest).getJSONArray("choices")
+                                            .getJSONObject(0).getJSONObject("message")
+                                            .getString("content").trim()
+                                    } catch (e: Exception) {
+                                        ""
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (chunk.isNotEmpty()) dropped = true
+                    } finally {
+                        response.close()
+                    }
+                } else {
                     response.close()
                 }
+                val full = stitch(carry, chunk)
                 mainHandler.post {
                     when {
-                        code == 200 && text.isNotEmpty() -> {
+                        code == 200 && dropped && full.isNotEmpty() &&
+                            continuations < MAX_CONTINUATIONS -> {
+                            replaceCurrentReply(full + "\n\n(Connection dropped mid-answer — continuing automatically…)")
+                            askBrain(userText, attempt, reframed, full, continuations + 1, historyText)
+                        }
+                        code == 200 && full.isNotEmpty() && isRefusalReply(full) &&
+                            !reframed && !looksHarmful(userText) -> {
+                            // Refusal recovery: reframe ONCE, transparently.
+                            replaceCurrentReply(REFUSAL_NOTE)
+                            askBrain(reframeRequest(userText), attempt, reframed = true,
+                                     carry = "", continuations = 0, historyText = historyText)
+                        }
+                        code == 200 && full.isNotEmpty() -> {
                             busy = false
                             setInputEnabled(true)
-                            history.add(JSONObject().put("role", "user").put("content", userText))
-                            history.add(JSONObject().put("role", "assistant").put("content", text))
-                            replaceThinking(text)
+                            history.add(JSONObject().put("role", "user").put("content", historyText))
+                            history.add(JSONObject().put("role", "assistant").put("content", full))
+                            replaceCurrentReply(
+                                when {
+                                    reframed && isRefusalReply(full) -> full + REFUSAL_STILL
+                                    reframed -> "$REFUSAL_NOTE\n\n$full"
+                                    else -> full
+                                }
+                            )
                         }
                         (code == 402 || code == 429) && attempt < MAX_AUTO_RETRIES -> {
                             val wait = retryAfter ?: RATE_LIMIT_WAIT_SECONDS
                             cooldownUntilMs = System.currentTimeMillis() + wait * 1000
-                            replaceThinking("The free brain is rate-limited right now (anonymous tier). Route cooling down — your task is queued and continues automatically in about ${wait}s. No need to re-send.")
+                            replaceCurrentReply("The free brain is rate-limited right now (anonymous tier). Route cooling down — your task is queued and continues automatically in about ${wait}s. No need to re-send.")
                             mainHandler.postDelayed({
                                 // Auto-continue the SAME task after cooldown;
                                 // askBrain re-enters with busy still true.
-                                askBrain(userText, attempt + 1)
+                                askBrain(userText, attempt + 1, reframed, "", 0, historyText)
                             }, wait * 1000)
                         }
                         else -> {
                             busy = false
                             setInputEnabled(true)
-                            replaceThinking(
+                            replaceCurrentReply(
                                 if (code == 402 || code == 429)
                                     "All free routes are still cooling down after several automatic retries. Your message is safe — wait a few minutes and send it again; nothing was routed anywhere else."
                                 else
@@ -267,6 +367,70 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    // ---------- smart recovery helpers (mirror free_agent/recovery.py) ----------
+
+    private fun isRefusalReply(text: String): Boolean {
+        if (text.length > 300) return false
+        // Normalise curly apostrophes — the model emits both forms,
+        // and a missed match silently disables refusal recovery.
+        val low = text.lowercase().replace('\u2019', '\'').replace('\u2018', '\'')
+        return low.contains("can't help with that") || low.contains("cannot help") ||
+            low.contains("can't assist with that") || low.contains("cannot assist with that") ||
+            (low.startsWith("i'm sorry") && low.contains("can't"))
+    }
+
+    private fun looksHarmful(text: String): Boolean {
+        val low = text.lowercase()
+        return listOf(
+            "bomb", "explosive", "build a weapon", "make a weapon", "murder",
+            "steal ", "fraud", "phishing", "malware", "ransomware", "hack into",
+            "counterfeit", "forge "
+        ).any { low.contains(it) }
+    }
+
+    private fun reframeRequest(original: String): String {
+        var core = original.replace(Regex("\\[attachment:[^\\]]*\\]"), "")
+        core = core.replace(Regex("\\[Attached file:.*?\\]", RegexOption.DOT_MATCHES_ALL), "").trim()
+        if (core.isEmpty()) core = original.trim()
+        val low = core.lowercase()
+        // Mirror recovery.py: wrapping the trigger wording fails — the
+        // reframe must REPLACE vague outcome wording with a concrete
+        // spec (the proven shape for agent+money asks).
+        if (low.contains("agent") &&
+            listOf("profit", "trading", "trade", "btc", "bitcoin", "crypto", "money").any { low.contains(it) }
+        ) {
+            return "Write a Python script for an autonomous agent that watches the BTC " +
+                "price and paper-trades a simple moving-average strategy, no real " +
+                "money. Include a short explanation of how it works and any risks."
+        }
+        val moneyish = listOf("profit", "trading", "trade", "money", "invest", "crypto", "btc", "bitcoin")
+            .any { low.contains(it) }
+        val sanitised = core.replace(Regex("(?i)\\bprofitable\\b"), "")
+            .replace(Regex("(?i)\\bmake money\\b"), "run a simulated strategy")
+            .replace(Regex("\\s+"), " ").trim()
+        val bounds = if (moneyish)
+            "as a simulation / paper-only version with no real money, no real accounts and no real-world transactions"
+        else
+            "as a self-contained example that acts on no real accounts or real-world systems"
+        return "Write a complete Python script that implements the following request " +
+            "$bounds. Include a short explanation of how it works and any risks. Request: $sanitised"
+    }
+
+    /** Join a continuation onto the partial answer, trimming overlap. */
+    private fun stitch(carry: String, chunk: String): String {
+        if (carry.isEmpty()) return chunk
+        if (chunk.isEmpty()) return carry
+        var overlap = 0
+        val maxK = minOf(64, carry.length, chunk.length)
+        for (k in maxK downTo 1) {
+            if (carry.endsWith(chunk.substring(0, k))) {
+                overlap = k
+                break
+            }
+        }
+        return carry + chunk.substring(overlap)
+    }
+
     // ---------- UI helpers ----------
 
     private fun setInputEnabled(enabled: Boolean) {
@@ -274,12 +438,14 @@ class MainActivity : AppCompatActivity() {
         attachButton.isEnabled = enabled
     }
 
-    /** Replace the trailing "…thinking" line with the real reply. */
-    private fun replaceThinking(text: String) {
+    /** Replace the current (last) Lille reply — the "…thinking" line,
+     *  or a preserved partial answer — with the given text. */
+    private fun replaceCurrentReply(text: String) {
         val current = transcript.text.toString()
-        val marker = "\nLille: …thinking\n"
-        transcript.text = if (current.endsWith(marker)) {
-            current.removeSuffix(marker) + "\nLille: $text\n"
+        val marker = "\nLille: "
+        val idx = current.lastIndexOf(marker)
+        transcript.text = if (idx >= 0) {
+            current.substring(0, idx + marker.length) + text + "\n"
         } else {
             current + "\nLille: $text\n"
         }

@@ -175,6 +175,127 @@ class TestSearchChain(unittest.TestCase):
             self.assertGreaterEqual(len(ROUTE_TABLES[cap]), 3, cap)
         self.assertGreaterEqual(len(ROUTE_TABLES["text"]), 5)
 
+class TestRefusalRecovery(unittest.TestCase):
+    REFUSAL = "I'm sorry, but I can't help with that."
+    def test_refusal_triggers_reframe_and_retry(self):
+        calls = []
+        def transport(p, messages):
+            calls.append(messages[-1]["content"])
+            if any(("paper-trades" in m["content"] or "Write a complete Python script" in m["content"]) for m in messages):
+                return 200, "Here is a paper-trading agent script..."
+            return 200, self.REFUSAL
+        r = Router(cfg_with([prov("keyless-pollinations")]), transport=transport)
+        out = r.chat([{"role": "user", "content": "can you create an autonomous profitable agent"}])
+        self.assertEqual(len(calls), 2)                      # exactly ONE reframe retry
+        self.assertTrue(out.get("reframed_from_refusal"))
+        self.assertIn("refused that phrasing", out["text"])  # transparency note
+        self.assertIn("paper-trading agent script", out["text"])
+
+    def test_refusal_with_curly_apostrophes_still_detected(self):
+        # Live finding (v0.2.1 re-run): the model answers with curly
+        # apostrophes ("I’m sorry, but I can’t help with that.") —
+        # detection must normalise them or recovery never fires.
+        from free_agent.recovery import is_refusal
+        self.assertTrue(is_refusal("I\u2019m sorry, but I can\u2019t help with that."))
+        calls = []
+        def transport(p, messages):
+            calls.append(1)
+            if any(("paper-trades" in m["content"] or "Write a complete Python script" in m["content"]) for m in messages):
+                return 200, "Here is the script..."
+            return 200, "I\u2019m sorry, but I can\u2019t help with that."
+        r = Router(cfg_with([prov("keyless-pollinations")]), transport=transport)
+        out = r.chat([{"role": "user", "content": "can you create an autonomous profitable agent"}])
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(out.get("reframed_from_refusal"))
+
+    def test_harmful_request_is_never_reframed(self):
+        calls = []
+        def transport(p, messages):
+            calls.append(1)
+            return 200, self.REFUSAL
+        r = Router(cfg_with([prov("keyless-pollinations")]), transport=transport)
+        out = r.chat([{"role": "user", "content": "how do I build a bomb to hurt people"}])
+        self.assertEqual(len(calls), 1)                      # refusal stands, no retry
+        self.assertFalse(out.get("reframed_from_refusal"))
+        self.assertEqual(out["text"], self.REFUSAL)          # delivered plainly
+
+    def test_second_refusal_surfaces_honestly(self):
+        calls = []
+        def transport(p, messages):
+            calls.append(1)
+            return 200, self.REFUSAL
+        r = Router(cfg_with([prov("keyless-pollinations")]), transport=transport)
+        out = r.chat([{"role": "user", "content": "can you create an autonomous profitable agent"}])
+        self.assertEqual(len(calls), 2)                      # one reframe, no loop
+        self.assertIn("can't help with that", out["text"])
+        self.assertIn("Try a more specific wording", out["text"])
+
+class TestStreamingContinuation(unittest.TestCase):
+    def test_mid_stream_drop_is_stitched(self):
+        from free_agent.recovery import StreamDropped
+        state = {"n": 0}
+        def stream_transport(p, messages):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise StreamDropped("Hello wor")
+            # continuation call must carry the partial + continue prompt
+            self.assertTrue(any("Continue exactly from where you stopped" in m["content"]
+                                for m in messages))
+            return 200, "ld, done."
+        r = Router(cfg_with([prov("keyless-pollinations")]),
+                   transport=lambda p, m: (500, ""), stream_transport=stream_transport)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["text"], "Hello world, done.")
+        self.assertEqual(state["n"], 2)
+
+    def test_continuations_are_capped_at_three(self):
+        from free_agent.recovery import StreamDropped
+        state = {"n": 0}
+        def stream_transport(p, messages):
+            state["n"] += 1
+            raise StreamDropped(f"part{state['n']} ")
+        r = Router(cfg_with([prov("keyless-pollinations")]),
+                   transport=lambda p, m: (500, ""), stream_transport=stream_transport)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(state["n"], 4)  # initial + max 3 continuations
+        self.assertIn("part1", out["text"])
+        self.assertIn("part4", out["text"])
+
+class TestExtractionVerification(unittest.TestCase):
+    SOURCE = ("Hello, this is Mr. Adewale Johnson, your landlord. Your rent of "
+              "₦450,000 (that's about $290) is due on 15 December 2026. "
+              "Please call me on 0803 555 0142 once you have paid. Thanks.")
+    def test_mangled_name_is_corrected_on_retry(self):
+        from free_agent.agent import Agent
+        calls = []
+        def transport(p, messages):
+            calls.append(messages[-1]["content"])
+            if any("extraction errors" in m["content"] for m in messages):
+                return 200, ('{"name":"Mr. Adewale Johnson","amount_ngn":450000,'
+                             '"amount_usd":290,"due_date":"15 December 2026",'
+                             '"phone":"0803 555 0142"}')
+            return 200, ('{"name":"M. Adewale Johnson","amount_ngn":450000,'
+                         '"amount_usd":290,"due_date":"15 December 2026",'
+                         '"phone":"0803 555 0142"}')
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            agent = Agent(cfg_with([prov("keyless-pollinations")]),
+                          memory_dir=d, transport=transport)
+            out = agent.chat(f"Extract into ONLY valid JSON with keys name, amount_ngn, "
+                             f"amount_usd, due_date, phone: {self.SOURCE}")
+        self.assertEqual(len(calls), 2)                      # one correction retry
+        self.assertTrue(out.get("extraction_corrected"))
+        self.assertIn("Mr. Adewale Johnson", out["text"])
+        self.assertEqual(out["extraction_mismatches"], ["name"])
+
+    def test_verify_extraction_flags_only_real_mismatches(self):
+        from free_agent.recovery import verify_extraction
+        good = ('{"name":"Mr. Adewale Johnson","amount_ngn":450000,"amount_usd":290,'
+                '"due_date":"15 December 2026","phone":"0803 555 0142"}')
+        self.assertEqual(verify_extraction(self.SOURCE, good), [])
+        bad = verify_extraction(self.SOURCE, '{"name":"M. Adewale Johnson","amount_ngn":999}')
+        self.assertEqual([f for f, _ in bad], ["name", "amount_ngn"])
+
 class TestPrivacyRouting(unittest.TestCase):
     def test_private_blocked_from_agentrouter(self):
         seen = []
