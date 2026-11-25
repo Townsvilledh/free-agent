@@ -1,0 +1,20 @@
+{
+  "id": "20261125-100056-4e900b",
+  "kind": "watch",
+  "title": "lane seed: README of Townsvilledh/free-agent is reachable",
+  "check": "url:https://raw.githubusercontent.com/Townsvilledh/free-agent/main/README.md",
+  "every_seconds": 1800,
+  "next_check_at": 1795600856.7872434,
+  "deadline": null,
+  "private": false,
+  "state": "open",
+  "created_at": 1795600856.7872434,
+  "updated_at": 1795600856.7872884,
+  "last_checked_at": null,
+  "check_count": 0,
+  "result": null,
+  "reported": false,
+  "reported_at": null,
+  "report_file": null,
+  "task_id": null
+}
