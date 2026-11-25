@@ -170,12 +170,15 @@ single step only he can take (VIDEO.md).
 | 2026-11-24 | v0.5 proof (b): repair a failing suite without touching the tests, commit | PASS (SHIPPED; commit 7be3bc4; independent check: suite green, diff = calc.py only, test file untouched) |
 | 2026-11-24 | v0.5 proof (c): spec-authorised push to branch `lille-proof/v05` on the real repo, branch deleted after verification | PASS (branch verified on the remote at 9dbe96752a29 with exactly the specified file/line; branch then deleted, hash recorded. The run's own report file was lost when a host restart wiped /tmp after the push — the push itself is the proven part; see the proof file) |
 | 2026-11-25 | v0.6 proof: video brief as a spec — capture the live Fluid app (create wallet → home → live swap quote), narrate, assemble a 45–90s MP4 | PASS (SHIPPED on attempt 7; attempts 1–6 each exposed a real defect — nested-JSON step emission, steps-file location ambiguity, cold-restart evidence loss, an ffmpeg `-shortest` bug that silently shrank the video to the narration length — each fixed in the machinery and regression-tested; final: 54.8s, 720×1280, narration via google-translate-tts in 9/9 scenes, capture phrases 6/6, independently re-verified with extracted stills incl. the blurred seed frame and two genuine live quotes; `live-tests/2026-11-25-v06-proof.md`) |
+| 2026-11-25 | v0.7 proof (b) — idle pickup: a task enqueued and never started is completed by a proactive pass, unprompted (bar 8 measurement) | PASS (enqueued 09:58:29 UTC in state `queued`; one `--proactive-run` pass picked it up, ran it on the live keyless brain in 2 steps, completed it, and wrote the DONE report itself; deliverable file verified on disk; `live-tests/2026-11-25-v07-proof.md`) |
+| 2026-11-25 | v0.7 proofs (a)+(c) — pending-result watches + scheduled lane (bar 8 measurements, not loop tasks) | PASS (three real Actions runs watched to conclusion and reported by passes alone — two *failure* conclusions surfaced 56s/44s after landing, one success likewise; the `lille-proactive.yml` lane restored state from `lille-state`, landed a seeded watch on the runner at 10:01:26 UTC, and committed state + report back to the branch, verified from the branch itself) |
 
-Tally so far: **7 live tasks, 7 completed** (counting the v0.6 video
+Tally so far: **8 live tasks, 8 completed** (counting the v0.6 video
 as one task — it took 7 spec attempts, all recorded in its proof
 file; earlier tasks also completed only after machinery fixes driven
 by failed attempts — the attempts are counted in the proof files,
-not hidden). All at $0.
+not hidden). The v0.7 (a)/(c) rows are bar-8 measurements rather
+than loop tasks and are not counted in the 8. All at $0.
 
 ## Open gaps — where Manus genuinely leads today
 
