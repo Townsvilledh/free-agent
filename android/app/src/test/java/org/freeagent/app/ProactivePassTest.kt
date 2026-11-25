@@ -12,17 +12,24 @@ class ProactivePassTest {
         val cmts = mutableListOf<JSONObject>()
         val rpts = mutableListOf<JSONObject>()
         val pcks = mutableMapOf<String, String>()
-        override fun commitments() = cmts
+        // Like the real file-backed store, reads return a fresh list
+        // and saves copy the input first — the pass hands back the
+        // very list it read, and clear()+addAll(sameList) would
+        // erase it (that aliasing bug failed this suite in CI).
+        override fun commitments() = cmts.toMutableList()
         override fun saveCommitments(list: List<JSONObject>) {
-            cmts.clear(); cmts.addAll(list)
+            val copy = list.toList()
+            cmts.clear(); cmts.addAll(copy)
         }
-        override fun reports() = rpts
+        override fun reports() = rpts.toMutableList()
         override fun saveReports(list: List<JSONObject>) {
-            rpts.clear(); rpts.addAll(list)
+            val copy = list.toList()
+            rpts.clear(); rpts.addAll(copy)
         }
-        override fun pickups() = pcks
+        override fun pickups() = pcks.toMutableMap()
         override fun savePickups(map: Map<String, String>) {
-            pcks.clear(); pcks.putAll(map)
+            val copy = map.toMap()
+            pcks.clear(); pcks.putAll(copy)
         }
     }
 
