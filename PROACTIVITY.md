@@ -120,6 +120,37 @@ The Tasks screen carries, under the task list:
 The periodic worker is armed on app start and re-armed on boot
 (`BootReceiver`).
 
+## The sibling law: Thoroughness (also v0.7)
+
+Ethuram, 2026-11-25 ~11:03 WAT: when he says "go search for
+something", there must be **no loopholes**. He finds opportunities
+by casually scrolling an X feed that follows nobody — so a sweep
+that misses what a five-minute scroll finds is worthless ("if I
+myself can find it, why would I need an AI"). Bar 9 in
+BENCHMARK.md; machinery in `free_agent/sweep.py`:
+
+- **One sweep, many surfaces** (`--sweep "<topic>"`, or the
+  `sweep` tool in the task loop): the web via DuckDuckGo HTML
+  under **several query phrasings** (never one), Devpost's public
+  hackathon API, GitHub's public search API, Hacker News
+  (Algolia) — all keyless. DoraHacks and X are *attempted* every
+  sweep via their public routes.
+- **Dedup against the record:** every item ever seen is kept as a
+  title+URL fingerprint in `<workspace>/sweep_known.json`. The
+  report splits **NEW** from **already known**; a second identical
+  sweep reports ~0 new instead of re-selling old findings.
+- **The coverage note is mandatory:** surfaces checked (with
+  counts), surfaces NOT checked + the reason, phrasings used.
+  `validate_sweep_report()` rejects a report missing any of it —
+  a surface that errors is *named*, never silently skipped.
+- **Honest reach today:** DoraHacks is bot-walled from this host
+  (HTTP 405 + human-verification page) and X has no working
+  keyless route (public Nitter answers but serves no tweet
+  content; no credential will be collected to force one — the
+  no-keys law). Both appear in every coverage note as NOT CHECKED
+  until a keyless route exists. That is the standing gap this law
+  makes impossible to hide.
+
 ## What is proven, and what is not
 
 Live proofs: `live-tests/2026-11-25-v07-proof.md` — (a) a real

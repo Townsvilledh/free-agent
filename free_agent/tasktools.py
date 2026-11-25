@@ -53,6 +53,11 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string"}}, "required": ["query"]}}},
     {"type": "function", "function": {
+        "name": "sweep",
+        "description": "THOROUGH multi-surface sweep on a topic (Thoroughness Law): queries the web (several phrasings), Devpost, DoraHacks, GitHub and Hacker News keylessly, dedups against the persisted known-items record, and writes a report with a mandatory coverage note (surfaces checked + NOT checked with reasons) to sweep-report.md in the task dir. Use this — not a single web_search — whenever the task is to FIND opportunities or check what exists on a topic.",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string"}}, "required": ["topic"]}}},
+    {"type": "function", "function": {
         "name": "git_clone",
         "description": "Clone a github.com repo (https or ssh URL only) into the sandbox as repo/.",
         "parameters": {"type": "object", "properties": {
@@ -297,6 +302,25 @@ def _h_web_search(task_dir, args):
         return f"[{res.get('source', 'web')}] {res['text']}"
     return "No result from any search route. " + str(res.get("note", ""))
 
+def _h_sweep(task_dir, args):
+    # The known-items record lives at the workspace root (the task
+    # dir's parent) so dedup persists across tasks and CLI sweeps.
+    from . import sweep as sweep_mod
+    workspace_root = os.path.dirname(os.path.abspath(task_dir))
+    report, summary = sweep_mod.run_sweep(
+        str(args.get("topic", "")), workspace_root)
+    with open(os.path.join(task_dir, "sweep-report.md"), "w") as f:
+        f.write(report)
+    checked = ", ".join(f"{c['surface']} ({c['count']})"
+                        for c in summary["checked"]) or "none"
+    missed = ", ".join(n["surface"] for n in summary["not_checked"]) \
+        or "none"
+    return (f"SWEEP_{summary['status']}: new={summary['new']} "
+            f"already_known={summary['known']} "
+            f"surfaces_checked=[{checked}] not_checked=[{missed}] "
+            "full report (with the mandatory coverage note) written "
+            "to sweep-report.md")
+
 def _h_git_clone(task_dir, args):
     return gittools.clone(task_dir, args.get("url", ""))
 
@@ -336,6 +360,7 @@ HANDLERS = {
     "list_files": _h_list_files,
     "run_python": _h_run_python,
     "web_search": _h_web_search,
+    "sweep": _h_sweep,
     "git_clone": _h_git_clone,
     "repo_tree": _h_repo_tree,
     "run_tests": _h_run_tests,

@@ -3,7 +3,8 @@
 Ethuram's standing standard (2026-11-24 ~20:45 WAT): **"Lille should
 be better than Manus by every bar there is."** These bars are
 the benchmark for EVERY rung from v0.5 on (bars 1–7 from
-2026-11-24; bar 8, Proactivity, added 2026-11-25). Each bar states how it is
+2026-11-24; bar 8, Proactivity, and bar 9, Thoroughness, added
+2026-11-25). Each bar states how it is
 measured, Lille's current measured status, and Manus's baseline from
 the 2026-11-24 deep-research report
 (`~/workspace/research_notes/autonomous-agents-deep-research-20261124-0017/report.md`;
@@ -147,6 +148,37 @@ softened.
   checking outcomes remains the user's job.
 - **Verdict:** Lille ahead by design; the tally of unprompted
   reports is the running measurement, kept in the proof files.
+
+### 9. THOROUGHNESS
+- **Measure:** when Lille is told "go search for something", are
+  there loopholes? Counted per sweep report: independent surfaces
+  actually checked (with result counts), query phrasings used
+  (never one), results split NEW vs already-known against the
+  persisted known-items record (a repeat sweep must report ~0
+  new), and — decisive — every surface NOT checked named in the
+  mandatory coverage note with its reason. A silently skipped
+  surface fails this bar outright.
+- **Lille:** the Thoroughness Law (Ethuram, 2026-11-25 ~11:03
+  WAT) implemented as machinery in v0.7 (`free_agent/sweep.py`,
+  `--sweep "<topic>"`, also a `sweep` tool in the loop): one sweep
+  queries the web via DuckDuckGo HTML under several phrasings,
+  Devpost's public API, GitHub's public search API and Hacker
+  News (Algolia) keylessly, and *attempts* DoraHacks and X (via
+  public Nitter) — both currently uncheckable keyless from this
+  host (bot-verification wall; no tweet content served), and both
+  named as NOT CHECKED with the reason in every report rather
+  than skipped. Dedup is a persisted fingerprint record
+  (`sweep_known.json`); `validate_sweep_report()` refuses a
+  report without the coverage note, the phrasings, or the
+  NEW/known split. First measurement: the v0.7 live proof sweep
+  (`live-tests/2026-11-25-v07-proof.md`).
+- **Manus baseline:** deep-research runs are single-engine and
+  metered; no coverage note is produced — what was not checked is
+  invisible, and repeat runs re-report the same findings as new.
+- **Verdict:** Lille ahead by construction on auditability; the
+  honest open gap is surface *reach* — X, the surface Ethuram
+  finds things on by scrolling, has no keyless route, and until
+  one exists every sweep says so in writing.
 
 ## The video boundary (binding)
 

@@ -77,7 +77,10 @@ before it is claimed — no rung is described as done from intention:
 8. Browser control (structural perception first — principle 2).
    v0.6's capture is a scripted instrument, NOT this rung.
 9. Scheduling / proactivity — **built (v0.7); Lille stands here.**
-   The Proactivity Law as machinery (PROACTIVITY.md): a persisted
+   The Proactivity Law as machinery (PROACTIVITY.md), with its
+   sibling the Thoroughness Law (`free_agent/sweep.py`: multi-
+   surface sweeps, dedup against a known-items record, a mandatory
+   coverage note — bar 9): a persisted
    commitments register (pending results with machine-checkable
    landing conditions + deadlines), a proactive pass that runs due
    checks, picks up queued tasks nobody started, resumes waiting

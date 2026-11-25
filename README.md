@@ -75,6 +75,9 @@ python -m free_agent --commit "…" --check "actions-run:owner/repo:123" --every
 python -m free_agent --enqueue "…"   # queue a task; nobody starts it —
 python -m free_agent --proactive-run # a proactive pass picks it up, works the
                                 # due checks, and writes reports unprompted
+python -m free_agent --sweep "…"     # v0.7: a THOROUGH sweep — many keyless
+                                # surfaces, several phrasings, dedup vs the
+                                # known-items record, mandatory coverage note
 python -m unittest discover tests -v
 ```
 

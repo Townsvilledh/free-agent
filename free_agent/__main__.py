@@ -92,16 +92,25 @@ def main(argv=None):
                     help="lane mode for --proactive-run (scheduled Actions lane): private commitments are refused")
     ap.add_argument("--export-lane", metavar="DIR",
                     help="export lane-eligible state (non-private commitments + reports) to DIR; private entries are refused")
+    ap.add_argument("--sweep", metavar="TOPIC",
+                    help="run a THOROUGH sweep on a topic: multiple keyless surfaces, several query phrasings, dedup against the known-items record, mandatory coverage note (Thoroughness Law)")
     args = ap.parse_args(argv)
     cfg = Config.from_env()
 
     if args.commit or args.commitments or args.close_commitment \
-            or args.enqueue or args.proactive_run or args.export_lane:
+            or args.enqueue or args.proactive_run or args.export_lane \
+            or args.sweep:
         import os
         from .commitments import CommitmentStore, export_for_lane
         from .taskstore import TaskStore
         ws = os.environ.get("FREEAGENT_WORKSPACE",
                             os.path.expanduser("~/.freeagent/tasks"))
+        if args.sweep:
+            from .sweep import run_sweep
+            report, summary = run_sweep(args.sweep, ws)
+            print(report)
+            print(f"[report written to reports/{summary['report_file']}]")
+            return 0 if summary["status"] == "DONE" else 1
         if args.enqueue:
             store = TaskStore(ws)
             rec = store.create(args.enqueue)
