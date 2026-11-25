@@ -48,4 +48,7 @@ dependencies {
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
     // JVM unit tests (task state machine — pure Kotlin, no device needed)
     testImplementation "junit:junit:4.13.2"
+    // Real org.json for JVM unit tests: android.jar's copy is a stub
+    // whose methods throw RuntimeException("Stub!") off-device.
+    testImplementation "org.json:json:20240303"
 }

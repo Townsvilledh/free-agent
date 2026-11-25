@@ -41,7 +41,7 @@ class ProactivePass(
         val t = now()
         runDueChecks(t, summary)
         settlePickups(t, summary)
-        pickUpQueued(t, summary)
+        pickUpQueued(summary)
         return summary
     }
 
@@ -173,7 +173,7 @@ class ProactivePass(
         }
     }
 
-    private fun pickUpQueued(t: Long, summary: Summary) {
+    private fun pickUpQueued(summary: Summary) {
         val pickups = data.pickups()
         var dirty = false
         for (task in tasks()) {
