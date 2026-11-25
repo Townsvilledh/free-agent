@@ -108,11 +108,26 @@ softened.
 - **Lille:** deliverables are files in the task dir, commits with
   hashes in the report, pushed branches named in the report, APKs at
   a stable direct link. Every v0.5 spec report lists commits and
-  per-criterion evidence.
+  per-criterion evidence. v0.6 adds a delivered **video file**: the
+  Fluid demo MP4 committed in this repo
+  (`live-tests/2026-11-25-v06-fluid-demo.mp4`), produced from a
+  written brief by spec mode and verified by ffprobe + extracted
+  stills — a file in hand, not a claim.
 - **Manus baseline:** deliverable-first output is a genuine Manus
   strength (files/apps out of sessions, replayable).
 - **Verdict:** comparable in intent; Lille's receipts are git hashes
   and files the user owns outright.
+
+## The video boundary (binding)
+
+The v0.6 video rung reopens lanes whose rules allow an AI-made demo
+video. Where a competition's rules require the **entrant personally
+on camera** explaining the project (the Cognizant Agentic Web
+Challenge precedent — scrapped on that ground), a Lille-made video
+does **not** satisfy the rule and must never be passed off as
+Ethuram. Spec mode enforces this deterministically: such a spec is
+refused before any work runs, with a NEEDS ETHURAM report naming the
+single step only he can take (VIDEO.md).
 
 ## Running tally — live task completion (bar 2)
 
@@ -124,10 +139,13 @@ softened.
 | 2026-11-24 | v0.5 proof (a): implement-from-spec (calc.py + tests, commit) | PASS (SHIPPED on attempt 3; attempts 1–2 exposed a missing finish guard + a finish-call dialect the parser rejected — both fixed in the machinery and unit-tested; final run: tests green, commits b65d04f + 3e637a3, independently re-verified) |
 | 2026-11-24 | v0.5 proof (b): repair a failing suite without touching the tests, commit | PASS (SHIPPED; commit 7be3bc4; independent check: suite green, diff = calc.py only, test file untouched) |
 | 2026-11-24 | v0.5 proof (c): spec-authorised push to branch `lille-proof/v05` on the real repo, branch deleted after verification | PASS (branch verified on the remote at 9dbe96752a29 with exactly the specified file/line; branch then deleted, hash recorded. The run's own report file was lost when a host restart wiped /tmp after the push — the push itself is the proven part; see the proof file) |
+| 2026-11-25 | v0.6 proof: video brief as a spec — capture the live Fluid app (create wallet → home → live swap quote), narrate, assemble a 45–90s MP4 | PASS (SHIPPED on attempt 7; attempts 1–6 each exposed a real defect — nested-JSON step emission, steps-file location ambiguity, cold-restart evidence loss, an ffmpeg `-shortest` bug that silently shrank the video to the narration length — each fixed in the machinery and regression-tested; final: 54.8s, 720×1280, narration via google-translate-tts in 9/9 scenes, capture phrases 6/6, independently re-verified with extracted stills incl. the blurred seed frame and two genuine live quotes; `live-tests/2026-11-25-v06-proof.md`) |
 
-Tally so far: **6 live tasks, 6 completed** (3 of them after
-machinery fixes driven by the failed attempts — the attempts are
-counted in the proof files, not hidden). All at $0.
+Tally so far: **7 live tasks, 7 completed** (counting the v0.6 video
+as one task — it took 7 spec attempts, all recorded in its proof
+file; earlier tasks also completed only after machinery fixes driven
+by failed attempts — the attempts are counted in the proof files,
+not hidden). All at $0.
 
 ## Open gaps — where Manus genuinely leads today
 
@@ -139,11 +157,16 @@ counted in the proof files, not hidden). All at $0.
    routing — optional user-supplied keys already supported; keyless
    frontier access does not exist today and is not promised).
 2. **Browser polish.** Manus drives a real browser with a mature
-   harness and session replay. **Lille has no browser control yet**
-   (a Playwright skeleton exists; it has never completed a live
-   browser task). *Closes at:* the browser rung — structural
-   perception first (API → accessibility/DOM → vision last, per
-   DESIGN #2), proven on live tasks before it is claimed.
+   harness and session replay. **Lille has a scripted capture
+   instrument** (v0.6: CDP-driven step lists in headless Chromium —
+   it has completed live captures of a real web app end to end,
+   including form flows, a seed-backup quiz and a live route
+   search), but that is *not* general browser control: no open-ended
+   browsing, no session replay, no perception-driven exploration.
+   The gap narrows; it does not close. *Closes at:* the browser
+   rung — structural perception first (API → accessibility/DOM →
+   vision last, per DESIGN #2), proven on live tasks before it is
+   claimed.
 3. **Task size / long-horizon builds.** Manus completes 80-minute
    multi-file app builds. Lille's proven envelope today is small
    repo tasks (single-digit files, ≤25-step spec runs). *Closes

@@ -66,7 +66,36 @@ _HEADINGS = {
 
 _CHECK_ITEM = re.compile(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?(.+?)\s*$")
 _BRANCH_TOKEN = re.compile(r"`([^`]+)`|(?:^|\s)([\w][\w./-]*\/[\w./-]+)(?:\s|$)")
-_FILE_TOKEN = re.compile(r"\b[\w./-]+\.(?:py|md|txt|js|ts|json|yml|yaml|html|css)\b")
+_FILE_TOKEN = re.compile(r"\b[\w./-]+\.(?:py|md|txt|js|ts|json|yml|yaml|html|css|mp4|mov|webm)\b")
+_DURATION_RANGE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)\s*(?:s\b|sec|seconds)")
+# Hard boundary (VIDEO.md): where rules require the ENTRANT PERSONALLY
+# on camera, a Lille-made video does not satisfy the rule and must
+# never be passed off as Ethuram. Specs demanding that are refused
+# deterministically, before any work runs.
+_PERSONAL_APPEARANCE = ("personally", "on camera", "in person",
+                        "record yourself", "your face", "face to camera",
+                        "appear on screen", "must appear",
+                        "speaking to the camera", "presents himself",
+                        "presents herself", "explains himself",
+                        "explains herself")
+
+
+def personal_appearance_blocker(spec):
+    """Return the matched phrase if the spec demands a human appearing
+    personally (a wall Lille must report, never fake), else None."""
+    hay = "\n".join([spec.get("goal", "")] + spec.get("hard_rules", [])
+                    + spec.get("criteria", [])).lower()
+    for phrase in _PERSONAL_APPEARANCE:
+        if phrase in hay:
+            return phrase
+    return None
+
+
+def is_video_spec(spec):
+    hay = " ".join([spec.get("goal", "")] + spec.get("criteria", [])
+                   + spec.get("deliverables", [])).lower()
+    return "video" in hay or ".mp4" in hay
 _HUMAN_SIGNALS = ("authentication failed", "permission denied",
                   "could not read from remote repository",
                   "invalid username or password", "host key verification failed")
@@ -128,6 +157,32 @@ def build_task_text(spec, repo_note):
         lines += [f"- {d}" for d in spec["deliverables"]]
     if spec["push_branches"]:
         lines.append(f"\nPUSH: you may git_push ONLY to: {', '.join(spec['push_branches'])}")
+    if is_video_spec(spec):
+        lines.append(
+            "\nVIDEO WORKFLOW (this spec's deliverable is a video):\n"
+            "1. Plan scenes from the goal: a title card (render_card), "
+            "captured app frames (capture_walkthrough), an end card.\n"
+            "2. capture_walkthrough: build the step list from the shot "
+            "list in the goal/rules; end screenshot steps with hold "
+            "seconds and a short caption each; pass expect_text = the "
+            "phrases the brief says must be visible. For step lists "
+            "longer than a few steps, FIRST write the steps JSON array "
+            "to a file with write_file (e.g. capture-steps.json), then "
+            "call capture_walkthrough with steps_file instead of "
+            "steps — long nested JSON inside one tool call fails.\n"
+            "3. narrate: one short line per scene (skip a scene's line "
+            "only if the brief allows captions-only). If narrate returns "
+            "NARRATION_FAILED, proceed captions-only and say so.\n"
+            "4. assemble_video: scenes in order — card/capture frames "
+            "with their captions and matching audio files — out = "
+            "repo/<deliverable>.mp4. Scene durations must sum inside "
+            "the brief's duration range (narration extends a scene to "
+            "fit its line).\n"
+            "5. verify_video on the result. The finish guard requires "
+            "VIDEO_OK evidence; criteria are graded from the ffprobe "
+            "numbers, the capture manifest and the narration route — "
+            "not from your summary.\n"
+            "6. finish listing repo/<deliverable>.mp4 as the output.")
     lines.append("\nWork: inspect the repo (repo_tree/read_file), make the "
                  "changes with write_file, run_tests until green, git_diff "
                  "to sanity-check, git_commit, git_push if authorised above, "
@@ -138,10 +193,20 @@ def build_task_text(spec, repo_note):
 
 # ---------- evidence ----------
 
+_VIDEO_OK = re.compile(
+    r"VIDEO_OK path=\S+ duration=([\d.]+)s size=(\S+) video=(\S+) "
+    r"audio=(\S+) bytes=(\d+)")
+_CAPTURE_OK = re.compile(r"CAPTURE_OK frames=(\d+)")
+_EXPECT = re.compile(r"expect_found=(\d+)/(\d+)")
+_CAPTIONS = re.compile(r"captions=(\d+)")
+
+
 def gather_evidence(result, task_dir, initial_head=None):
     steps = result.steps if result else []
     ev = {"tests_passed": False, "tests_summary": "",
-          "commit_hashes": [], "pushed": [], "providers": []}
+          "commit_hashes": [], "pushed": [], "providers": [],
+          "video": None, "narration_route": None, "capture_frames": 0,
+          "expect_found": None, "expect_total": None}
     for s in steps:
         rs = s.result_summary or ""
         if s.tool == "run_tests" and "exit_code=0" in rs:
@@ -151,6 +216,29 @@ def gather_evidence(result, task_dir, initial_head=None):
             ev["commit_hashes"].append(rs.split()[1])
         if s.tool == "git_push" and rs.startswith("pushed branch "):
             ev["pushed"].append(rs.split()[2])
+        m = _VIDEO_OK.search(rs)
+        if m and s.tool in ("verify_video", "assemble_video"):
+            cap = _CAPTIONS.search(rs)
+            nar = re.search(r"narrated_scenes=(\d+)", rs)
+            prev = ev.get("video") or {}
+            ev["video"] = {"duration": float(m.group(1)),
+                           "size": m.group(2), "vcodec": m.group(3),
+                           "audio": m.group(4), "bytes": int(m.group(5)),
+                           "captions": int(cap.group(1)) if cap
+                                       else prev.get("captions", 0),
+                           "narrated_scenes": int(nar.group(1)) if nar
+                                              else prev.get("narrated_scenes", 0)}
+        if s.tool == "narrate" and rs.startswith("NARRATION_OK route="):
+            ev["narration_route"] = rs.split("route=")[1].split()[0]
+        if s.tool == "capture_walkthrough":
+            cm = _CAPTURE_OK.search(rs)
+            if cm:
+                ev["capture_frames"] = max(ev["capture_frames"],
+                                           int(cm.group(1)))
+                em = _EXPECT.search(rs)
+                if em:
+                    ev["expect_found"] = int(em.group(1))
+                    ev["expect_total"] = int(em.group(2))
     if result is not None and result.provider:
         ev["providers"].append(result.provider)
     repo = os.path.join(task_dir, "repo")
@@ -171,7 +259,58 @@ def evaluate_criteria(spec, ev, task_dir):
     repo = ev["repo_dir"]
     for c in spec["criteria"]:
         low = c.lower()
-        if "test" in low:
+        dur_m = _DURATION_RANGE.search(c)
+        if dur_m:
+            lo, hi = float(dur_m.group(1)), float(dur_m.group(2))
+            v = ev.get("video")
+            if v and lo <= v["duration"] <= hi:
+                out.append((c, True, f"ffprobe duration {v['duration']:.1f}s "
+                                     f"inside {lo:.0f}-{hi:.0f}s "
+                                     f"({v['size']}, {v['vcodec']})"))
+            elif v:
+                out.append((c, False, f"ffprobe duration {v['duration']:.1f}s "
+                                      f"outside {lo:.0f}-{hi:.0f}s"))
+            else:
+                out.append((c, False, "no VIDEO_OK ffprobe evidence recorded"))
+        elif "narration" in low:
+            v = ev.get("video") or {}
+            narrated = v.get("narrated_scenes", 0)
+            if ev.get("narration_route") and narrated > 0:
+                out.append((c, True, f"narration synthesized via "
+                                     f"{ev['narration_route']} and mixed "
+                                     f"into {narrated} scene(s) of the MP4"))
+            elif "caption" in low and (narrated > 0
+                                       or v.get("captions", 0) > 0):
+                detail = (f"narration in {narrated} scene(s)" if narrated
+                          else f"captions burned into {v.get('captions', 0)} "
+                                 "scene(s), no narration audio")
+                out.append((c, True, detail))
+            else:
+                out.append((c, False, "no NARRATION_OK step mixed into "
+                                      "the MP4 (and no captions to fall "
+                                      "back on)"))
+        elif "capture" in low or "walkthrough" in low or "shows" in low \
+                or "show " in low:
+            if ev.get("capture_frames", 0) >= 3 and (
+                    ev.get("expect_total") is None
+                    or ev.get("expect_found") == ev.get("expect_total")):
+                ev_str = f"capture recorded {ev['capture_frames']} frames"
+                if ev.get("expect_total"):
+                    ev_str += (f"; brief phrases found in captured page "
+                               f"text: {ev['expect_found']}/{ev['expect_total']}")
+                out.append((c, True, ev_str))
+            elif ev.get("capture_frames", 0) >= 3:
+                out.append((c, False, f"capture recorded "
+                                      f"{ev['capture_frames']} frames but only "
+                                      f"{ev.get('expect_found')}/{ev.get('expect_total')} "
+                                      "brief phrases appear in the captured text"))
+            else:
+                out.append((c, False, "no completed capture_walkthrough "
+                                      "with >= 3 frames recorded"))
+        elif "cost" in low and "$0" in c:
+            out.append((c, True, "report carries the enforced Cost: $0 "
+                                 "line; every route used is keyless"))
+        elif "test" in low:
             if ev["tests_passed"]:
                 out.append((c, True, f"run_tests green: {ev['tests_summary']}"))
             else:
@@ -260,6 +399,31 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
     ws = workspace_root or os.environ.get(
         "FREEAGENT_WORKSPACE", os.path.expanduser("~/.freeagent/tasks"))
     task_id, task_dir = sandbox.make_task_dir(ws)
+    blocker_phrase = personal_appearance_blocker(spec)
+    if blocker_phrase:
+        # Hard boundary: never run, never fake. The report names the
+        # single step only Ethuram can take (appear himself).
+        lines = ["STATUS: NEEDS ETHURAM",
+                 "Cost: $0 — keyless routes only (routes served: none — "
+                 "task not run)",
+                 "Acceptance criteria:"]
+        for c in spec["criteria"]:
+            lines.append(f"- [ ] {c} — evidence: not attempted; the spec "
+                         "requires a person appearing personally, which a "
+                         "Lille-made video cannot satisfy")
+        lines.append("Commits: none")
+        lines.append(
+            "Needs Ethuram: this brief requires the entrant to appear "
+            f"personally ({blocker_phrase!r} in the spec) — e.g. on "
+            "camera explaining the project himself. A Lille-produced "
+            "video must never be passed off as him, so Lille will not "
+            "make it. The single step only Ethuram can take: record "
+            "that appearance himself (Lille can still prepare the "
+            "script, slides and edit around his recording).")
+        report = "\n".join(lines)
+        with open(os.path.join(task_dir, "SPEC_REPORT.md"), "w") as f:
+            f.write(report + "\n")
+        return report, None, task_dir
     initial_head = None
     if repo and os.path.isdir(repo):
         ok, msg = gittools.preclone_local(task_dir, repo)
@@ -310,26 +474,46 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
                 return ("the spec requires a push, but no successful "
                         "git_push step is recorded yet. Push to the "
                         "authorised branch before finishing.")
+        if is_video_spec(spec) and not any(
+                t in ("verify_video", "assemble_video")
+                and r.startswith("VIDEO_OK") for t, r in done_tools):
+            return ("this is a video spec, but no VIDEO_OK ffprobe "
+                    "evidence is recorded yet. Assemble the video with "
+                    "assemble_video (and/or verify it with verify_video) "
+                    "before finishing — an unverified video is not a "
+                    "deliverable.")
         return None
+
+    _snap_holder = {"snap": None}
+
+    def _keep_snap(snap):
+        _snap_holder["snap"] = snap
 
     loop = TaskLoop(config=config, model_call=model_call,
                     workspace_root=ws, max_steps=max_steps,
                     approver=approver, pace_seconds=pace_seconds,
-                    finish_guard=finish_guard,
+                    finish_guard=finish_guard, on_checkpoint=_keep_snap,
                     sentinel_context={
                         "push_branches": spec["push_branches"],
                         "main_authorised": spec["main_authorised"]})
     # Fallback Law patience: if every route is cooling down (or the
-    # network dropped), WAIT for the earliest retry and restart the
-    # loop — repo work already done persists in the task dir, and the
-    # model re-inspects before acting. Bounded: ~30 min of waiting.
+    # network dropped), WAIT for the earliest retry and RESUME from
+    # the last checkpoint — completed steps are never redone and
+    # their evidence is never lost. (Learned live in the v0.6 proof:
+    # a cold restart after a successful capture+assembly re-ran the
+    # capture against an already-registered demo name, failed, and
+    # the fresh segment's empty trace graded a finished video
+    # BLOCKED.) Bounded: ~30 min of waiting.
     result = None
     waited = 0.0
+    snap = None
     while True:
         try:
-            result = loop.run(task_text, task_id=task_id)
+            result = loop.resume(snap) if snap else \
+                loop.run(task_text, task_id=task_id)
             break
         except (WaitingRouteError, WaitingNetworkError) as e:
+            snap = _snap_holder["snap"] or snap
             retry_at = getattr(e, "retry_at", None) or (time.time() + 60)
             delay = max(5.0, min(retry_at - time.time(), 300.0)) + 5.0
             if waited + delay > 1800:

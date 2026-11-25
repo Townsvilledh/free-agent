@@ -54,8 +54,8 @@ before it is claimed — no rung is described as done from intention:
    and resume with continuous step numbering; non-private
    code-execution tasks can finish on the free Actions runner lane
    while the phone is fully offline (OFFLINE.md).
-5. Repo work + spec-following — **built in core (v0.5); Lille
-   stands here.** Deterministic repo tools (clone/tree/test/diff/
+5. Repo work + spec-following — **built in core (v0.5).**
+   Deterministic repo tools (clone/tree/test/diff/
    commit with a secret-scan block/push gated to spec-authorised
    branches) and spec mode: a spec pack in → worked → graded from
    evidence → a SHIPPED / BLOCKED / NEEDS ETHURAM report out, with
@@ -64,11 +64,21 @@ before it is claimed — no rung is described as done from intention:
    and this roadmap only. Live proofs: live-tests/2026-11-24-v05-proof.md.
    The standing benchmark against Manus (7 bars, measured) is
    BENCHMARK.md.
-6. Build-and-deliver via Actions
-7. Browser control (structural perception first — principle 2)
-8. Scheduling / proactivity
-9. Sub-agent delegation
-10. Memory / goals system
+6. Video production — **built in core (v0.6); Lille stands here.**
+   Code-driven video only — NO generative video models (unavailable
+   in the user's region and never called): scripted Chromium capture
+   of live web apps, PIL-rendered cards/captions, a free-TTS fallback
+   chain, ffmpeg assembly, and an ffprobe-verified finish (VIDEO.md).
+   Core + runner-lane; the app carries the version and this roadmap
+   only. Live proof: live-tests/2026-11-25-v06-proof.md. Note the
+   hard boundary in VIDEO.md: where rules require the entrant
+   PERSONALLY on camera, a Lille video never substitutes.
+7. Build-and-deliver via Actions
+8. Browser control (structural perception first — principle 2).
+   v0.6's capture is a scripted instrument, NOT this rung.
+9. Scheduling / proactivity
+10. Sub-agent delegation
+11. Memory / goals system
 
 **Live proof for rung 2 (2026-11-24):** the v0.3 loop ran a real
 Fibonacci task end-to-end on the live keyless endpoint — wrote the

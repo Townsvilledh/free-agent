@@ -74,7 +74,7 @@ python -m unittest discover tests -v
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.5**:
+style/face differs". Status as of **v0.6**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -84,7 +84,7 @@ style/face differs". Status as of **v0.5**:
 | Image generation | In progress — keyless endpoint chosen (`image.pollinations.ai`, see KEYLESS.md); in-app UI lands next |
 | Voice in / voice out | Planned |
 | Web search | **Built (v0.2)** — keyless chain: DuckDuckGo Instant → Wikipedia → Open Library (`tools/search_tool.py`); full web results are a candidate, honestly marked in ROUTES.md |
-| Web browsing / browser tasks | In progress — skeleton in Python core (Playwright, server host); WebView/Custom Tabs on phone |
+| Web browsing / browser tasks | Partial — a scripted Chromium capture instrument exists in core (v0.6, CDP-driven step lists; it records walkthroughs for video). General browser control (open-ended tasks in a live browser) is NOT built yet — see BENCHMARK.md gap 2 |
 | Fallback routing (every capability, 4–5 routes deep, cooldowns, honest queueing) | **Built (v0.2, text + search)** — the Fallback Law, see ROUTES.md; image/voice chains defined with honest gaps |
 | Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
@@ -95,6 +95,7 @@ style/face differs". Status as of **v0.5**:
 | Files on device / workspace tools | Built in core (v0.3, sandboxed task dirs); on-device note files inside the app sandbox (v0.4 task runner) |
 | Repo work (clone / read / edit / test / diff / commit / push) | **Built in core (v0.5)** — deterministic git wrappers, never a raw shell: github-only clone, auto-detected `run_tests`, secret-scan commit block (pattern name reported, value never), push gated to spec-authorised branches only |
 | Spec-following (spec pack in → shipped-with-proof report out) | **Built in core (v0.5)** — `--spec spec.md [--repo …]`; criteria graded deterministically from trace + git evidence; report is SHIPPED / BLOCKED / NEEDS ETHURAM with the `Cost: $0 — keyless routes only` line on every report (BENCHMARK.md bar 1). Core + runner-lane for now; not in the app yet |
+| Video production (demo/explainer videos) | **Built in core (v0.6)** — code-driven only, NO generative video models: scripted Chromium capture of live web apps (`capture_walkthrough`), PIL cards/captions (`render_card`), free-TTS fallback chain (`narrate`: edge-tts → Google Translate TTS → local flite/espeak, honest failure), ffmpeg assembly + ffprobe-verified finish (`assemble_video`/`verify_video`). Core + runner-lane for now; not in the app yet (VIDEO.md, `live-tests/2026-11-25-v06-proof.md`) |
 | Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
 
 ## Get the app (APK)

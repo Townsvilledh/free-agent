@@ -17,7 +17,7 @@ by plain code here, never by asking the model to behave.
   against sandbox state before accepting them.
 """
 import json, os
-from . import gittools, sandbox
+from . import gittools, sandbox, videotools
 from .tools import search_tool
 
 FINISH = "finish"
@@ -87,6 +87,51 @@ TOOL_SCHEMAS = [
             "repo": {"type": "string", "description": "Repo subdir, default 'repo'"},
             "branch": {"type": "string"}}, "required": ["branch"]}}},
     {"type": "function", "function": {
+        "name": "capture_walkthrough",
+        "description": "Scripted capture of a live web app in headless Chromium: run a step list (goto/wait/wait_text/click_text/click_selector/click_if_text/type/check/parse_seed/solve_word_quiz/scroll_into_view/screenshot) and record PNG frames + a manifest with hold durations and page-text excerpts. Pass expect_text: phrases the brief says must be shown — they are checked against the captured pages' real text. Returns CAPTURE_OK with the frame count and expect results.",
+        "parameters": {"type": "object", "properties": {
+            "steps": {"type": "array", "items": {"type": "object"},
+                      "description": "Step list; screenshot steps: {action:'screenshot', name, hold (seconds), caption}"},
+            "steps_file": {"type": "string",
+                      "description": "PREFERRED for long step lists: path (inside the task dir) of a JSON file holding the step array — write it with write_file first, then pass this instead of steps"},
+            "name": {"type": "string", "description": "Frames subdirectory, default 'capture'"},
+            "width": {"type": "integer", "description": "Viewport width, default 450"},
+            "height": {"type": "integer", "description": "Viewport height, default 800"},
+            "expect_text": {"type": "array", "items": {"type": "string"}}},
+            "required": []}}},
+    {"type": "function", "function": {
+        "name": "render_card",
+        "description": "Render a title/section card PNG in code (PIL): title, subtitle, bg/fg/accent hex colours, optional mascot image path.",
+        "parameters": {"type": "object", "properties": {
+            "out": {"type": "string", "description": "Output PNG path in the sandbox"},
+            "title": {"type": "string"},
+            "subtitle": {"type": "string"},
+            "bg": {"type": "string"}, "fg": {"type": "string"},
+            "accent": {"type": "string"},
+            "width": {"type": "integer"}, "height": {"type": "integer"},
+            "mascot": {"type": "string"}},
+            "required": ["out", "title"]}}},
+    {"type": "function", "function": {
+        "name": "narrate",
+        "description": "Synthesize voiceover for scenes [{id, text}] via the free TTS fallback chain (edge-tts -> Google Translate TTS -> local flite/espeak). Returns NARRATION_OK naming the route that served and per-scene durations, or NARRATION_FAILED with the reasons — audio is never faked.",
+        "parameters": {"type": "object", "properties": {
+            "scenes": {"type": "array", "items": {"type": "object"}},
+            "out_dir": {"type": "string", "description": "Audio subdirectory, default 'audio'"}},
+            "required": ["scenes"]}}},
+    {"type": "function", "function": {
+        "name": "assemble_video",
+        "description": "Assemble scenes [{image, duration, caption, audio (optional), blur (optional [[x,y,w,h] fractions])}] into an MP4 (H.264/yuv420p) with captions burned in and narration mixed; scene durations extend to fit their audio. Returns VIDEO_OK ffprobe evidence (duration, size, codecs).",
+        "parameters": {"type": "object", "properties": {
+            "scenes": {"type": "array", "items": {"type": "object"}},
+            "out": {"type": "string", "description": "Output MP4 path in the sandbox"},
+            "width": {"type": "integer"}, "height": {"type": "integer"}},
+            "required": ["scenes", "out"]}}},
+    {"type": "function", "function": {
+        "name": "verify_video",
+        "description": "Run ffprobe on an existing video file and return the VIDEO_OK/VIDEO_FAIL evidence line (duration, resolution, video/audio codecs, bytes).",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
         "name": FINISH,
         "description": "Declare the task complete. List any output files you claim to have produced in 'outputs' — they are verified to exist before the task is accepted as done.",
         "parameters": {"type": "object", "properties": {
@@ -105,6 +150,21 @@ def args_summary(name, args):
         return f"path={args.get('path')!r} chars={len(str(args.get('content', '')))}"
     if name == "run_python":
         return f"code_chars={len(str(args.get('code', '')))} timeout={args.get('timeout', 30)}"
+    if name == "capture_walkthrough":
+        # Step bodies can contain typed values (e.g. a demo password):
+        # summarise counts only, never contents.
+        return (f"steps={len(args.get('steps', []) or [])} "
+                f"steps_file={args.get('steps_file')!r} "
+                f"name={args.get('name', 'capture')!r} "
+                f"expect={len(args.get('expect_text', []) or [])}")
+    if name == "narrate":
+        scenes = args.get("scenes", []) or []
+        return f"scenes={len(scenes)} chars={sum(len(str(s.get('text', ''))) for s in scenes if isinstance(s, dict))}"
+    if name == "assemble_video":
+        return (f"scenes={len(args.get('scenes', []) or [])} "
+                f"out={args.get('out')!r}")
+    if name == "render_card":
+        return f"out={args.get('out')!r} title={str(args.get('title', ''))[:40]!r}"
     if name == FINISH:
         return f"outputs={args.get('outputs', [])!r}"
     return json.dumps({k: (str(v)[:80]) for k, v in args.items()})[:200]
@@ -141,6 +201,31 @@ class Sentinel:
         if name == "git_clone":
             if not gittools.is_github_url(args.get("url", "")):
                 return False, "git_clone accepts github.com URLs only"
+        if name == "capture_walkthrough":
+            steps, serr = videotools.resolve_steps(task_dir, args)
+            if serr:
+                return False, serr
+            for s in steps:
+                if not isinstance(s, dict):
+                    return False, "capture steps must be JSON objects"
+                if s.get("action") == "goto":
+                    import re as _re
+                    if not _re.match(r"^https?://", str(s.get("url", ""))):
+                        return False, "capture goto URLs must be http(s) — file:/data:/javascript: are denied"
+        if name in ("render_card", "verify_video"):
+            try:
+                sandbox.resolve_inside(task_dir, args.get("out") or args.get("path", ""))
+            except sandbox.SandboxError as e:
+                return False, str(e)
+        if name == "assemble_video":
+            try:
+                sandbox.resolve_inside(task_dir, args.get("out", ""))
+                for scene in args.get("scenes", []) or []:
+                    sandbox.resolve_inside(task_dir, scene.get("image", ""))
+                    if scene.get("audio"):
+                        sandbox.resolve_inside(task_dir, scene["audio"])
+            except sandbox.SandboxError as e:
+                return False, str(e)
         if name == "git_push":
             branch = str(args.get("branch", ""))
             authorised = self.spec_context.get("push_branches", [])
@@ -230,6 +315,21 @@ def _h_git_commit(task_dir, args):
 def _h_git_push(task_dir, args):
     return gittools.push(task_dir, args.get("repo"), str(args.get("branch", "")))
 
+def _h_capture_walkthrough(task_dir, args):
+    return videotools.capture_walkthrough(task_dir, args)
+
+def _h_render_card(task_dir, args):
+    return videotools.render_card(task_dir, args)
+
+def _h_narrate(task_dir, args):
+    return videotools.narrate(task_dir, args)
+
+def _h_assemble_video(task_dir, args):
+    return videotools.assemble_video(task_dir, args)
+
+def _h_verify_video(task_dir, args):
+    return videotools.verify_video(task_dir, args)
+
 HANDLERS = {
     "write_file": _h_write_file,
     "read_file": _h_read_file,
@@ -242,6 +342,11 @@ HANDLERS = {
     "git_diff": _h_git_diff,
     "git_commit": _h_git_commit,
     "git_push": _h_git_push,
+    "capture_walkthrough": _h_capture_walkthrough,
+    "render_card": _h_render_card,
+    "narrate": _h_narrate,
+    "assemble_video": _h_assemble_video,
+    "verify_video": _h_verify_video,
 }
 
 def execute(name, args, task_dir):
