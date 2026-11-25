@@ -69,12 +69,18 @@ python -m free_agent --tasks    # v0.4: durable tasks — checkpointed after
 python -m free_agent --resume <id>   # every step, resumable in a new process,
 python -m free_agent --pause <id>    # waiting (not failing) when the network
 python -m free_agent --cancel <id>   # or a free route drops (OFFLINE.md)
+python -m free_agent --commit "…" --check "actions-run:owner/repo:123" --every 5
+                                # v0.7: register a commitment — a result Lille
+                                # must surface when it lands (PROACTIVITY.md)
+python -m free_agent --enqueue "…"   # queue a task; nobody starts it —
+python -m free_agent --proactive-run # a proactive pass picks it up, works the
+                                # due checks, and writes reports unprompted
 python -m unittest discover tests -v
 ```
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.6**:
+style/face differs". Status as of **v0.7**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -88,7 +94,7 @@ style/face differs". Status as of **v0.6**:
 | Fallback routing (every capability, 4–5 routes deep, cooldowns, honest queueing) | **Built (v0.2, text + search)** — the Fallback Law, see ROUTES.md; image/voice chains defined with honest gaps |
 | Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |
-| Scheduled / autonomous jobs | In progress — job definitions + Actions heartbeat exist |
+| Scheduled / autonomous jobs | **Built (v0.7)** — the Proactivity Law as machinery: a commitments register (pending results with machine-checkable landing conditions + deadlines), proactive passes (due checks, idle pickup of queued tasks, waiting-task resumes) writing DONE / LANDED / BLOCKED reports to an outbox unprompted, on two lanes — on-device WorkManager periodic passes and the scheduled Actions lane `lille-proactive.yml` (non-private only; state on the `lille-state` branch). The app's Tasks screen shows the "While you were away" reports + the commitments register (PROACTIVITY.md) |
 | Approval gates (send/post/delete/money) | Built (core policy) — Android approvals UI planned |
 | Autonomous tool use (plan → act → observe → verified finish) | **Built in Python core (v0.3)** — tool-call loop with native + text-fallback tool calls, deterministic Sentinel, sandboxed code/file tools, live-proven end-to-end (`live-tests/2026-11-24-v03-proof.md`, LOOP.md) |
 | Background / offline tasks (works while the user is away) | **Built (v0.4)** — durable checkpointed task engine in core (`--task/--resume/--tasks/--pause/--cancel`; waiting_network/waiting_route instead of fake failures) AND in the app (Tasks screen, WorkManager foreground workers, boot recovery, `needs_runner` spec export for code tasks). Runner lane for fully-offline completion: `lille-task.yml` on Actions, non-private only (OFFLINE.md, `live-tests/2026-11-24-v04-proof.md`) |

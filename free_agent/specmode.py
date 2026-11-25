@@ -22,6 +22,13 @@ Spec format (headings case-insensitive, '#' optional):
     Authorised branches: `some/branch`   (main/master must be named
     here explicitly to be pushable at all)
 
+    Watch (optional, v0.7 — the Proactivity Law)
+    - <check spec> [every <minutes>]
+      e.g. - actions-run:Townsvilledh/free-agent:123456 every 5
+    Each Watch item is auto-registered as a commitment when the spec
+    finishes: the result it names will be checked by proactive
+    passes and reported when it lands — nobody has to ask.
+
 The spec becomes a durable v0.4 task. After the loop, spec mode
 builds the final report DETERMINISTICALLY from evidence (the step
 trace + the repo's own git state) — the model cannot grade its own
@@ -62,7 +69,10 @@ _HEADINGS = {
     "authorized push branches": "push",
     "authorised branches": "push",
     "authorized branches": "push",
+    "watch": "watch",
 }
+
+_WATCH_EVERY = re.compile(r"\s+every\s+(\d+(?:\.\d+)?)\s*$")
 
 _CHECK_ITEM = re.compile(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?(.+?)\s*$")
 _BRANCH_TOKEN = re.compile(r"`([^`]+)`|(?:^|\s)([\w][\w./-]*\/[\w./-]+)(?:\s|$)")
@@ -108,9 +118,9 @@ def _heading_of(line):
 
 def parse_spec(text):
     """Parse a spec pack. Returns a dict with goal, hard_rules,
-    criteria, deliverables, push_branches, main_authorised."""
+    criteria, deliverables, push_branches, main_authorised, watch."""
     sections = {"goal": [], "hard_rules": [], "criteria": [],
-                "deliverables": [], "push": []}
+                "deliverables": [], "push": [], "watch": []}
     current = None
     for raw in str(text).splitlines():
         h = _heading_of(raw)
@@ -134,6 +144,15 @@ def parse_spec(text):
         if tok and tok not in push_branches and " " not in tok:
             push_branches.append(tok)
     main_authorised = any(b in ("main", "master") for b in push_branches)
+    watch = []
+    for item in sections["watch"]:
+        every_seconds = 1800
+        m = _WATCH_EVERY.search(item)
+        if m:
+            every_seconds = int(float(m.group(1)) * 60)
+            item = item[:m.start()].strip()
+        if item:
+            watch.append({"check": item, "every_seconds": every_seconds})
     return {
         "goal": " ".join(sections["goal"]).strip(),
         "hard_rules": sections["hard_rules"],
@@ -141,6 +160,7 @@ def parse_spec(text):
         "deliverables": sections["deliverables"],
         "push_branches": push_branches,
         "main_authorised": main_authorised,
+        "watch": watch,
     }
 
 
@@ -527,6 +547,25 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
     ev = gather_evidence(result, task_dir, initial_head=initial_head)
     evaluated = evaluate_criteria(spec, ev, task_dir)
     report = build_report(spec, result, ev, evaluated)
+    # Proactivity Law (v0.7): a spec's Watch items become commitments
+    # the moment the spec finishes — the pending result is then
+    # checked by proactive passes and reported when it lands,
+    # without anybody asking. Registration failures are stated in
+    # the report, never silent.
+    if spec.get("watch"):
+        from .commitments import CommitmentStore
+        store = CommitmentStore(ws)
+        for w in spec["watch"]:
+            try:
+                rec = store.create(
+                    title=f"{spec['goal'] or 'spec'} — watch: {w['check']}",
+                    check=w["check"], every_seconds=w["every_seconds"])
+                report += (f"\nWatch registered: commitment {rec['id']} "
+                           f"({w['check']}, every "
+                           f"{w['every_seconds'] // 60} min) — proactive "
+                           "passes will report it when it lands.")
+            except ValueError as e:
+                report += f"\nWatch NOT registered ({w['check']}): {e}"
     problems = validate_report(report, spec)
     if problems:  # our own builder must never emit a malformed report
         report += "\n[report self-check FAILED: " + "; ".join(problems) + "]"

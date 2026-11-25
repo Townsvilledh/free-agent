@@ -1,0 +1,104 @@
+name: lille-proactive
+
+# Scheduled lane for the Proactivity Law (PROACTIVITY.md): every
+# ~30 minutes a free Actions runner restores Lille's lane state
+# from the dedicated `lille-state` branch, runs ONE proactive pass
+# (due commitment checks, idle pickup of queued tasks, waiting-task
+# resumes), and commits the state — including any new outbox
+# reports — back to that branch. The user does not ask; the reports
+# are simply there when they look.
+#
+# NON-PRIVATE ONLY, enforced twice: export_for_lane() refuses
+# private commitments when state leaves a device, and the pass runs
+# with --lane, which skips (and names) any private commitment found
+# in lane state. Private commitments live and die on the device.
+#
+# Honest limits: GitHub's cron is best-effort — scheduled runs can
+# be delayed or dropped under load, and schedules on a fork or an
+# inactive repo can be disabled by GitHub. This lane is one of two;
+# the on-device WorkManager periodic pass is the other
+# (PROACTIVITY.md). Neither is a hard real-time guarantee.
+
+on:
+  schedule:
+    # Every 30 minutes at odd minutes (on-the-hour schedules are
+    # the most delayed under load). Actions' minimum practical
+    # cron granularity is 5 minutes.
+    - cron: "13,43 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # push state back to the lille-state branch only
+
+concurrency:
+  group: lille-proactive
+  cancel-in-progress: false
+
+jobs:
+  proactive-pass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repo (code, main)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore lane state from the lille-state branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/lane-state" "$GITHUB_WORKSPACE/lane-work"
+          if git clone --quiet --depth 1 --branch lille-state \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+              "$GITHUB_WORKSPACE/lane-state/repo" 2>/dev/null; then
+            echo "lille-state restored."
+          else
+            echo "No lille-state branch yet — initialising an empty one."
+            mkdir -p "$GITHUB_WORKSPACE/lane-state/repo"
+            cd "$GITHUB_WORKSPACE/lane-state/repo"
+            git init --quiet
+            git checkout --quiet --orphan lille-state
+            git remote add origin \
+              "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+            printf '# lille-state\n\nLille proactive-lane state (commitments, task store, outbox reports).\nWritten only by the lille-proactive workflow. Non-private entries only.\n' > README.md
+          fi
+          if [ -d "$GITHUB_WORKSPACE/lane-state/repo/state" ]; then
+            cp -r "$GITHUB_WORKSPACE/lane-state/repo/state/." "$GITHUB_WORKSPACE/lane-work/"
+          fi
+          echo "--- lane workspace ---"
+          find "$GITHUB_WORKSPACE/lane-work" -maxdepth 2 | head -30
+
+      - name: Run one proactive pass (lane mode)
+        env:
+          FREEAGENT_WORKSPACE: ${{ github.workspace }}/lane-work
+        run: |
+          python -m free_agent --proactive-run --lane --pace 50
+          echo "--- commitments after the pass ---"
+          python -m free_agent --commitments || true
+          echo "--- outbox ---"
+          ls -la "$FREEAGENT_WORKSPACE/reports" || true
+
+      - name: Commit state back to lille-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/lane-state/repo"
+          rm -rf state
+          mkdir state
+          cp -r "$GITHUB_WORKSPACE/lane-work/." state/
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No state change this pass."
+          else
+            git config user.name "lille-proactive"
+            git config user.email "lille-proactive@users.noreply.github.com"
+            git commit -m "proactive pass $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin HEAD:lille-state
+            echo "State committed back to lille-state."
+          fi

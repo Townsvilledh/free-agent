@@ -64,7 +64,7 @@ before it is claimed — no rung is described as done from intention:
    and this roadmap only. Live proofs: live-tests/2026-11-24-v05-proof.md.
    The standing benchmark against Manus (7 bars, measured) is
    BENCHMARK.md.
-6. Video production — **built in core (v0.6); Lille stands here.**
+6. Video production — **built in core (v0.6).**
    Code-driven video only — NO generative video models (unavailable
    in the user's region and never called): scripted Chromium capture
    of live web apps, PIL-rendered cards/captions, a free-TTS fallback
@@ -76,7 +76,16 @@ before it is claimed — no rung is described as done from intention:
 7. Build-and-deliver via Actions
 8. Browser control (structural perception first — principle 2).
    v0.6's capture is a scripted instrument, NOT this rung.
-9. Scheduling / proactivity
+9. Scheduling / proactivity — **built (v0.7); Lille stands here.**
+   The Proactivity Law as machinery (PROACTIVITY.md): a persisted
+   commitments register (pending results with machine-checkable
+   landing conditions + deadlines), a proactive pass that runs due
+   checks, picks up queued tasks nobody started, resumes waiting
+   tasks, and writes DONE / LANDED / BLOCKED reports to an outbox
+   unprompted — on two lanes (on-device WorkManager periodic; the
+   scheduled Actions lane, non-private only). Specs auto-register
+   their `Watch:` items. BENCHMARK.md bar 8. Live proofs:
+   live-tests/2026-11-25-v07-proof.md.
 10. Sub-agent delegation
 11. Memory / goals system
 

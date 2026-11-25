@@ -23,5 +23,7 @@ class BootReceiver : BroadcastReceiver() {
                 TaskWorker.enqueue(context, task.optString("id"))
             }
         }
+        // Re-arm the periodic proactive pass (v0.7) after reboot.
+        ProactiveWorker.schedule(context)
     }
 }

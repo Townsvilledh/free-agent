@@ -1,8 +1,9 @@
 # BENCHMARK.md — Lille vs Manus, measured
 
 Ethuram's standing standard (2026-11-24 ~20:45 WAT): **"Lille should
-be better than Manus by every bar there is."** These seven bars are
-the benchmark for EVERY rung from v0.5 on. Each bar states how it is
+be better than Manus by every bar there is."** These bars are
+the benchmark for EVERY rung from v0.5 on (bars 1–7 from
+2026-11-24; bar 8, Proactivity, added 2026-11-25). Each bar states how it is
 measured, Lille's current measured status, and Manus's baseline from
 the 2026-11-24 deep-research report
 (`~/workspace/research_notes/autonomous-agents-deep-research-20261124-0017/report.md`;
@@ -14,7 +15,7 @@ measurement to build. Where Manus genuinely leads today, the gap is
 named plainly — see "Open gaps" at the bottom. Nothing here is
 softened.
 
-## The 7 bars
+## The bars
 
 ### 1. COST
 - **Measure:** money spent per completed task, from the task report.
@@ -118,6 +119,35 @@ softened.
 - **Verdict:** comparable in intent; Lille's receipts are git hashes
   and files the user owns outright.
 
+### 8. PROACTIVITY
+- **Measure:** does work move without being chased? Counted from
+  the commitments register + outbox: commitments tracked, checks
+  executed on schedule by proactive passes (not by a user asking),
+  results reported unprompted when they land, queued tasks picked
+  up while idle. A result that lands and is NOT surfaced counts
+  against this bar — that failure (a judged competition result
+  sitting unreported until Ethuram chased it, 2026-11-25) is the
+  reason the bar exists.
+- **Lille:** the Proactivity Law (Ethuram, 2026-11-25 ~10:50 WAT)
+  implemented as machinery in v0.7 (PROACTIVITY.md): a persisted
+  commitments register with machine-checkable landing conditions,
+  a proactive pass (due checks, idle pickup, waiting-task resumes)
+  writing DONE / LANDED / BLOCKED reports to an outbox, and two
+  unprompted lanes — on-device WorkManager periodic passes and the
+  scheduled Actions lane (`lille-proactive.yml`, non-private
+  only). First measurements: the v0.7 live proofs
+  (`live-tests/2026-11-25-v07-proof.md`) — a real Actions run
+  watched to conclusion and reported by passes alone; an enqueued
+  task nobody started, completed by a pass. Specs can declare a
+  `Watch:` section and are auto-registered, so entering something
+  and watching for its result is one act.
+- **Manus baseline:** scheduled automations exist but are capped
+  (free tier: 2) and metered; there is no equivalent of a
+  commitments register whose results must surface unprompted —
+  checking outcomes remains the user's job.
+- **Verdict:** Lille ahead by design; the tally of unprompted
+  reports is the running measurement, kept in the proof files.
+
 ## The video boundary (binding)
 
 The v0.6 video rung reopens lanes whose rules allow an AI-made demo
@@ -184,10 +214,10 @@ proficient at that size yet.** Readiness by capability:
 | Capability the spec demands | Lille after v0.5 | Evidence / gap |
 |---|---|---|
 | Long-spec comprehension (multi-thousand-word pack, hard rules, acceptance criteria) | Partial | Spec mode parses Goal/Hard rules/Criteria/Deliverables/Push and grades criteria from evidence — proven on small specs. A pack of Buildathon size has never been run; context limits of the 20B brain are the binding constraint. Measurement to build: run a sectioned large spec and score criterion coverage. |
-| Multi-workstream planning (3 workstreams over 6 days, day-by-day plan) | Not yet | The loop plans step-by-step inside one task; there is no multi-day planner, no workstream state. Gap closes at the scheduling/proactivity rung (durable tasks exist; a planner layer does not). |
+| Multi-workstream planning (3 workstreams over 6 days, day-by-day plan) | Not yet | The loop plans step-by-step inside one task; there is no multi-day planner, no workstream state. v0.7 added the commitments register (pending results + deadlines tracked and surfaced), which is the substrate a planner would stand on — the planner layer itself does not exist. |
 | Code changes in a large existing codebase (Fluid: a very large single-file wallet core + tests) | Partial | Repo tools (clone/tree/read/edit/test/diff/commit) are proven on small repos. Never attempted on a Fluid-sized repo; file-context limits and 25-step budgets bind. Measurement to build: a real Fluid maintenance task (e.g. a test-covered utility fix) as a spec, scored like proofs (a)–(c). |
 | Test/build verification (run the suite, first-user walk of the live build) | Partial | run_tests auto-detects and reports real exit codes — proven. The "first-user walk" (open the live app, click every control) needs the browser rung — not yet. |
-| Deadline discipline (freeze dates, submission by a fixed midnight) | Not yet | Durable tasks + waiting states exist; no calendar/deadline awareness, no freeze enforcement. Gap closes at the scheduling rung. |
+| Deadline discipline (freeze dates, submission by a fixed midnight) | Partial | v0.7: commitments carry deadlines; a deadline passing unlanded is surfaced as a BLOCKED report, never silent, and proactive passes work the queue on schedule (bar 8). Freeze *enforcement* (refusing new work after a freeze) does not exist. |
 | Honest status reporting (shipped / in build / unproven, exact blockers, single-step asks) | Proven (small scale) | The spec report shape (SHIPPED / BLOCKED / NEEDS ETHURAM with per-criterion evidence + Cost line) is enforced by code and validated in tests. Proven on v0.5's small proofs; unproven at Buildathon scale. |
 
 **What would change the verdict:** Lille completing one real
