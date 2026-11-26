@@ -6,8 +6,8 @@ import org.json.JSONObject
  * Chat→task job detection (v0.13) — the chat is the command
  * surface (Ethuram's law, 2026-11-26: "keep it in the fucking
  * chat"). When the user gives Lille a job in chat, she takes
- * it as a task herself; the Tasks screen is only a window into
- * the same work, never a second workplace.
+ * it as a task herself, and the work lives in that same
+ * thread (CHAT IS THE ENGINE) — never a second workplace.
  *
  * Detection is deterministic-plus-model, in that order:
  *

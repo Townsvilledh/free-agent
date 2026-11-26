@@ -1,8 +1,8 @@
 package org.freeagent.app
 
 /**
- * Mission-log formatting for the Tasks screen (design
- * fold-in, Direction 2): a running task reads as a checklist
+ * Mission-log formatting for the proactive debrief
+ * (design fold-in, Direction 2): a running task reads as a checklist
  * of what is DONE (from its real checkpointed trace), what it
  * is doing NOW (its note, in plain words), and how long it has
  * been at it — never a fake percentage. Pure functions over
@@ -38,13 +38,14 @@ object MissionLog {
     }
 
     /** The current-action line: the task's own note when it
-     *  has one (notes are written in plain words at every
-     *  checkpoint), else a state-true fallback. */
+     *  has one AND the note is clean (NarrationGuard — a
+     *  legacy note carrying route narration is withheld),
+     *  else a state-true plain fallback. */
     fun currentAction(state: String, note: String): String {
-        if (note.isNotBlank()) return note
+        NarrationGuard.cleanOrNull(note)?.let { return it }
         return when (state) {
             TaskStates.RUNNING -> "Working on it…"
-            TaskStates.WAITING_ROUTE -> "Waiting for the free brain to free up…"
+            TaskStates.WAITING_ROUTE -> "Waiting — continues automatically…"
             TaskStates.WAITING_NETWORK -> "Waiting for the network…"
             TaskStates.PARKED_AT_WALL -> "Parked at a step only you can do."
             TaskStates.QUEUED -> "Queued — starts when the worker picks it up."

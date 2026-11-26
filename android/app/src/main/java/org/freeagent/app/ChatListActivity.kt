@@ -80,9 +80,19 @@ class ChatListActivity : AppCompatActivity() {
 
             val count = ChatData.messageCount(root, id)
             val updated = chat.optLong("updatedAt", 0L)
+            // CHAT IS THE ENGINE: a chat holding live work
+            // says so on its row — a plain state mark
+            // (ChatWorkMark), so a working / waiting /
+            // needs-you chat is recognisable at a glance
+            // without opening it. There is no Tasks screen;
+            // this list and the threads are where work shows.
+            val workMark = StatusProbe.latestTaskForChat(
+                TaskStore(this).all(), id
+            )?.let { ChatWorkMark.markFor(it.optString("state")) }
             val meta = TextView(this)
             meta.text = "$count message${if (count == 1) "" else "s"} · " +
-                if (updated > 0) dateFormat.format(Date(updated)) else ""
+                (if (updated > 0) dateFormat.format(Date(updated)) else "") +
+                (workMark?.let { "  $it" } ?: "")
             meta.setTextColor(Color.parseColor("#8A8378"))
             meta.textSize = 12f
             block.addView(meta)

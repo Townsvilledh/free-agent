@@ -9,7 +9,7 @@ import org.junit.Test
  * OwnerGate (v0.10.1): Lille's OWN X account is hers alone —
  * the creation task is visible/creatable only when the
  * verified Fluid login identity is the owner's. These tests
- * pin the gate the Tasks screen acts on: owner (any human
+ * pin the gate the main chat's menu acts on: owner (any human
  * spelling) → shown; any other verified name → hidden; no
  * verified login at all → hidden.
  */

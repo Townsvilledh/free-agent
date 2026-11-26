@@ -96,10 +96,9 @@
             android:name=".LoginActivity"
             android:exported="false" />
 
-        <!-- v0.4: durable background tasks screen -->
-        <activity
-            android:name=".TasksActivity"
-            android:exported="false" />
+        <!-- The Tasks screen is REMOVED (v1.0.1, CHAT IS THE
+             ENGINE): work lives in chats; the task store and
+             engine remain as the chats' backbone. -->
 
         <!-- v0.9: PARKED_AT_WALL handoff — Lille's parked browser
              session full-screen, for the one human step -->

@@ -37,6 +37,29 @@ class TaskWorker(context: Context, params: WorkerParameters) :
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        // Bounded concurrency (v1.0.1, TaskGate): at most
+        // two task runs progress at once, and the exclusive
+        // browser lane admits one browser run at a time. A
+        // denied run retries later WITHOUT touching the
+        // record — the task's state and checkpoint are
+        // exactly as they were, so serialisation on the
+        // lane never fails either task.
+        val record = TaskStore(applicationContext).get(taskId)
+            ?: return Result.failure()
+        if (!TaskGate.shared.tryAcquire(
+                taskId, TaskRunner.isBrowserTask(record)
+            )
+        ) {
+            return Result.retry()
+        }
+        try {
+            return doWorkAdmitted(taskId)
+        } finally {
+            TaskGate.shared.release(taskId)
+        }
+    }
+
+    private suspend fun doWorkAdmitted(taskId: String): Result {
         setForeground(createForegroundInfo(taskId))
         val finalState = TaskRunner(applicationContext).runTask(taskId)
         // v0.13: a task born in a chat reports its settled

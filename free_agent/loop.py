@@ -139,8 +139,11 @@ def parse_text_tool_call(content):
 
 class WaitingRouteError(RuntimeError):
     """All routes are cooling down (Fallback Law). NOT a failure:
-    the task waits and resumes at/after retry_at."""
-    def __init__(self, retry_at=None, message="all routes cooling down"):
+    the task waits and resumes at/after retry_at. The message
+    is user-visible (it lands in the task record), so it is
+    plain by law (seamless, 2026-11-26): no route names, no
+    mechanics — the per-route facts live in the router audit."""
+    def __init__(self, retry_at=None, message="waiting — continues automatically"):
         super().__init__(message)
         self.retry_at = retry_at
 
@@ -236,20 +239,22 @@ class TaskLoop:
                 # Distinguish "network down" (every attempt status 0)
                 # from a real provider failure: both are WAITING
                 # states for a durable task, never silent failures.
+                # The waiting messages are PLAIN (seamless law):
+                # the provider detail stays in the exception and
+                # the audit, never in the record's user-visible text.
                 text = str(e)
                 now = time.time()
                 unlocks = [u for u in router.cooldowns.values() if u > now]
                 retry_at = min(unlocks) if unlocks else now + 60
                 if ", 0)" in text or text.rstrip().endswith(", 0)]"):
-                    raise WaitingNetworkError(retry_at,
-                        f"network unreachable (all transports failed): {e}")
+                    raise WaitingNetworkError(retry_at, "network unreachable")
                 if unlocks:
                     raise WaitingRouteError(retry_at,
-                        f"routes unavailable, cooling down: {e}")
+                                            "waiting — continues automatically")
                 raise
             if out.get("queued"):
                 raise WaitingRouteError(out.get("retry_at"),
-                                        out.get("text", "all routes cooling down"))
+                                        out.get("text", "waiting — continues automatically"))
             msg = out["message"]
             calls = []
             for tc in msg.get("tool_calls") or []:

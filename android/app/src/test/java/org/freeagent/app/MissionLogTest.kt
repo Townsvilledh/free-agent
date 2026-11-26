@@ -37,16 +37,31 @@ class MissionLogTest {
     @Test
     fun currentActionPrefersTheNote() {
         assertEquals(
-            "Free brain returned HTTP 429.",
-            MissionLog.currentAction(TaskStates.RUNNING, "Free brain returned HTTP 429.")
+            "Reading the second page of results.",
+            MissionLog.currentAction(
+                TaskStates.RUNNING, "Reading the second page of results."
+            )
         )
         assertEquals(
-            "Waiting for the free brain to free up…",
+            "Waiting — continues automatically…",
             MissionLog.currentAction(TaskStates.WAITING_ROUTE, "")
         )
         assertEquals(
             "Parked at a step only you can do.",
             MissionLog.currentAction(TaskStates.PARKED_AT_WALL, "")
+        )
+    }
+
+    @Test
+    fun currentActionWithholdsNarrationNotes() {
+        // Seamless law: a legacy note carrying route
+        // narration is never the debrief's current action —
+        // the plain state fallback stands instead.
+        assertEquals(
+            "Working on it…",
+            MissionLog.currentAction(
+                TaskStates.RUNNING, "Free brain returned HTTP 429."
+            )
         )
     }
 

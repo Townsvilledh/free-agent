@@ -218,12 +218,43 @@ class TaskRunner(private val context: Context) {
                 it.put("lastBrainCallAt", System.currentTimeMillis())
             }
 
+            // Brain lane (v1.0.1 multitasking): chat has
+            // priority and only one task brain call flies at
+            // a time. Poll in-worker for a bounded stretch —
+            // most contention is seconds — and only then
+            // take the ordinary waiting state (the run
+            // releases its TaskGate slot; the retry resumes
+            // from this checkpoint).
+            var laneWaitedMs = 0L
+            while (true) {
+                val laneWait = BrainLane.shared.taskCallWaitMs(
+                    id, System.currentTimeMillis()
+                )
+                if (laneWait <= 0L) break
+                if (laneWaitedMs >= 120_000L) {
+                    return wait(id, TaskStates.WAITING_ROUTE,
+                        BrainPacing.pacingNote(60_000L), 60_000L)
+                }
+                Thread.sleep(minOf(laneWait, BrainLane.POLL_MS))
+                laneWaitedMs += minOf(laneWait, BrainLane.POLL_MS)
+                val recheck = store.get(id) ?: return TaskStates.FAILED
+                if (recheck.optString("state") == TaskStates.CANCELLED) {
+                    return TaskStates.CANCELLED
+                }
+                if (recheck.optString("state") == TaskStates.PAUSED) {
+                    return TaskStates.PAUSED
+                }
+            }
+
             val reply: JSONObject
+            BrainLane.shared.taskStarted(id)
             try {
                 reply = callModel(messages)
             } catch (e: IOException) {
                 return wait(id, TaskStates.WAITING_NETWORK,
                     "Network unreachable — task is waiting, not failed.", 60_000L)
+            } finally {
+                BrainLane.shared.taskFinished(id)
             }
             val httpCode = reply.optInt("http", 200)
             if (httpCode == 402 || httpCode == 429) {
@@ -249,17 +280,18 @@ class TaskRunner(private val context: Context) {
                 store.update(id) { it.put("consecutiveRateLimits", 0) }
             }
             if (httpCode != 200) {
-                val routeName = reply.optString("route", "")
+                // Seamless law: the user-visible note is
+                // plain — no route names, no HTTP mechanics.
+                // The serving facts (route + code) are kept
+                // as EVIDENCE fields on the record, where
+                // traces and graded reports read them.
                 store.update(id, TaskStates.FAILED) {
                     it.put(
                         "note",
-                        if (routeName.isNotEmpty() && routeName != "pollinations") {
-                            "Brain route $routeName returned HTTP $httpCode " +
-                                "(the routes before it in the chain also failed)."
-                        } else {
-                            "Free brain returned HTTP $httpCode."
-                        }
+                        "Stopped at a step that could not be completed."
                     )
+                    it.put("lastBrainRoute", reply.optString("route", ""))
+                    it.put("lastBrainHttp", httpCode)
                 }
                 return TaskStates.FAILED
             }

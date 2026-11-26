@@ -46,12 +46,31 @@ class ChatTaskLinkTest {
     @Test
     fun failedReportNeverClaimsDone() {
         val text = ChatTaskLink.reportFor(
-            task(TaskStates.FAILED, note = "Free brain returned HTTP 503."),
+            task(
+                TaskStates.FAILED,
+                note = "Stopped at a step that could not be completed."
+            ),
             TaskStates.FAILED
         )!!
         assertTrue(text.contains("failed"))
         assertTrue(text.contains("nothing about it counts as done"))
-        assertTrue(text.contains("Free brain returned HTTP 503."))
+        assertTrue(
+            text.contains("Stopped at a step that could not be completed.")
+        )
+    }
+
+    @Test
+    fun failedReportWithholdsNarrationNotes() {
+        // A legacy record's note carries route narration
+        // (written by the shipped build): the report must
+        // stand on the state and NEVER echo it (seamless law).
+        val text = ChatTaskLink.reportFor(
+            task(TaskStates.FAILED, note = "Free brain returned HTTP 503."),
+            TaskStates.FAILED
+        )!!
+        assertTrue(text.contains("nothing about it counts as done"))
+        assertFalse(text.contains("Free brain"))
+        assertFalse(text.contains("HTTP"))
     }
 
     @Test
@@ -83,7 +102,18 @@ class ChatTaskLinkTest {
             TaskStates.PAUSED
         )!!
         assertTrue(text.contains("paused"))
-        assertTrue(text.contains("resume it from the Tasks screen"))
+        // CHAT IS THE ENGINE: resume happens HERE, in the
+        // thread — no screen is named, no hand-off exists.
+        assertTrue(text.contains("Say the word here"))
+        assertFalse(text.contains("Tasks screen"))
+        assertFalse(text.contains("task screen"))
+    }
+
+    @Test
+    fun startAckStaysInTheThread() {
+        assertTrue(ChatTaskLink.START_ACK.contains("work on it here"))
+        assertFalse(ChatTaskLink.START_ACK.contains("Tasks screen"))
+        assertFalse(ChatTaskLink.START_ACK.contains("taken it on as a task"))
     }
 
     @Test
@@ -127,7 +157,7 @@ class ChatTaskLinkTest {
     }
 
     @Test
-    fun tasksScreenTasksNeverReportToChat() {
+    fun nonChatTasksNeverReportToChat() {
         for (state in ChatTaskLink.MATERIAL) {
             assertNull(
                 ChatTaskLink.reportFor(

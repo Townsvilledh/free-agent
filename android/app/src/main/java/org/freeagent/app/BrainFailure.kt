@@ -1,35 +1,45 @@
 package org.freeagent.app
 
 /**
- * Brain-failure classification + retry discipline (v0.12).
+ * Brain-failure classification + retry discipline (v0.12;
+ * seamless since 2026-11-26).
  *
  * Born of a live failure on Ethuram's phone (2026-11-26): he
  * sent "hi", his connection was fine, the free route refused
  * — and the chat answered with a terminal "Couldn't reach the
  * free brain — check your connection and try again." Wrong
- * cause, wrong instruction, dead end. That breaks the
- * Fallback Law, and this component is the fix's pure half:
+ * cause, wrong instruction, dead end.
+ *
+ * The v0.12 fix classified every failure and composed an
+ * honest cause line for the chat. Ethuram's seamless law
+ * (same day, from a screenshot of that very copy) supersedes
+ * the copy half: route failures, refusals and rate-limits
+ * are NEVER narrated on a user surface. Fallback is
+ * immediate and invisible; the user sees the thinking state,
+ * then the answer. So this component now keeps ONLY the
+ * machinery half:
  *
  * - Every brain-call failure is CLASSIFIED (below) from the
  *   HTTP status / the I/O failure / the device's actual
- *   connectivity state — never guessed.
- * - Every retryable class keeps the user's message queued,
- *   shows an honest status line naming the REAL cause, and
- *   auto-retries with escalating waits until a route
+ *   connectivity state — never guessed. The class drives
+ *   behaviour (fall through / wait / end), never prose.
+ * - Every retryable class keeps the user's message queued
+ *   and auto-retries with escalating waits until a route
  *   recovers. There is no retry cap and no error wall for a
  *   retryable failure — she thinks longer, on another route
  *   if needed, exactly like the task engine.
- * - "Check your connection" copy is chosen ONLY when the
- *   device is actually offline — the glue checks
- *   ConnectivityManager before this component is consulted.
  * - Terminal errors are reserved for genuinely permanent
  *   failures (the request itself is malformed for every
  *   route) — and even then the user's message stays in the
- *   chat; only the reply attempt ends.
+ *   chat; only the reply attempt ends, with the ONE plain
+ *   line ([EXHAUSTED_LINE]).
  *
  * The waits reuse BrainPacing's arithmetic (Retry-After
  * wins; otherwise 60 s × 2^streak, capped at 15 min), so
  * chat and the task engine share one pacing discipline.
+ * Serving-route facts live in traces and graded report
+ * proof blocks — never in failure narration (NarrationGuard
+ * vets any stored note a surface would echo).
  */
 object BrainFailure {
 
@@ -102,94 +112,32 @@ object BrainFailure {
         return if (failure == Class.OFFLINE) maxOf(base, 120_000L) else base
     }
 
-    /**
-     * The honest in-chat status line for a failed attempt.
-     * [nextRouteLabel] names the fallback that is about to be
-     * tried ("the slow community route"), or null when the
-     * chain is exhausted and the wait is for recovery.
-     * [waitText] is BrainPacing.describeWait's phrasing.
-     */
-    fun statusLine(
-        failure: Class,
-        nextRouteLabel: String?,
-        waitText: String,
-        ownKeyName: String? = null
-    ): String {
-        // v0.12.1: when the route that failed is one of the
-        // user's OWN key routes, the cause names that route
-        // and its own free-tier limit — the shared-carrier-IP
-        // explanation belongs to the anonymous keyless tier
-        // only, and saying it about a personal key would be
-        // the wrong cause (the discipline this file exists
-        // for). OFFLINE is a device fact either way.
-        val cause = when (failure) {
-            Class.OFFLINE ->
-                "You're offline right now — this message is saved here, " +
-                    "and Lille keeps retrying on her own as soon as a " +
-                    "connection appears."
-            Class.RATE_LIMITED ->
-                if (ownKeyName != null) {
-                    "Your $ownKeyName key route hit its free-tier limit " +
-                        "for now — your message is safe and queued."
-                } else {
-                    "The free brain route is busy — its anonymous tier limits " +
-                        "replies per internet address, and on mobile networks " +
-                        "that address is shared with other people on your " +
-                        "carrier, so the limit can be used up by strangers."
-                }
-            Class.NETWORK ->
-                if (ownKeyName != null) {
-                    "Your $ownKeyName key route didn't answer in time — " +
-                        "the route or the path to it hiccuped. Your " +
-                        "connection is fine; this one is on the route."
-                } else {
-                    "The free brain route didn't answer in time — the route " +
-                        "or the path to it hiccuped. Your connection is fine; " +
-                        "this one is on the route."
-                }
-            Class.SERVER ->
-                if (ownKeyName != null) {
-                    "Your $ownKeyName key route's server is having a bad " +
-                        "moment (it answered with an error). Your message " +
-                        "is safe and queued."
-                } else {
-                    "The free brain route's server is having a bad moment " +
-                        "(it answered with an error). Your message is safe " +
-                        "and queued."
-                }
-            Class.PERMANENT ->
-                if (ownKeyName != null) {
-                    "Your $ownKeyName key route refused that request's shape."
-                } else {
-                    "The free brain route refused that request's shape."
-                }
-        }
-        val next = when {
-            nextRouteLabel != null ->
-                " Trying $nextRouteLabel next."
-            failure == Class.PERMANENT -> ""
-            else ->
-                " Lille will retry on her own in about $waitText — no " +
-                    "need to re-send, and nothing is sent anywhere else."
-        }
-        return cause + next
-    }
+    /** The ONE plain line a chat attempt may end with when
+     *  every route is exhausted terminally. No route names,
+     *  no mechanics — the seamless law's only permitted
+     *  failure sentence. (Retryable exhaustion never reaches
+     *  it: she waits in the ordinary thinking state and
+     *  retries on her own.) */
+    const val EXHAUSTED_LINE =
+        "I can't reach a brain just now — try me again in a moment."
 
     /** The routes the chat chain can walk, in chain
      *  order. The keyless pair is LIVE-VERIFIED as
      *  genuinely keyless (ROUTES.md carries the dated
      *  verdicts); the rest are the user's OWN key routes
      *  (v0.12.1, OwnKeyRoutes) — present in a chain only
-     *  when the user has saved that key (see [chain]). */
-    enum class Route(val key: String, val label: String) {
-        POLLINATIONS("pollinations", "the main free route"),
-        HORDE("horde", "the slow community route"),
-        GROQ("groq", "your Groq key route"),
-        GEMINI("gemini", "your Gemini key route"),
-        CEREBRAS("cerebras", "your Cerebras key route"),
-        OPENROUTER("openrouter", "your OpenRouter key route"),
-        AGENTROUTER("agentrouter", "your AgentRouter key route"),
-        CUSTOM("custom", "your custom endpoint")
+     *  when the user has saved that key (see [chain]).
+     *  Routes carry no user-facing labels any more: naming
+     *  a route to the user is narration (seamless law). */
+    enum class Route(val key: String) {
+        POLLINATIONS("pollinations"),
+        HORDE("horde"),
+        GROQ("groq"),
+        GEMINI("gemini"),
+        CEREBRAS("cerebras"),
+        OPENROUTER("openrouter"),
+        AGENTROUTER("agentrouter"),
+        CUSTOM("custom")
     }
 
     /** The keyless chain — always present, needs nothing

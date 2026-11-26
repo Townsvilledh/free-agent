@@ -1028,9 +1028,13 @@ def _execute_spec(spec, task_dir, task_id, initial_head, ws, *,
             delay = max(5.0, min(retry_at - time.time(), 300.0)) + 5.0
             if waited + delay > 1800:
                 from .loop import TaskResult
+                # Plain by law (seamless, 2026-11-26): the
+                # report's summary carries no route mechanics;
+                # the wait detail stays in the trace.
                 result = TaskResult("error",
-                                    f"routes stayed unavailable after ~30 min of "
-                                    f"waiting: {e}", task_dir, task_id, [])
+                                    "Stopped after ~30 min of waiting — "
+                                    "no brain could be reached. The "
+                                    "checkpoint is kept.", task_dir, task_id, [])
                 break
             time.sleep(delay)
             waited += delay

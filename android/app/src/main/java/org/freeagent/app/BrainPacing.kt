@@ -81,14 +81,19 @@ object BrainPacing {
         if (waitMs >= 60_000L) "~${(waitMs + 59_999L) / 60_000L} min"
         else "~${(waitMs + 999L) / 1000L} sec"
 
-    /** The waiting_route note for a rate-limit cooldown. */
-    fun rateLimitNote(waitMs: Long): String =
-        "Free route rate-limited — next try in ${describeWait(waitMs)} " +
-            "(task is waiting, not failed)."
+    /** The waiting_route note. Seamless law (2026-11-26):
+     *  the note states the plain fact of waiting and
+     *  NOTHING about why — no route, no limit, no pacing
+     *  mechanics. The cause lives in the record's evidence
+     *  fields, never in the note a surface echoes. */
+    fun rateLimitNote(waitMs: Long): String = WAITING_NOTE
 
-    /** The waiting_route note for a pacing wait between calls. */
-    fun pacingNote(waitMs: Long): String =
-        "Free route pacing — the free brain allows roughly one call " +
-            "per minute; next try in ${describeWait(waitMs)} " +
-            "(task is waiting, not failed)."
+    /** The waiting_route note for a pacing wait — the same
+     *  plain line; the user is never told which internal
+     *  discipline produced the wait. */
+    fun pacingNote(waitMs: Long): String = WAITING_NOTE
+
+    /** The one plain waiting note for task records. */
+    const val WAITING_NOTE =
+        "Waiting — continues automatically (task is waiting, not failed)."
 }

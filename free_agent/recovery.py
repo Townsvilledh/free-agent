@@ -110,12 +110,12 @@ def reframe_request(user_text):
         f"Request: {sanitised}"
     )
 
-REFUSAL_NOTE = "The free model refused that phrasing, so I re-asked it as a concrete task:"
-REFUSAL_STILL = (
-    "\n\n(The free model refused this one even after I re-asked it as a "
-    "concrete task. Try a more specific wording yourself — for example "
-    "\"Write a Python script that …\" naming exactly what it should do.)"
-)
+# Seamless law (2026-11-26): refusal recovery is INVISIBLE.
+# The reframe + retry still happens (router.chat), but no
+# note is ever prepended or appended to the user's reply —
+# the REFUSAL_NOTE / REFUSAL_STILL copy that used to
+# narrate the recovery is gone. The user sees the answer,
+# or the refusal itself, plainly.
 
 # ---------- streaming stitch ----------
 

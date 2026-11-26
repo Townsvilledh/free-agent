@@ -128,72 +128,38 @@ class BrainFailureTest {
         assertFalse(BrainFailure.attemptEndsTerminally(BrainFailure.Class.OFFLINE))
     }
 
-    // ---- copy ----
+    // ---- copy (seamless law, v1.0.1) ----
+    //
+    // The v0.12 statusLine copy tests are GONE with the
+    // function: route failures are never narrated now. The
+    // only failure sentence a chat may show is the one
+    // plain exhausted line — pinned here against every
+    // banned-narration shape.
 
     @Test
-    fun rateLimitCopyNamesTheSharedCarrierIp() {
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.RATE_LIMITED, "the slow community route", "1 minute"
-        )
-        assertTrue(line.contains("shared"))
-        assertTrue(line.contains("carrier"))
-        assertTrue(line.contains("the slow community route"))
-        assertFalse(line.lowercase().contains("check your connection"))
+    fun exhaustedLineIsTheOnePlainLine() {
+        val line = BrainFailure.EXHAUSTED_LINE
+        assertTrue(line.contains("try me again in a moment"))
+        val low = line.lowercase()
+        for (banned in listOf(
+            "route", "pollinations", "horde", "groq", "gemini",
+            "free brain", "community", "rate", "limit", "refus",
+            "carrier", "shared ip", "key"
+        )) {
+            assertFalse(
+                "exhausted line must not contain '$banned'",
+                low.contains(banned)
+            )
+        }
+        assertFalse(NarrationGuard.containsNarration(line))
     }
 
     @Test
-    fun networkCopyNeverBlamesTheUsersConnection() {
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.NETWORK, null, "2 minutes"
-        )
-        assertTrue(line.contains("Your connection is fine"))
-        assertFalse(line.lowercase().contains("check your connection"))
-        assertTrue(line.contains("retry on her own"))
-    }
-
-    @Test
-    fun offlineCopySaysTheMessageIsSaved() {
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.OFFLINE, null, "2 minutes"
-        )
-        assertTrue(line.contains("offline"))
-        assertTrue(line.contains("saved here"))
-    }
-
-    // ---- own-key routes (v0.12.1) ----
-
-    @Test
-    fun ownKeyRateLimitCopyNamesTheKeyRouteNotTheCarrier() {
-        // A personal key's limit is the user's own free-tier
-        // quota — the shared-carrier-IP explanation belongs
-        // to the anonymous keyless tier only.
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.RATE_LIMITED, "your Gemini key route",
-            "1 minute", ownKeyName = "Groq"
-        )
-        assertTrue(line.contains("Your Groq key route"))
-        assertTrue(line.contains("free-tier limit"))
-        assertFalse(line.contains("carrier"))
-        assertTrue(line.contains("your Gemini key route"))
-    }
-
-    @Test
-    fun ownKeyNetworkCopyStillNeverBlamesTheConnection() {
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.NETWORK, null, "2 minutes", ownKeyName = "Cerebras"
-        )
-        assertTrue(line.contains("Your Cerebras key route"))
-        assertTrue(line.contains("Your connection is fine"))
-        assertFalse(line.lowercase().contains("check your connection"))
-    }
-
-    @Test
-    fun keylessCopyIsUnchangedWhenNoOwnKeyNameIsGiven() {
-        val line = BrainFailure.statusLine(
-            BrainFailure.Class.RATE_LIMITED, null, "1 minute"
-        )
-        assertTrue(line.contains("shared"))
-        assertTrue(line.contains("carrier"))
+    fun routesCarryNoUserFacingLabels() {
+        // Route identity is a trace fact (the key), never a
+        // display label: the enum exposes nothing else.
+        assertEquals("pollinations", BrainFailure.Route.POLLINATIONS.key)
+        assertEquals("horde", BrainFailure.Route.HORDE.key)
     }
 
     // ---- per-route health (v0.12 hunt) ----

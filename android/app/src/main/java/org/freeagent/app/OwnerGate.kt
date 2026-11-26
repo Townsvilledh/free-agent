@@ -4,9 +4,9 @@ package org.freeagent.app
  * Owner gate (v0.10.1) — the pure decision component behind
  * owner-only surfaces, in the same style as FluidGate and
  * BrainPacing: no Android, no I/O, pinned by JVM tests. The
- * Android glue (TasksActivity) only reads the verified Fluid
- * identity from FluidIdentityStore and acts on the decision
- * made here.
+ * Android glue (the main chat's menu, MainActivity) only
+ * reads the verified Fluid identity from
+ * FluidIdentityStore and acts on the decision made here.
  *
  * Why this exists (XLANE.md, "Hers alone"): Lille's own X
  * account is HERS alone — created once, by her own loop, from

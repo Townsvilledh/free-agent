@@ -12,10 +12,12 @@ import androidx.core.app.NotificationCompat
  * The "Lille needs you" notification (v0.9): posted when a
  * browser task parks at a human-only wall (PARKED_AT_WALL).
  * Tapping it opens BrowserActivity — her parked session,
- * full-screen — where the ONE named step happens. The Tasks
- * screen carries the same card; the notification is the
- * doorbell, not the only surface. Best-effort: if notifications
- * are not granted, the park still stands in the Tasks screen.
+ * full-screen — where the ONE named step happens. The same
+ * step is completable in the chat itself, on the in-chat
+ * browser panel where the park was announced; the
+ * notification is the doorbell, not the only surface.
+ * Best-effort: if notifications are not granted, the park
+ * still stands in the chat.
  */
 object WallNotify {
 

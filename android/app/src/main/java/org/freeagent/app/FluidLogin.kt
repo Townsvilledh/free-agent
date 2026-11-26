@@ -457,7 +457,7 @@ object FluidLogin {
 
     /** End every session and drop every pairing. With
      *  [forgetIdentity] the stored identity goes too — the
-     *  full "Disconnect Fluid name" (Tasks screen, so the gate
+     *  full "Disconnect Fluid name" (Settings, so the gate
      *  can be re-tested from scratch). Without it, only the
      *  pending attempt is cleared — the mismatch path, where a
      *  wrong wallet connected and must not linger as a session. */

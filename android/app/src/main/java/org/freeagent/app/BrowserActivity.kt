@@ -74,24 +74,14 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun handBack() {
         val id = taskId
-        val st = store
-        if (id != null && st != null) {
-            val state = st.get(id)?.optString("state") ?: ""
-            if (state == TaskStates.PARKED_AT_WALL &&
-                TaskStates.canTransition(state, TaskStates.RUNNING)
-            ) {
-                st.update(id, TaskStates.RUNNING) {
-                    it.put("handedBackAt", System.currentTimeMillis())
-                }
-                TaskWorker.enqueue(this, id)
-                Toast.makeText(
-                    this,
-                    "Handed back — Lille is resuming the task.",
-                    Toast.LENGTH_LONG
-                ).show()
-                finish()
-                return
-            }
+        if (id != null && WallHandback.handBack(this, id)) {
+            Toast.makeText(
+                this,
+                "Handed back — Lille is resuming the task.",
+                Toast.LENGTH_LONG
+            ).show()
+            finish()
+            return
         }
         // Not parked: the button used to just close the screen,
         // which reads as dead. Say plainly there is nothing to

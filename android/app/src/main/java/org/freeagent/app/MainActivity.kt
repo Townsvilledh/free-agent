@@ -24,9 +24,11 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +42,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
@@ -81,9 +84,24 @@ import java.util.concurrent.TimeUnit
  * genuinely ambiguous, the model's own question resolving
  * through the same path), taken on as a durable task in the
  * shared TaskStore, and its graded state reports land back
- * in this thread (ChatTaskLink / ChatTaskReporter). The
- * Tasks screen is a window into the same tasks, never a
- * second workplace.
+ * in this thread (ChatTaskLink / ChatTaskReporter).
+ *
+ * v1.0.1 — CHAT IS THE ENGINE + SEAMLESS FALLBACK: the
+ * conversation is the workspace. There is no Tasks screen
+ * (removed entirely): a chat-born job's state is the
+ * thread's own state — a living status line in the thread,
+ * her messages for the parked step and the graded result,
+ * the live browser panel when the work is in a browser
+ * step. Route failures, refusals and rate limits are
+ * NEVER narrated: fallback is immediate and invisible
+ * (BrainFailure discipline + NarrationGuard on stored
+ * notes), attribution footers are gone (traces only), a
+ * bare status probe is answered from the record with no
+ * brain call (StatusProbe), and every reply passes the
+ * deterministic ChatOutputGuard before display. Packaged
+ * jobs (her X account — owner-gated and state-driven,
+ * LilleXState; the user's own X connect) live in this
+ * chat's menu (MainChatActions).
  *
  * Keys: NONE are needed. A user's OWN optional free keys
  * (Groq, Gemini, Cerebras, OpenRouter, AgentRouter, or a
@@ -119,12 +137,9 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_HISTORY = 20
         // v0.2.1 smart recovery: stream continuations + one refusal reframe.
         private const val MAX_CONTINUATIONS = 3
-        private const val REFUSAL_NOTE =
-            "The free model refused that phrasing, so I re-asked it as a concrete task:"
-        private const val REFUSAL_STILL =
-            "\n\n(The free model refused this one even after I re-asked it as a " +
-            "concrete task. Try a more specific wording yourself — for example " +
-            "\"Write a Python script that …\" naming exactly what it should do.)"
+        // (The refusal-recovery ANNOUNCEMENTS that used to
+        // live here are gone — seamless law, v1.0.1: the
+        // reframe still happens, invisibly.)
     }
 
     /**
@@ -158,6 +173,10 @@ class MainActivity : AppCompatActivity() {
          *  message, driving the escalating waits. Reset on
          *  any delivered answer. */
         var brainStreak = 0
+        /** Chat-output guard (v1.0.1): this message's reply
+         *  already used its one silent regeneration. Reset
+         *  per fresh ask. */
+        var guardRetried = false
     }
 
     private lateinit var transcript: LinearLayout
@@ -175,6 +194,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var attachmentBar: View
     private lateinit var attachmentThumb: ImageView
     private lateinit var attachmentName: TextView
+
+    /** The in-chat live browser panel (v1.0.1): her real
+     *  WebView session, shown in the conversation while
+     *  this chat's work is in a browser step (BrowserPanel
+     *  state machine). Refreshed on every render and on a
+     *  slow tick while the screen is alive — work state
+     *  changes in the background (worker steps, handbacks)
+     *  and the panel follows the record. */
+    private lateinit var browserPanel: LinearLayout
+    private lateinit var browserPanelLabel: TextView
+    private lateinit var browserPanelContainer: FrameLayout
+    private lateinit var browserPanelWaiting: TextView
+    private lateinit var browserPanelExpand: Button
+    private lateinit var browserPanelAction: Button
+    private var panelState: BrowserPanel.State = BrowserPanel.State.HIDDEN
+    private var panelTaskId: String? = null
+    private var panelExpanded = false
+    private val panelTick = object : Runnable {
+        override fun run() {
+            if (!uiAlive) return
+            refreshBrowserPanel()
+            mainHandler.postDelayed(this, 3_000)
+        }
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -212,14 +255,25 @@ class MainActivity : AppCompatActivity() {
      *  rate limit, this holds the wall-clock time it recovers. */
     private var cooldownUntilMs = 0L
 
-    /** v0.10 rate-limit adjustment (Fallback Law, chat path):
-     *  BrainPacing arithmetic, same as the task engine (v0.9.1).
-     *  Global on purpose: the anonymous tier limits per IP,
-     *  not per chat. Chat is a live session, so the stamps
-     *  live in memory — the durable task runner persists its
-     *  own copies. */
-    private var lastBrainCallAtMs = 0L
+    /** BrainPacing stamps, PER ROUTE (v1.0.1 seamless
+     *  law): pacing governs repeat calls to the SAME route
+     *  only — a fresh call that starts on a different route
+     *  fires at once, and a fall-through NEVER re-enters
+     *  the gate. Global per route on purpose: the anonymous
+     *  tier limits per IP, not per chat. Chat is a live
+     *  session, so the stamps live in memory — the durable
+     *  task runner persists its own copies. */
+    private val lastBrainCallAtByRoute =
+        mutableMapOf<BrainFailure.Route, Long>()
     private var consecutiveRateLimits = 0
+
+    /** Stamp a brain call on [route]: pacing record +
+     *  the BrainLane chat mark (chat never waits; tasks
+     *  yield around it). */
+    private fun stampBrainCall(route: BrainFailure.Route) {
+        lastBrainCallAtByRoute[route] = System.currentTimeMillis()
+        BrainLane.shared.chatStarted()
+    }
 
     /** v0.12 per-route health (BrainFailure): consecutive
      *  failure counts + cooldown deadlines per brain route.
@@ -328,20 +382,30 @@ class MainActivity : AppCompatActivity() {
         chatStore = ChatStore(this)
         BackupWorker.schedule(this)
 
-        findViewById<Button>(R.id.tasksButton).setOnClickListener {
-            // v0.4: durable background tasks (OFFLINE.md) — create a
-            // task there, run it, then close the app / go offline.
-            startActivity(android.content.Intent(this, TasksActivity::class.java))
-        }
+        // v1.0.1 UI organisation: the header is quiet —
+        // mascot + name, Chats, New, and one menu holding
+        // the packaged jobs and the remaining destinations
+        // (MainChatActions). The Tasks destination is GONE:
+        // work lives in chats now, nowhere else.
         findViewById<Button>(R.id.chatsButton).setOnClickListener {
             startActivity(android.content.Intent(this, ChatListActivity::class.java))
-        }
-        findViewById<Button>(R.id.settingsButton).setOnClickListener {
-            startActivity(android.content.Intent(this, SettingsActivity::class.java))
         }
         findViewById<Button>(R.id.newChatButton).setOnClickListener {
             renderChat(chatStore.createChat())
         }
+        val menuButton = findViewById<Button>(R.id.menuButton)
+        menuButton.setOnClickListener { showMainMenu(menuButton) }
+
+        browserPanel = findViewById(R.id.browserPanel)
+        browserPanelLabel = findViewById(R.id.browserPanelLabel)
+        browserPanelContainer = findViewById(R.id.browserPanelContainer)
+        browserPanelWaiting = findViewById(R.id.browserPanelWaiting)
+        browserPanelExpand = findViewById(R.id.browserPanelExpand)
+        browserPanelAction = findViewById(R.id.browserPanelAction)
+        browserPanelExpand.setOnClickListener {
+            setPanelExpanded(!panelExpanded)
+        }
+        browserPanelAction.setOnClickListener { onPanelAction() }
         // Chat parity: while a reply is in flight the send
         // button IS the stop button (same slot); the composer
         // stays live and the keyboard's send key queues the
@@ -367,6 +431,7 @@ class MainActivity : AppCompatActivity() {
         uiAlive = true
         activeChatId = chatStore.ensureActiveChat()
         renderChat(activeChatId)
+        mainHandler.postDelayed(panelTick, 3_000)
     }
 
     /** Referrals: remember an invite link's inviter as
@@ -455,6 +520,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         uiAlive = false
+        mainHandler.removeCallbacks(panelTick)
+        if (::browserPanelContainer.isInitialized &&
+            browserPanelContainer.childCount > 0
+        ) {
+            BrowserSession.detach()
+        }
         super.onDestroy()
     }
 
@@ -494,6 +565,23 @@ class MainActivity : AppCompatActivity() {
                 queuedBubbles.addLast(bubble to display)
             }
         }
+        // CHAT IS THE ENGINE: the thread's own work state is
+        // visible IN the thread — a transient status line
+        // (never stored) for the chat's newest work while it
+        // is live. Finished work already told its story in
+        // her report messages; this line is only the living
+        // state.
+        val workTask = StatusProbe.latestTaskForChat(
+            TaskStore(this).all(), chatId
+        )
+        if (workTask != null &&
+            !TaskStates.isTerminal(workTask.optString("state"))
+        ) {
+            appendLine(
+                "Lille",
+                "— " + StatusProbe.statusLineFor(workTask) + " —"
+            )
+        }
         if (flight != null && flight.queue.inFlight) {
             val liveText = when {
                 flight.partial.isNotEmpty() || flight.carry.isNotEmpty() ->
@@ -509,6 +597,7 @@ class MainActivity : AppCompatActivity() {
         }
         renderedMtime = chatStore.lastModified()
         updateComposerState()
+        refreshBrowserPanel()
     }
 
     /** The first-run greeting. Transient — never stored, so
@@ -638,10 +727,29 @@ class MainActivity : AppCompatActivity() {
             WalletPrompt.Result.NotWallet -> Unit
         }
 
+        // STATUS FROM STATE (v1.0.1): a bare status probe
+        // in a chat with work of its own is answered from
+        // the record — state, steps, the parked step — with
+        // NO brain call. A status question must never reach
+        // a model (the live failure: a fallback model
+        // confabulated progress). Probes in a chat with no
+        // work, and lookalikes carrying an object ("update
+        // my bio"), are not intercepted: StatusProbe's
+        // whole-message shapes decide, and the flow below
+        // handles the rest exactly as before.
+        if (!hadAttachment && StatusProbe.isProbe(raw)) {
+            val task = StatusProbe.latestTaskForChat(
+                TaskStore(this).all(), chatId
+            )
+            if (task != null) {
+                appendAssistantMessage(chatId, StatusProbe.answerFor(task))
+                return
+            }
+        }
+
         // v0.13 — CHAT→TASK (the chat is the command surface):
-        // a job given here is taken on as a durable task by
-        // Lille herself — the user never has to visit the
-        // Tasks screen to make her work. Detection is the
+        // a job given here is taken on by Lille herself, as
+        // work in this thread. Detection is the
         // pure JobDetect (deterministic first; the model's
         // own clarifying question resolves through the same
         // pending-instruction path). A detected job creates
@@ -707,15 +815,24 @@ class MainActivity : AppCompatActivity() {
         BackupManager.requestBackup(this)
     }
 
-    /** Take a chat-given job on as a durable task (v0.13):
-     *  create the record in the SAME store the Tasks screen
-     *  reads (one task list, two windows), link it to this
-     *  chat, stamp the started state as already reported —
-     *  the acknowledgement below IS that report — and hand
-     *  it to the existing engine via TaskWorker. Nothing
-     *  about the engine changes: checkpoints, waiting
-     *  states, BrainPacing and the verified finish all apply
-     *  exactly as for a task created on the Tasks screen. */
+    /** Link a task record to the chat it lives in and
+     *  stamp its current state as already reported — the
+     *  acknowledgement in the thread IS that report, so the
+     *  reporter's first pass doesn't repeat it. */
+    private fun linkTaskToChat(taskId: String, chatId: String) {
+        TaskStore(this).update(taskId) {
+            it.put(ChatTaskLink.ORIGIN_FIELD, chatId)
+            it.put(ChatTaskLink.REPORTED_FIELD, TaskStates.RUNNING)
+        }
+    }
+
+    /** Take a chat-given job on (CHAT IS THE ENGINE): the
+     *  work runs as part of THIS thread — the record is
+     *  linked to the chat, the acknowledgement reads as
+     *  starting work here, and the engine (checkpoints,
+     *  background survival, waiting states, resume) is the
+     *  thread's invisible backbone. There is no hand-off
+     *  and no other screen where the work lives. */
     private fun startChatTask(chatId: String, instruction: String) {
         val taskStore = TaskStore(this)
         // The task carries what the user sent, in full, plus
@@ -725,17 +842,320 @@ class MainActivity : AppCompatActivity() {
             instruction + "\n\n" + ChatTaskLink.INTAKE_NOTE
         )
         val taskId = task.optString("id")
-        taskStore.update(taskId) {
-            it.put(ChatTaskLink.ORIGIN_FIELD, chatId)
-            it.put(ChatTaskLink.REPORTED_FIELD, TaskStates.RUNNING)
-        }
+        linkTaskToChat(taskId, chatId)
         TaskWorker.enqueue(this, taskId)
+        appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
+    }
+
+    // ---------- the main chat's menu + packaged jobs ----------
+
+    /** The quiet header menu: packaged jobs (state-driven,
+     *  MainChatActions) + Wallet + Settings. The list is
+     *  computed at tap time from the two live verdicts —
+     *  OwnerGate on the verified login, LilleXState on her
+     *  creation record — so it can never show a stale
+     *  action. */
+    private fun showMainMenu(anchor: View) {
+        val isOwner = OwnerGate.canCreateXAccountTask(fluidIdentity?.username)
+        val lilleVerified = LilleXState.hasVerifiedAccount(TaskStore(this).all())
+        val actions = MainChatActions.menuActions(isOwner, lilleVerified)
+        val popup = PopupMenu(this, anchor)
+        actions.forEachIndexed { i, action ->
+            popup.menu.add(0, i, i, action.menuTitle)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            when (actions[item.itemId]) {
+                MainChatActions.Action.CREATE_X_ACCOUNT ->
+                    startXCreationInChat()
+                MainChatActions.Action.CONNECT_LILLE_X_ACCOUNT ->
+                    startLilleXConnectInChat()
+                MainChatActions.Action.CONNECT_X_ACCOUNT ->
+                    startXConnectInChat()
+                MainChatActions.Action.WALLET ->
+                    startActivity(
+                        android.content.Intent(this, WalletActivity::class.java)
+                    )
+                MainChatActions.Action.SETTINGS ->
+                    startActivity(
+                        android.content.Intent(this, SettingsActivity::class.java)
+                    )
+            }
+            true
+        }
+        popup.show()
+    }
+
+    /** "Create Lille's X account" (owner only): her own
+     *  account, her identity kit — started here, living in
+     *  this thread (state line, parked step on the browser
+     *  panel, graded report). A live creation record is
+     *  re-adopted into this chat instead of duplicated; a
+     *  hollow build says so plainly and starts nothing. */
+    private fun startXCreationInChat() {
+        val chatId = activeChatId
+        val store = TaskStore(this)
+        val tasks = store.all()
+        val live = tasks.firstOrNull {
+            LilleXState.isCreationTask(it) &&
+                !TaskStates.isTerminal(it.optString("state"))
+        }
+        val unavailableLine =
+            "Her X account can't be created from this build — it " +
+                "carries none of her owner configuration. Nothing " +
+                "was started."
+        when {
+            live != null -> {
+                val id = live.optString("id")
+                linkTaskToChat(id, chatId)
+                if (live.optString("state") == TaskStates.QUEUED) {
+                    TaskWorker.enqueue(this, id)
+                }
+                appendAssistantMessage(
+                    chatId,
+                    "Creating her X account is already under way — " +
+                        StatusProbe.statusLineFor(live)
+                            .replaceFirstChar { it.lowercase() }
+                )
+            }
+            tasks.any { XAccountTask.isUnavailableRecord(it) } ->
+                appendAssistantMessage(chatId, unavailableLine)
+            else -> {
+                val task = XAccountTask.create(this)
+                val id = task.optString("id")
+                if (XAccountTask.isUnavailableRecord(task)) {
+                    appendAssistantMessage(chatId, unavailableLine)
+                } else {
+                    linkTaskToChat(id, chatId)
+                    TaskWorker.enqueue(this, id)
+                    appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
+                }
+            }
+        }
+    }
+
+    /** "Connect Lille's X account" (owner only, shown only
+     *  once her account is verified on record): re-establish
+     *  HER session — she signs back in from the vault
+     *  credential if the session is gone, parking only for
+     *  X's own human checks. */
+    private fun startLilleXConnectInChat() {
+        val chatId = activeChatId
+        val store = TaskStore(this)
+        val handle = LilleXState.verifiedHandle(store.all())
+        if (handle == null) {
+            appendAssistantMessage(
+                chatId,
+                "Her X account isn't on record yet — creation comes first."
+            )
+            return
+        }
+        val live = store.all().firstOrNull {
+            it.optString("title") == XAccountTask.CONNECT_TITLE &&
+                !TaskStates.isTerminal(it.optString("state"))
+        }
+        if (live != null) {
+            val id = live.optString("id")
+            linkTaskToChat(id, chatId)
+            if (live.optString("state") == TaskStates.QUEUED) {
+                TaskWorker.enqueue(this, id)
+            }
+            appendAssistantMessage(
+                chatId,
+                "Reconnecting her X session is already under way — " +
+                    StatusProbe.statusLineFor(live)
+                        .replaceFirstChar { it.lowercase() }
+            )
+            return
+        }
+        val task = XAccountTask.createConnect(this, handle)
+        val id = task.optString("id")
+        linkTaskToChat(id, chatId)
+        TaskWorker.enqueue(this, id)
+        appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
+    }
+
+    /** "Connect my X account" (every user): the USER's own
+     *  account — they sign in themselves in her parked
+     *  session; she never sees their password (the plain
+     *  copy says so at the start, in the thread). */
+    private fun startXConnectInChat() {
+        val chatId = activeChatId
+        val store = TaskStore(this)
+        val live = store.all().firstOrNull {
+            it.optString("title") == XConnectTask.TITLE &&
+                !TaskStates.isTerminal(it.optString("state"))
+        }
+        if (live != null) {
+            val id = live.optString("id")
+            linkTaskToChat(id, chatId)
+            if (live.optString("state") == TaskStates.QUEUED) {
+                TaskWorker.enqueue(this, id)
+            }
+            appendAssistantMessage(
+                chatId,
+                "Connecting your X account is already under way — " +
+                    StatusProbe.statusLineFor(live)
+                        .replaceFirstChar { it.lowercase() }
+            )
+            return
+        }
+        val task = XConnectTask.create(this)
+        val id = task.optString("id")
+        linkTaskToChat(id, chatId)
+        TaskWorker.enqueue(this, id)
         appendAssistantMessage(
             chatId,
-            "Starting that now — I've taken it on as a task, and " +
-                "I'll report back here as it lands. You can watch " +
-                "it any time in the Tasks screen."
+            ChatTaskLink.START_ACK + "\n\n" + XConnectTask.PLAIN_COPY
         )
+    }
+
+    // ---------- the in-chat live browser panel ----------
+
+    /** Recompute the panel from the record: this chat's
+     *  newest work + the browser lane's owner (TaskGate) +
+     *  the user's hold. Cheap facts, read fresh — the
+     *  panel follows the work, including work that moved
+     *  while this screen was closed. */
+    private fun refreshBrowserPanel() {
+        if (!::browserPanel.isInitialized || renderedChatId.isEmpty()) return
+        val task = StatusProbe.latestTaskForChat(
+            TaskStore(this).all(), renderedChatId
+        )
+        val ownerId = TaskGate.shared.browserOwnerTask()
+        val taskId = task?.optString("id") ?: ""
+        val state = BrowserPanel.stateFor(
+            task?.optString("state"),
+            task != null && TaskRunner.isBrowserTask(task),
+            ownerId != null && ownerId == taskId,
+            ownerId != null && ownerId != taskId,
+            task?.optBoolean("browserTakeover", false) == true
+        )
+        applyPanelState(state, task)
+    }
+
+    private fun applyPanelState(state: BrowserPanel.State, task: JSONObject?) {
+        panelState = state
+        panelTaskId = task?.optString("id")?.takeIf { it.isNotEmpty() }
+        when (state) {
+            BrowserPanel.State.HIDDEN -> {
+                browserPanel.visibility = View.GONE
+                if (panelExpanded) setPanelExpanded(false)
+                if (browserPanelContainer.childCount > 0) {
+                    BrowserSession.detach()
+                }
+            }
+            BrowserPanel.State.WAITING_OTHER -> {
+                browserPanel.visibility = View.VISIBLE
+                browserPanelLabel.text = "Lille's browser"
+                browserPanelWaiting.text = BrowserPanel.WAITING_OTHER_LINE
+                browserPanelWaiting.visibility = View.VISIBLE
+                browserPanelContainer.visibility = View.GONE
+                browserPanelAction.visibility = View.GONE
+                browserPanelExpand.visibility = View.GONE
+                if (browserPanelContainer.childCount > 0) {
+                    BrowserSession.detach()
+                }
+            }
+            else -> {
+                browserPanel.visibility = View.VISIBLE
+                browserPanelWaiting.visibility = View.GONE
+                browserPanelContainer.visibility = View.VISIBLE
+                browserPanelExpand.visibility = View.VISIBLE
+                browserPanelLabel.text = when (state) {
+                    BrowserPanel.State.PARKED -> BrowserPanel.PARKED_LABEL
+                    BrowserPanel.State.USER_HOLD -> BrowserPanel.USER_HOLD_LABEL
+                    else -> BrowserPanel.WATCH_LABEL
+                }
+                browserPanelAction.visibility = View.VISIBLE
+                browserPanelAction.text = when (state) {
+                    BrowserPanel.State.WATCH -> "Take over"
+                    else -> "Done — hand back"
+                }
+                if (browserPanelContainer.childCount == 0) {
+                    BrowserSession.attachTo(this, browserPanelContainer)
+                }
+            }
+        }
+    }
+
+    /** Expand = the panel takes the conversation's space
+     *  (the transcript steps aside); shrink restores it.
+     *  Same session throughout — only the frame changes. */
+    private fun setPanelExpanded(expanded: Boolean) {
+        panelExpanded = expanded
+        browserPanelExpand.text = if (expanded) "Shrink" else "Expand"
+        scrollView.visibility = if (expanded) View.GONE else View.VISIBLE
+        val plp = browserPanel.layoutParams as LinearLayout.LayoutParams
+        if (expanded) {
+            plp.height = 0
+            plp.weight = 1f
+        } else {
+            plp.height = LinearLayout.LayoutParams.WRAP_CONTENT
+            plp.weight = 0f
+        }
+        browserPanel.layoutParams = plp
+        val clp = browserPanelContainer.layoutParams
+        clp.height = if (expanded) {
+            LinearLayout.LayoutParams.MATCH_PARENT
+        } else {
+            dp(300)
+        }
+        browserPanelContainer.layoutParams = clp
+    }
+
+    /** The panel's one action button, by state:
+     *  - WATCH → "Take over": her run pauses (the record
+     *    says he is driving); he works in the live session.
+     *  - PARKED → "Done — hand back": the shared handback
+     *    (WallHandback) — the human check was passed right
+     *    here, in the chat where it was announced.
+     *  - USER_HOLD → "Done — hand back": her run resumes
+     *    from its checkpoint. */
+    private fun onPanelAction() {
+        val id = panelTaskId ?: return
+        val store = TaskStore(this)
+        when (panelState) {
+            BrowserPanel.State.WATCH -> {
+                val state = store.get(id)?.optString("state") ?: ""
+                if (state == TaskStates.RUNNING &&
+                    TaskStates.canTransition(state, TaskStates.PAUSED)
+                ) {
+                    store.update(id, TaskStates.PAUSED) {
+                        it.put("browserTakeover", true)
+                        it.put(
+                            "note",
+                            "You took the browser over in the chat — " +
+                                "Lille is paused. Tap Done — hand back " +
+                                "when you're finished."
+                        )
+                    }
+                }
+            }
+            BrowserPanel.State.PARKED -> {
+                if (WallHandback.handBack(this, id)) {
+                    appendAssistantMessage(
+                        activeChatId, "Handed back — she's resuming."
+                    )
+                }
+            }
+            BrowserPanel.State.USER_HOLD -> {
+                val state = store.get(id)?.optString("state") ?: ""
+                if (state == TaskStates.PAUSED &&
+                    TaskStates.canTransition(state, TaskStates.RUNNING)
+                ) {
+                    store.update(id, TaskStates.RUNNING) {
+                        it.remove("browserTakeover")
+                        it.put("handedBackAt", System.currentTimeMillis())
+                    }
+                    TaskWorker.enqueue(this, id)
+                    appendAssistantMessage(
+                        activeChatId, "Handed back — she's resuming."
+                    )
+                }
+            }
+            else -> Unit
+        }
+        refreshBrowserPanel()
     }
 
     private val walletEngine by lazy { WalletEngine(this) }
@@ -993,6 +1413,7 @@ class MainActivity : AppCompatActivity() {
         flight.generation++
         flight.call?.cancel()
         flight.call = null
+        BrainLane.shared.chatFinished(System.currentTimeMillis())
         flight.pendingActions.forEach { mainHandler.removeCallbacks(it) }
         flight.pendingActions.clear()
         val partial = stitch(flight.carry, flight.partial)
@@ -1110,84 +1531,152 @@ class MainActivity : AppCompatActivity() {
                  historyText = userText)
     }
 
-    /** The pacing gate: hold the call until the free route's
-     *  minimum interval has passed, then hand over to the call
-     *  itself. The wait is silent thinking time, never an error. */
+    /** Fire one route's call. Fall-through lands here
+     *  directly (brainRouteFailed) — immediate, no pacing
+     *  gate, no narration: the bubble simply keeps its
+     *  thinking state until an answer lands. */
+    private fun dispatchBrainRoute(
+        chatId: String, userText: String, attempt: Int, reframed: Boolean,
+        historyText: String, route: BrainFailure.Route
+    ) {
+        when (route) {
+            BrainFailure.Route.POLLINATIONS ->
+                askBrainNow(chatId, userText, attempt, reframed, "", 0, historyText)
+            BrainFailure.Route.HORDE -> {
+                showThinking(chatId)
+                tryHorde(chatId, userText, historyText)
+            }
+            else -> {
+                showThinking(chatId)
+                tryOwnKeyRoute(chatId, userText, historyText, route)
+            }
+        }
+    }
+
+    /** Put the flight's bubble into its ordinary thinking
+     *  state (used by the non-streaming routes, which have
+     *  no bubble of their own to open). */
+    private fun showThinking(chatId: String) {
+        val flight = flightFor(chatId)
+        if (!flight.replyOpen) {
+            flight.replyOpen = true
+            replaceCurrentReply(chatId, "…thinking")
+        }
+    }
+
+    /**
+     * A fresh ask (v1.0.1 seamless discipline): rebuild the
+     * chain, start at the first healthy route — a cooling
+     * route is SKIPPED while another exists, never waited
+     * out in front of the user. Pacing applies only to a
+     * repeat call to the SAME route the fresh call starts
+     * on. When the whole chain is resting, the flight waits
+     * in its ordinary thinking state for the earliest
+     * recovery. Nothing about routes is ever said.
+     * Continuations and reframes of an in-flight answer go
+     * straight to the primary route's call, as before.
+     */
     private fun askBrain(chatId: String, userText: String, attempt: Int, reframed: Boolean,
                          carry: String, continuations: Int, historyText: String) {
         val flight = flightFor(chatId)
-        // v0.12 route health: a fresh call starts at the
-        // first route that isn't resting after repeated
-        // failures (BrainFailure). If the main route is
-        // demoted, go straight to the community route; if
-        // the whole chain is resting, wait for the earliest
-        // recovery instead of firing into a wall. Recovery
-        // is automatic — a rested route is simply eligible
-        // again, and its next success clears its record.
         if (carry.isEmpty() && continuations == 0) {
+            flight.guardRetried = false
             // v0.12.1: the chain is rebuilt per fresh ask —
             // keyless pair first, then the user's own-key
             // routes for keys actually saved (OwnKeyRoutes).
             refreshBrainChain()
             val now = System.currentTimeMillis()
-            when (val first = BrainFailure.firstHealthy(brainChain, routeCoolingUntil, now)) {
-                BrainFailure.Route.POLLINATIONS -> Unit // main route healthy: normal path
-                BrainFailure.Route.HORDE -> {
-                    replaceCurrentReply(
-                        chatId,
-                        "The main free route is resting after repeated " +
-                            "failures — going straight to the slow " +
-                            "community route."
-                    )
-                    tryHorde(chatId, userText, historyText)
-                    return
+            val first = BrainFailure.firstHealthy(brainChain, routeCoolingUntil, now)
+            if (first == null) {
+                val earliest = routeCoolingUntil.values.minOrNull() ?: now
+                val waitMs = maxOf(earliest - now, 30_000L)
+                flight.waiting = true
+                if (chatId == activeChatId) updateComposerState()
+                showThinking(chatId)
+                schedule(flight, waitMs) {
+                    askBrain(chatId, userText, attempt + 1, reframed,
+                             "", 0, historyText)
                 }
-                null -> {
-                    val earliest = routeCoolingUntil.values.minOrNull() ?: now
-                    val waitMs = maxOf(earliest - now, 30_000L)
-                    flight.waiting = true
-                    if (chatId == activeChatId) updateComposerState()
-                    replaceCurrentReply(
-                        chatId,
-                        "Every brain route is resting after repeated " +
-                            "failures. Your message is queued — Lille " +
-                            "retries on her own in about " +
-                            BrainPacing.describeWait(waitMs) + "."
-                    )
-                    schedule(flight, waitMs) {
-                        askBrain(chatId, userText, attempt + 1, reframed,
-                                 "", 0, historyText)
-                    }
-                    return
-                }
-                else -> {
-                    // The keyless pair is resting but one of
-                    // the user's own key routes is healthy:
-                    // start there directly.
-                    val spec = OwnKeyRoutes.spec(first)
-                    replaceCurrentReply(
-                        chatId,
-                        "The free routes are resting after repeated " +
-                            "failures — using your " +
-                            (spec?.displayName ?: "own") + " key route."
-                    )
-                    tryOwnKeyRoute(chatId, userText, historyText, first)
-                    return
-                }
+                return
             }
-        }
-        val remaining = BrainPacing.remainingIntervalMs(
-            lastBrainCallAtMs, System.currentTimeMillis()
-        )
-        if (remaining > 0) {
-            flight.waiting = true
-            if (chatId == activeChatId) updateComposerState()
-            schedule(flight, remaining) {
-                askBrainNow(chatId, userText, attempt, reframed, carry, continuations, historyText)
+            val waitMs = BrainPacing.remainingIntervalMs(
+                lastBrainCallAtByRoute[first] ?: 0L, now
+            )
+            if (waitMs > 0) {
+                flight.waiting = true
+                if (chatId == activeChatId) updateComposerState()
+                showThinking(chatId)
+                schedule(flight, waitMs) {
+                    dispatchBrainRoute(chatId, userText, attempt, reframed,
+                                       historyText, first)
+                }
+                return
             }
+            dispatchBrainRoute(chatId, userText, attempt, reframed, historyText, first)
             return
         }
         askBrainNow(chatId, userText, attempt, reframed, carry, continuations, historyText)
+    }
+
+    /** Deliver a finished chat answer: history, store,
+     *  bubble, backup, flight end — the one path every
+     *  route's answer lands through. */
+    private fun deliverChatAnswer(chatId: String, historyText: String, shown: String) {
+        val flight = flightFor(chatId)
+        flight.guardRetried = false
+        flight.history.add(JSONObject().put("role", "user").put("content", historyText))
+        flight.history.add(JSONObject().put("role", "assistant").put("content", shown))
+        chatStore.appendMessage(chatId, "assistant", shown)
+        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
+        replaceCurrentReply(chatId, shown)
+        BackupManager.requestBackup(this)
+        finishFlight(chatId)
+    }
+
+    /** The chat-output guard's glue (ChatOutputGuard): a
+     *  rejected reply is logged to the trace only, then
+     *  silently regenerated ONCE on the next route. A
+     *  second rejection — or no next route — lands the one
+     *  plain line. The user never sees the rejected text,
+     *  and never hears about the machinery. */
+    private fun guardRegenerateOrPlain(
+        chatId: String, userText: String, historyText: String,
+        fromRoute: BrainFailure.Route, rejectedText: String
+    ) {
+        val flight = flightFor(chatId)
+        logGuardRejection(rejectedText)
+        if (!flight.guardRetried) {
+            val next = BrainFailure.pickNext(
+                fromRoute, brainChain, routeCoolingUntil,
+                System.currentTimeMillis()
+            )
+            if (next != null) {
+                flight.guardRetried = true
+                dispatchBrainRoute(chatId, userText, 0, false, historyText, next)
+                return
+            }
+        }
+        deliverChatAnswer(chatId, historyText, ChatOutputGuard.PLAIN_LINE)
+    }
+
+    /** Rejected reply text goes to a bounded trace file —
+     *  evidence for debugging, never a user surface. */
+    private fun logGuardRejection(rejectedText: String) {
+        try {
+            val file = File(filesDir, "chat_guard_trace.txt")
+            val entry = "\n=== ${System.currentTimeMillis()} ===\n" + rejectedText
+            val prior = if (file.exists()) file.readText() else ""
+            val merged = prior + entry
+            file.writeText(
+                if (merged.length > 100_000) {
+                    merged.substring(merged.length - 50_000)
+                } else {
+                    merged
+                }
+            )
+        } catch (e: Exception) {
+            // The trace is best-effort; the guard's verdict stands.
+        }
     }
 
     /**
@@ -1198,9 +1687,10 @@ class MainActivity : AppCompatActivity() {
      *   stitching the parts into one answer.
      * - REFUSAL RECOVERY: if the free model refuses the phrasing of a
      *   vague outcome request, Lille reframes it ONCE as a concrete
-     *   task and retries, telling the user it did so. Refusals of
-     *   harmful requests are never reframed; second refusals are
-     *   delivered plainly with a suggested manual rephrase.
+     *   task and retries — invisibly (seamless law: the recovery is
+     *   never announced, and a reframed answer is shown bare).
+     *   Refusals of harmful requests are never reframed; a second
+     *   refusal is delivered as the model's own words, unadorned.
      */
     private fun askBrainNow(chatId: String, userText: String, attempt: Int, reframed: Boolean,
                             carry: String, continuations: Int, historyText: String) {
@@ -1235,16 +1725,19 @@ class MainActivity : AppCompatActivity() {
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        lastBrainCallAtMs = System.currentTimeMillis()
+        stampBrainCall(BrainFailure.Route.POLLINATIONS)
         val call = client.newCall(request)
         flight.call = call
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 postIfCurrent(flight, gen) {
+                    BrainLane.shared.chatFinished(System.currentTimeMillis())
                     if (carry.isNotEmpty() && continuations < MAX_CONTINUATIONS) {
                         // Dropped before/while streaming with a partial
                         // answer preserved: auto-continue, don't lose it.
-                        replaceCurrentReply(chatId, carry + "\n\n(Connection dropped — continuing automatically…)")
+                        // The bubble just keeps the partial — the
+                        // continuation is never announced.
+                        replaceCurrentReply(chatId, carry)
                         askBrain(chatId, userText, attempt, reframed, carry, continuations + 1, historyText)
                     } else {
                         // v0.12 brain resilience: a network
@@ -1332,6 +1825,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val full = stitch(carry, chunk)
                 postIfCurrent(flight, gen) {
+                    BrainLane.shared.chatFinished(System.currentTimeMillis())
                     if (code == 200) {
                         // First success ends any rate-limit streak.
                         consecutiveRateLimits =
@@ -1340,31 +1834,30 @@ class MainActivity : AppCompatActivity() {
                     when {
                         code == 200 && dropped && full.isNotEmpty() &&
                             continuations < MAX_CONTINUATIONS -> {
-                            replaceCurrentReply(chatId, full + "\n\n(Connection dropped mid-answer — continuing automatically…)")
+                            replaceCurrentReply(chatId, full)
                             askBrain(chatId, userText, attempt, reframed, full, continuations + 1, historyText)
                         }
                         code == 200 && full.isNotEmpty() && isRefusalReply(full) &&
                             !reframed && !looksHarmful(userText) -> {
-                            // Refusal recovery: reframe ONCE, transparently.
-                            replaceCurrentReply(chatId, REFUSAL_NOTE)
+                            // Refusal recovery: reframe ONCE, silently.
                             askBrain(chatId, reframeRequest(userText), attempt, reframed = true,
                                      carry = "", continuations = 0, historyText = historyText)
                         }
                         code == 200 && full.isNotEmpty() -> {
                             flight.brainStreak = 0
                             noteRouteSuccess(BrainFailure.Route.POLLINATIONS)
-                            val shown = when {
-                                reframed && isRefusalReply(full) -> full + REFUSAL_STILL
-                                reframed -> "$REFUSAL_NOTE\n\n$full"
-                                else -> full
+                            // The output guard screens EVERY reply
+                            // before display; a reframed answer is
+                            // shown bare, exactly as the model
+                            // wrote it.
+                            if (!ChatOutputGuard.isClean(full)) {
+                                guardRegenerateOrPlain(
+                                    chatId, userText, historyText,
+                                    BrainFailure.Route.POLLINATIONS, full
+                                )
+                            } else {
+                                deliverChatAnswer(chatId, historyText, full)
                             }
-                            flight.history.add(JSONObject().put("role", "user").put("content", historyText))
-                            flight.history.add(JSONObject().put("role", "assistant").put("content", shown))
-                            chatStore.appendMessage(chatId, "assistant", shown)
-                            if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
-                            replaceCurrentReply(chatId, shown)
-                            BackupManager.requestBackup(this@MainActivity)
-                            finishFlight(chatId)
                         }
                         (code == 402 || code == 429) -> {
                             // Busy route (v0.12): the chain
@@ -1421,13 +1914,17 @@ class MainActivity : AppCompatActivity() {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
-    /** One brain route failed. Fall through to the next
-     *  route while one remains; when the chain is exhausted,
-     *  either end terminally (permanent failure everywhere)
-     *  or hold the flight in its waiting state and retry the
-     *  whole chain after an escalating wait. The user's
-     *  message is never erased and never terminally failed
-     *  for a retryable cause. */
+    /** One brain route failed (SEAMLESS LAW): fall through
+     *  to the next route AT ONCE while one remains — no
+     *  pacing gate, no narration; the bubble keeps its
+     *  thinking state. When the chain is exhausted, either
+     *  end with the ONE plain line (terminal failure) or
+     *  hold the flight in its ordinary waiting/thinking
+     *  state and retry the whole chain after an escalating
+     *  wait. Route names, causes and retry plans live in
+     *  the failure classification only — never on screen.
+     *  The user's message is never erased and never
+     *  terminally failed for a retryable cause. */
     private fun brainRouteFailed(
         chatId: String,
         userText: String,
@@ -1439,38 +1936,17 @@ class MainActivity : AppCompatActivity() {
         retryAfterSec: Long?
     ) {
         val flight = flightFor(chatId)
+        BrainLane.shared.chatFinished(System.currentTimeMillis())
         noteRouteFailure(route)
-        // The cause copy names the route that actually
-        // failed: own-key routes get their own wording
-        // (BrainFailure.statusLine's ownKeyName), never the
-        // anonymous tier's shared-IP explanation.
-        val failedOwnKeyName = if (OwnKeyRoutes.isOwnKeyRoute(route)) {
-            OwnKeyRoutes.spec(route)?.displayName
-        } else {
-            null
-        }
         val next = BrainFailure.pickNext(
             route, brainChain, routeCoolingUntil, System.currentTimeMillis()
         )
         if (next != null) {
-            replaceCurrentReply(
-                chatId,
-                BrainFailure.statusLine(failure, next.label, "", failedOwnKeyName)
-            )
-            when (next) {
-                BrainFailure.Route.HORDE ->
-                    tryHorde(chatId, userText, historyText)
-                BrainFailure.Route.POLLINATIONS ->
-                    askBrain(chatId, userText, attempt, reframed, "", 0, historyText)
-                else ->
-                    tryOwnKeyRoute(chatId, userText, historyText, next)
-            }
+            dispatchBrainRoute(chatId, userText, attempt, reframed, historyText, next)
             return
         }
         if (BrainFailure.attemptEndsTerminally(failure)) {
-            val shown = "The brain routes refused that request's shape — " +
-                "it can't be retried as-is. Your message stays above; " +
-                "rephrase it and I'll try again."
+            val shown = BrainFailure.EXHAUSTED_LINE
             replaceCurrentReply(chatId, shown)
             chatStore.appendMessage(chatId, "assistant", shown)
             if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
@@ -1481,19 +1957,13 @@ class MainActivity : AppCompatActivity() {
         flight.brainStreak++
         flight.waiting = true
         if (chatId == activeChatId) updateComposerState()
-        replaceCurrentReply(
-            chatId,
-            BrainFailure.statusLine(
-                failure, null, BrainPacing.describeWait(waitMs), failedOwnKeyName
-            )
-        )
         schedule(flight, waitMs) {
             askBrain(chatId, userText, attempt + 1, reframed, "", 0, historyText)
         }
     }
 
-    /** Route 2 — AI Horde, the slow community route
-     *  (live-verified keyless 2026-11-26; ROUTES.md).
+    /** Route 2 — AI Horde (live-verified keyless
+     *  2026-11-26; ROUTES.md).
      *  Raw-completion API: the conversation is flattened
      *  into one prompt, the job is submitted with the
      *  anonymous key, and the status endpoint is polled.
@@ -1527,7 +1997,7 @@ class MainActivity : AppCompatActivity() {
             .header("Client-Agent", "lille-android:0.12.1:free-agent")
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        lastBrainCallAtMs = System.currentTimeMillis()
+        stampBrainCall(BrainFailure.Route.HORDE)
         val call = client.newCall(request)
         flight.call = call
         call.enqueue(object : Callback {
@@ -1644,7 +2114,7 @@ class MainActivity : AppCompatActivity() {
                                 BrainFailure.Class.NETWORK, null
                             )
                             done && answer.isNotBlank() ->
-                                deliverHordeAnswer(chatId, historyText, answer)
+                                deliverHordeAnswer(chatId, userText, historyText, answer)
                             done -> brainRouteFailed(
                                 chatId, userText, 0, false, historyText,
                                 BrainFailure.Route.HORDE,
@@ -1661,30 +2131,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A Horde answer lands through the same store/history
-     *  path as a primary-route answer, with the route named
-     *  — the user always knows which brain answered. */
+     *  path as every answer — BARE. Attribution lives in
+     *  traces only (seamless law): no route footer is ever
+     *  appended to a chat reply. The output guard screens
+     *  it like every other route's reply. */
     private fun deliverHordeAnswer(
         chatId: String,
+        userText: String,
         historyText: String,
         rawAnswer: String
     ) {
         val flight = flightFor(chatId)
         flight.brainStreak = 0
         noteRouteSuccess(BrainFailure.Route.HORDE)
-        val shown = rawAnswer.trim() +
-            "\n\n(Answered by the slow community route — the main free " +
-            "route is busy. Community models can be rougher than usual.)"
-        flight.history.add(
-            JSONObject().put("role", "user").put("content", historyText)
-        )
-        flight.history.add(
-            JSONObject().put("role", "assistant").put("content", shown)
-        )
-        chatStore.appendMessage(chatId, "assistant", shown)
-        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
-        replaceCurrentReply(chatId, shown)
-        BackupManager.requestBackup(this)
-        finishFlight(chatId)
+        BrainLane.shared.chatFinished(System.currentTimeMillis())
+        val answer = rawAnswer.trim()
+        if (!ChatOutputGuard.isClean(answer)) {
+            guardRegenerateOrPlain(
+                chatId, userText, historyText,
+                BrainFailure.Route.HORDE, answer
+            )
+            return
+        }
+        deliverChatAnswer(chatId, historyText, answer)
     }
 
     /** v0.12.1 — an own-key route call (Groq / Gemini /
@@ -1740,7 +2209,7 @@ class MainActivity : AppCompatActivity() {
             .header("Authorization", "Bearer $key")
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        lastBrainCallAtMs = System.currentTimeMillis()
+        stampBrainCall(route)
         val call = client.newCall(request)
         flight.call = call
         call.enqueue(object : Callback {
@@ -1786,7 +2255,7 @@ class MainActivity : AppCompatActivity() {
                 postIfCurrent(flight, gen) {
                     when {
                         code == 200 && answer.isNotEmpty() ->
-                            deliverOwnKeyAnswer(chatId, historyText, answer, route)
+                            deliverOwnKeyAnswer(chatId, userText, historyText, answer, route)
                         code == 200 ->
                             // A 200 with no usable text is a
                             // sick route, not an answer.
@@ -1808,11 +2277,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** An own-key answer lands through the same
-     *  store/history path as every answer, with the route
-     *  named — the user always knows which brain answered,
-     *  and that this one ran on their own key. */
+     *  store/history path as every answer — BARE, like all
+     *  routes (attribution lives in traces only), and
+     *  screened by the output guard. */
     private fun deliverOwnKeyAnswer(
         chatId: String,
+        userText: String,
         historyText: String,
         rawAnswer: String,
         route: BrainFailure.Route
@@ -1820,20 +2290,13 @@ class MainActivity : AppCompatActivity() {
         val flight = flightFor(chatId)
         flight.brainStreak = 0
         noteRouteSuccess(route)
-        val name = OwnKeyRoutes.spec(route)?.displayName ?: "your own key"
-        val shown = rawAnswer.trim() +
-            "\n\n(Answered by your $name key route.)"
-        flight.history.add(
-            JSONObject().put("role", "user").put("content", historyText)
-        )
-        flight.history.add(
-            JSONObject().put("role", "assistant").put("content", shown)
-        )
-        chatStore.appendMessage(chatId, "assistant", shown)
-        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
-        replaceCurrentReply(chatId, shown)
-        BackupManager.requestBackup(this)
-        finishFlight(chatId)
+        BrainLane.shared.chatFinished(System.currentTimeMillis())
+        val answer = rawAnswer.trim()
+        if (!ChatOutputGuard.isClean(answer)) {
+            guardRegenerateOrPlain(chatId, userText, historyText, route, answer)
+            return
+        }
+        deliverChatAnswer(chatId, historyText, answer)
     }
 
     // ---------- smart recovery helpers (mirror free_agent/recovery.py) ----------

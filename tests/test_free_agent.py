@@ -129,7 +129,11 @@ class TestFallbackLaw(unittest.TestCase):
         self.assertTrue(out["queued"])
         self.assertIsNone(out["provider"])
         self.assertIn("queued", out["text"])
-        self.assertIn("Earliest retry", out["text"])
+        # Seamless law: the queued text is ONE plain statement —
+        # no retry schedule, no route mechanics narrated. The
+        # retry time lives in the result's retry_at field only.
+        self.assertNotIn("Earliest retry", out["text"])
+        self.assertNotIn("429", out["text"])
         self.assertGreater(out["retry_at"], clock.t)
 
     def test_retry_after_header_wins_over_default_cooldown(self):
@@ -188,8 +192,11 @@ class TestRefusalRecovery(unittest.TestCase):
         out = r.chat([{"role": "user", "content": "can you create an autonomous profitable agent"}])
         self.assertEqual(len(calls), 2)                      # exactly ONE reframe retry
         self.assertTrue(out.get("reframed_from_refusal"))
-        self.assertIn("refused that phrasing", out["text"])  # transparency note
-        self.assertIn("paper-trading agent script", out["text"])
+        # Seamless law: the recovery is INVISIBLE — the answer
+        # is delivered bare, with no refusal announcement. The
+        # reframed_from_refusal flag above is the trace fact.
+        self.assertEqual(out["text"], "Here is a paper-trading agent script...")
+        self.assertNotIn("refused", out["text"])
 
     def test_refusal_with_curly_apostrophes_still_detected(self):
         # Live finding (v0.2.1 re-run): the model answers with curly
@@ -227,8 +234,11 @@ class TestRefusalRecovery(unittest.TestCase):
         r = Router(cfg_with([prov("keyless-pollinations")]), transport=transport)
         out = r.chat([{"role": "user", "content": "can you create an autonomous profitable agent"}])
         self.assertEqual(len(calls), 2)                      # one reframe, no loop
-        self.assertIn("can't help with that", out["text"])
-        self.assertIn("Try a more specific wording", out["text"])
+        # Seamless law: a second refusal is delivered as the
+        # model's own words, bare — no appended advice about
+        # the refusal machinery.
+        self.assertEqual(out["text"], self.REFUSAL)
+        self.assertNotIn("Try a more specific wording", out["text"])
 
 class TestStreamingContinuation(unittest.TestCase):
     def test_mid_stream_drop_is_stitched(self):

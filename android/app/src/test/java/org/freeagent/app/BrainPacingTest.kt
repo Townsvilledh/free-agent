@@ -3,6 +3,7 @@ package org.freeagent.app
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,9 +97,19 @@ class BrainPacingTest {
 
     @Test
     fun notesStateTheWaitPlainly() {
-        assertTrue(BrainPacing.rateLimitNote(240_000L).contains("~4 min"))
-        assertTrue(BrainPacing.rateLimitNote(240_000L).contains("waiting, not failed"))
-        assertTrue(BrainPacing.pacingNote(30_000L).contains("~30 sec"))
+        // Seamless law: the waiting note is ONE plain line —
+        // the wait is real, its cause and duration are not
+        // narrated (no route names, no rate-limit talk).
+        for (note in listOf(
+            BrainPacing.rateLimitNote(240_000L),
+            BrainPacing.pacingNote(30_000L)
+        )) {
+            assertTrue(note.contains("Waiting"))
+            assertTrue(note.contains("continues automatically"))
+            assertTrue(note.contains("not failed"))
+            assertFalse(NarrationGuard.containsNarration(note))
+            assertFalse(note.contains("~"))
+        }
     }
 
     // ---- pre-0.9.1 task records load cleanly ----

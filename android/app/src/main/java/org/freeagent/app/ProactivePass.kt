@@ -169,8 +169,11 @@ class ProactivePass(
                 append("Final state: $state\n")
                 val s = task.optString("summary")
                 if (s.isNotEmpty()) append("Summary: $s\n")
-                val n = task.optString("note")
-                if (n.isNotEmpty()) append("Note: $n")
+                // Seamless law: a stored note is echoed only
+                // when clean — route narration never reaches
+                // the debrief.
+                val n = NarrationGuard.cleanOrNull(task.optString("note"))
+                if (n != null) append("Note: $n")
             }
             writeReport(if (done) "DONE" else "BLOCKED", title, body, t)
             summary.reportsWritten++

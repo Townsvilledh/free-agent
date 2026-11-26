@@ -23,8 +23,8 @@ import java.util.concurrent.TimeUnit
  * backup & restore, Lille invites (referrals — the user's
  * link, share action, completed-invite count and the
  * export/import sync; REFERRALS.md), your own API keys
- * (v0.12.1), and disconnecting the Fluid name. The disconnect mirrors
- * the one on the Tasks screen (same FluidLogin call): it
+ * (v0.12.1), and disconnecting the Fluid name (the
+ * FluidLogin disconnect): it
  * ends every WalletConnect session and forgets the stored
  * identity, so the login gate runs again on next open.
  *

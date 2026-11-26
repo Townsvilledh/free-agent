@@ -36,7 +36,21 @@ import org.json.JSONObject
  */
 object XAccountTask {
 
-    const val TITLE = "Lille: create my X account"
+    /** The creation task's title — HERS, not the user's
+     *  (2026-11-26 wording fix: the shipped "Lille: create
+     *  my X account" mislabelled her account as the
+     *  owner's; the account is Lille's own). */
+    const val TITLE = "Create Lille's X account"
+
+    /** The shipped build's title. Records created by it
+     *  (including the parked creation task on the owner's
+     *  phone) carry this — recognition must match both. */
+    const val LEGACY_TITLE = "Lille: create my X account"
+
+    /** The connect task's title: once creation is
+     *  verified, the owner action is reconnecting HER
+     *  session (LilleXState), never creating again. */
+    const val CONNECT_TITLE = "Connect Lille's X account"
 
     /** The note/summary prefix of a hollow-build record —
      *  the honest unavailable state. */
@@ -174,7 +188,7 @@ object XAccountTask {
         val kit = XIdentityKit.fromBuildConfig()
         if (!kit.isPresent()) {
             val task = store.create(
-                "Lille: create my X account — unavailable in this " +
+                "Create Lille's X account — unavailable in this " +
                     "build (owner configuration missing)."
             )
             val id = task.optString("id")
@@ -200,6 +214,64 @@ object XAccountTask {
             it.put("browserDomains", domains)
             it.put("xPostMode", "own")
             it.put("xPostApproved", false)
+            it.put("criteria", criteria)
+        }
+        return store.get(id) ?: task
+    }
+
+    /** The connect flow's task text: re-establish HER
+     *  session. Her password comes from the vault — it was
+     *  generated into it at creation (vault_gen_secret, key
+     *  [LilleXState.X_PASSWORD_VAULT_KEY]) and is typed only
+     *  via browser_type_secret; it is never displayed,
+     *  logged, or placed in any message. */
+    fun connectTaskText(handle: String): String =
+        "Reconnect your OWN X account, Lille — you are @$handle on x.com. " +
+        "Your account already exists; this is only about your session in " +
+        "your browser on this phone.\n\n" +
+        "FLOW\n" +
+        "1. Call x_session_status first. If it reports logged_in as " +
+        "@$handle, your session is live: finish with the summary exactly: " +
+        "Connected as @$handle.\n" +
+        "2. If it reports logged_in as a DIFFERENT handle, do not touch " +
+        "that session: finish honestly, naming the handle you found — " +
+        "another account's session is not yours to replace.\n" +
+        "3. If logged_out: browser_open https://x.com/i/flow/login. Type " +
+        "@$handle into the username field with browser_type, and your " +
+        "password with browser_type_secret (vault_key " +
+        LilleXState.X_PASSWORD_VAULT_KEY + ") into the password field — " +
+        "the password lives only in your vault; never write it anywhere " +
+        "else, never read it back. Submit once, patiently.\n" +
+        "4. If X presents a human check (CAPTCHA/Arkose) or sends a code " +
+        "somewhere you cannot read, that step is the owner's: finish " +
+        "naming the wall and the task parks for him — never attempt to " +
+        "solve or bypass a human check.\n" +
+        "5. Verify with x_session_status. If it reports logged_in as " +
+        "@$handle, finish with the summary exactly: Connected as " +
+        "@$handle. If still logged_out, finish honestly: Not connected — " +
+        "X still shows no signed-in session for @$handle."
+
+    val CONNECT_CRITERIA = listOf(
+        "x_session_status verifies a live session as Lille's own handle on x.com",
+        "Her password was used only from the vault (browser_type_secret) — never displayed, logged, or written into any message or file"
+    )
+
+    /** Create the connect task (queued, lane=device,
+     *  kind=browser, x.com only). Owner-only surface — the
+     *  caller gates on OwnerGate + LilleXState. */
+    fun createConnect(context: Context, handle: String): JSONObject {
+        val store = TaskStore(context)
+        val task = store.create(connectTaskText(handle))
+        val id = task.optString("id")
+        val domains = JSONArray()
+        domains.put("x.com")
+        val criteria = JSONArray()
+        CONNECT_CRITERIA.forEach { criteria.put(it) }
+        store.update(id) {
+            it.put("title", CONNECT_TITLE)
+            it.put("kind", "browser")
+            it.put("lane", "device")
+            it.put("browserDomains", domains)
             it.put("criteria", criteria)
         }
         return store.get(id) ?: task

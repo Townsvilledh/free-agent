@@ -40,7 +40,7 @@ import json, time, urllib.request, urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from . import recovery
+from . import chatguard, recovery
 
 FALLBACK_STATUSES = {402, 429, 503}
 MAX_STREAM_CONTINUATIONS = 3
@@ -445,64 +445,98 @@ class Router:
     # ---------- routing ----------
     def _queued_result(self, category, unlock_times, private=False):
         earliest = min(unlock_times)
+        # Seamless law (2026-11-26): the user-facing text is
+        # ONE plain statement — no route names, no limits, no
+        # mechanics. The retry time and the per-route facts
+        # live in the result fields and the audit (evidence),
+        # never in the sentence.
         text = (
-            "All routes for this are cooling down right now (free-tier rate "
-            f"limits). Earliest retry at {_fmt_ts(earliest)}. Your task is "
-            "queued and will continue automatically — you don't need to "
-            "re-send it."
+            "I can't reach a brain just now — this is queued and will "
+            "continue automatically; you don't need to re-send it."
         )
         if private:
             text = (
-                "The trusted route for private content is cooling down right "
-                f"now. Earliest retry at {_fmt_ts(earliest)}. Your task is "
-                "queued — private content is never rerouted to a public or "
-                "untrusted provider just because one is available."
+                "I can't reach a brain for private content just now — "
+                "this is queued and will continue automatically. "
+                "Private content is never sent to a public provider "
+                "instead."
             )
         self.audit.append(RouteEvent("none", category, "queued-all-routes-down"))
         return {"provider": None, "text": text, "queued": True, "retry_at": earliest}
 
     def chat(self, messages, category="public", private=False, override_privacy=False):
-        """Route one request, with refusal recovery (v0.2.1).
+        """Route one request, with refusal recovery (v0.2.1) and
+        the chat-output guard (2026-11-26) — both INVISIBLE
+        (seamless law): the user sees the answer, never the
+        machinery that produced it.
 
-        If the serving model refuses the *phrasing* of a vague outcome
-        request, Lille reframes it ONCE into a concrete task form and
-        retries through the chain, telling the user it did so.
-        Refusals of genuinely harmful/illegal requests are never
-        reframed — they are delivered plainly, as are second refusals
-        (with a suggested manual rephrase appended)."""
+        Refusal recovery: if the serving model refuses the
+        *phrasing* of a vague outcome request, Lille reframes
+        it ONCE into a concrete task form and retries through
+        the chain. Refusals of genuinely harmful/illegal
+        requests are never reframed — they are delivered
+        plainly, as are second refusals. No note is prepended
+        or appended either way (the recovery is recorded in
+        the audit + the reframed_from_refusal flag only).
+
+        Output guard: the final text is screened by
+        chatguard (placeholder tokens, self-dialogue). A hit
+        regenerates ONCE on the next route (the serving
+        provider excluded); a second hit replaces the reply
+        with chatguard.PLAIN_LINE and the rejected text
+        stays in the audit only."""
         result = self._chat_once(messages, category=category,
                                  private=private, override_privacy=override_privacy)
         text = result.get("text") or ""
-        if result.get("queued") or not recovery.is_refusal(text):
+        if not result.get("queued") and recovery.is_refusal(text):
+            user_text = ""
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    user_text = m.get("content", "")
+                    break
+            if recovery.is_harmful_request(user_text):
+                self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-harmful-stands"))
+                return result
+            reframed = recovery.reframe_request(user_text)
+            new_messages = list(messages)
+            for i in range(len(new_messages) - 1, -1, -1):
+                if new_messages[i].get("role") == "user":
+                    new_messages[i] = {"role": "user", "content": reframed}
+                    break
+            self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-reframed-retry"))
+            retry = self._chat_once(new_messages, category=category,
+                                    private=private, override_privacy=override_privacy)
+            if retry.get("queued"):
+                return retry
+            retry["reframed_from_refusal"] = True
+            result = retry
+            text = result.get("text") or ""
+        # ---- chat-output guard ----
+        if result.get("queued") or not text:
             return result
-        user_text = ""
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                user_text = m.get("content", "")
-                break
-        if recovery.is_harmful_request(user_text):
-            self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-harmful-stands"))
+        reason = chatguard.rejection_reason(text)
+        if reason is None:
             return result
-        reframed = recovery.reframe_request(user_text)
-        new_messages = list(messages)
-        for i in range(len(new_messages) - 1, -1, -1):
-            if new_messages[i].get("role") == "user":
-                new_messages[i] = {"role": "user", "content": reframed}
-                break
-        self.audit.append(RouteEvent(result.get("provider") or "none", category, "refusal-reframed-retry"))
-        retry = self._chat_once(new_messages, category=category,
-                                private=private, override_privacy=override_privacy)
+        provider = result.get("provider")
+        self.audit.append(RouteEvent(provider or "none", category,
+                                     f"guard-rejected-{reason}"))
+        retry = self._chat_once(
+            messages, category=category, private=private,
+            override_privacy=override_privacy,
+            exclude={provider} if provider else None)
         retry_text = retry.get("text") or ""
         if retry.get("queued"):
             return retry
-        if recovery.is_refusal(retry_text):
-            retry["text"] = retry_text + recovery.REFUSAL_STILL
+        if retry_text and chatguard.rejection_reason(retry_text) is None:
+            retry["guard_regenerated"] = True
             return retry
-        retry["text"] = recovery.REFUSAL_NOTE + "\n\n" + retry_text
-        retry["reframed_from_refusal"] = True
-        return retry
+        self.audit.append(RouteEvent(provider or "none", category,
+                                     "guard-rejected-twice"))
+        return {"provider": provider, "text": chatguard.PLAIN_LINE,
+                "guard_rejected": True}
 
-    def _chat_once(self, messages, category="public", private=False, override_privacy=False):
+    def _chat_once(self, messages, category="public", private=False, override_privacy=False,
+                   exclude=None):
         now = self.clock()
         tried = []            # (provider, status) actually attempted
         unlock_times = []     # unlock ts of every route that is cooling
@@ -510,6 +544,8 @@ class Router:
 
         for p in self.config.providers:
             if not p.enabled or not p.models:
+                continue
+            if exclude and p.name in exclude:
                 continue
             if private and not p.trusted_for_private and not override_privacy:
                 self.audit.append(RouteEvent(p.name, category, "skipped-privacy"))

@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  * ProactivePass over the local store: due URL watches are checked,
  * queued tasks are picked up (enqueued with TaskWorker), and
  * finished pickups are settled into the "while you were away"
- * report list on the Tasks screen. The other lane is the scheduled
+ * debrief in the main chat. The other lane is the scheduled
  * GitHub Actions pass (lille-proactive.yml) for non-private state.
  */
 class ProactiveWorker(context: Context, params: WorkerParameters) :
