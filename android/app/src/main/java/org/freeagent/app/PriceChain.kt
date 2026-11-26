@@ -95,6 +95,8 @@ object PriceChain {
 
     /** Kraken pair keys per price id, preference order. */
     fun krakenPairs(priceId: String): List<String> = when (priceId) {
+        "bitcoin" -> listOf("XXBTZUSD", "XBTUSD")
+        "solana" -> listOf("SOLUSD")
         "ethereum" -> listOf("XETHZUSD", "ETHUSD")
         "usd-coin" -> listOf("USDCUSD")
         "tether" -> listOf("USDTUSD")
@@ -108,6 +110,8 @@ object PriceChain {
 
     /** Coinbase spot symbol per price id. */
     fun coinbaseSymbol(priceId: String): String? = when (priceId) {
+        "bitcoin" -> "BTC"
+        "solana" -> "SOL"
         "ethereum", "weth" -> "ETH"
         "usd-coin" -> "USDC"
         "tether" -> "USDT"

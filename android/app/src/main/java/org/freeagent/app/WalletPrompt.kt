@@ -26,18 +26,38 @@ package org.freeagent.app
  *   send is hers (the default, unchanged since v0.12). A
  *   Fluid-wallet send is a different flow entirely — she
  *   prepares it and Fluid's own sheet approves it (FluidTx);
- *   her caps and her signer never touch main funds.
+ *   her caps and her signer never touch main funds. The
+ *   Fluid session speaks EVM only, so a "from fluid" clause
+ *   on a send that resolves to Bitcoin or Solana is a
+ *   question, never a silent fall-back to her own funds.
  *
  *   <amount>  a plain decimal: 2, 2.5, 0.05 (no commas, no
  *             exponent, no words)
  *   <ASSET>   any symbol her wallet holds (ETH, USDC, USDT,
- *             WETH, BNB, POL, AVAX, WAVAX) — checked against
- *             the chosen chain at the end of the parse
- *   <target>  a 0x… address (40 hex chars), @fluidname, or a
- *             bare fluidname (letters, digits, _ . -)
+ *             WETH, BNB, POL, AVAX, WAVAX, BTC, SOL) — checked
+ *             against the chosen network at the end of the
+ *             parse
+ *   <target>  a 0x… address (40 hex chars), a Bitcoin
+ *             address (bc1…, 1…, 3…), a Solana address
+ *             (base58), @fluidname, or a bare fluidname
+ *             (letters, digits, _ . -)
  *   <chain>   ethereum | mainnet | base | arbitrum |
  *             polygon | bsc | bnb | avalanche | avax |
- *             optimism   (default: ethereum)
+ *             optimism | bitcoin | btc | solana
+ *             (default: ethereum — except that a BTC/SOL
+ *             asset or a Bitcoin/Solana-shaped target names
+ *             its own family, below)
+ *
+ * FAMILIES: her wallet is EVM + Bitcoin + Solana. The
+ * family is decided, in order, by: the "on <chain>" words
+ * when given; the asset (BTC is Bitcoin's, SOL is
+ * Solana's); the target's shape (a bc1… address is a
+ * Bitcoin send, a base58 one a Solana send — so "send 5
+ * USDC to <solana address>" is a Solana send with no chain
+ * words at all); otherwise EVM. Fluid names resolve to EVM
+ * addresses ONLY (the registry holds nothing else), so a
+ * name target on Bitcoin/Solana is a question that says
+ * exactly that — never a guess at some other address.
  *
  * The "$"/"dollars" forms are USD-denominated: the prepare
  * path converts at the live price and shows the token amount
@@ -60,7 +80,12 @@ object WalletPrompt {
         val targetRaw: String,          // as typed
         val targetIsName: Boolean,
         val chainKey: String,           // WalletGate chain key
-        val source: Source = Source.COMPANION
+        val source: Source = Source.COMPANION,
+        /** The wallet family: WalletGate.FAMILY_EVM (the
+         *  default), FAMILY_BITCOIN, or FAMILY_SOLANA. For
+         *  the non-EVM families chainKey carries the family
+         *  name ("bitcoin" / "solana"). */
+        val family: String = WalletGate.FAMILY_EVM
     )
 
     sealed class Result {
@@ -150,7 +175,29 @@ object WalletPrompt {
 
     /** Every chain name she answers to, for messages. */
     private fun chainList(): String =
-        WalletGate.CHAINS.joinToString(", ") { it.label }
+        WalletGate.CHAINS.joinToString(", ") { it.label } + ", Bitcoin, Solana"
+
+    /** What a target string IS, by shape — decided before
+     *  any family logic, because the family decision reads
+     *  it. Order matters: an EVM address is unambiguous
+     *  (0x…); a Bitcoin address carries a checksum (bech32
+     *  or Base58Check), so it is tested before the looser
+     *  Solana shape (any base58 string decoding to exactly
+     *  32 bytes — a name can be at most 32 characters, so a
+     *  33+ character base58 target is never a name). */
+    private enum class TargetKind {
+        EVM_ADDRESS, BTC_ADDRESS, SOL_ADDRESS, NAME, GARBAGE
+    }
+
+    private fun classifyTarget(targetRaw: String): TargetKind {
+        if (Evm.isAddress(targetRaw)) return TargetKind.EVM_ADDRESS
+        if (Btc.decodeAddress(targetRaw) != null) return TargetKind.BTC_ADDRESS
+        if (Sol.isAddress(targetRaw)) return TargetKind.SOL_ADDRESS
+        val isName = (targetRaw.startsWith("@") || NAME_RE.matches(targetRaw)) &&
+            targetRaw.any { it.isLetter() }
+        if (isName) return TargetKind.NAME
+        return TargetKind.GARBAGE
+    }
 
     private fun finish(
         amountText: String?,
@@ -167,48 +214,67 @@ object WalletPrompt {
                     "\"$assetRaw\" isn't one I hold. Nothing was prepared."
             )
         }
-        val chainKey = when (chainRaw.lowercase()) {
-            "", "ethereum", "mainnet" -> WalletGate.ETHEREUM.key
-            "base" -> WalletGate.BASE.key
-            "arbitrum" -> WalletGate.ARBITRUM.key
-            "polygon" -> WalletGate.POLYGON.key
-            "bsc", "bnb" -> WalletGate.BSC.key
-            "avalanche", "avax" -> WalletGate.AVALANCHE.key
-            "optimism" -> WalletGate.OPTIMISM.key
+        val targetKind = classifyTarget(targetRaw)
+        val chainWord = chainRaw.lowercase()
+        // The family, in order: the explicit network words;
+        // the asset (BTC/SOL name their own family); the
+        // target's shape; otherwise EVM.
+        val explicitFamily = when (chainWord) {
+            "" -> null
+            "bitcoin", "btc" -> WalletGate.FAMILY_BITCOIN
+            "solana" -> WalletGate.FAMILY_SOLANA
+            "ethereum", "mainnet", "base", "arbitrum", "polygon",
+            "bsc", "bnb", "avalanche", "avax", "optimism" ->
+                WalletGate.FAMILY_EVM
             else -> return Result.Ambiguous(
-                "I can send on ${chainList()} — \"$chainRaw\" isn't a chain " +
-                    "my wallet is on. Nothing was prepared."
+                "I can send on ${chainList()} — \"$chainRaw\" isn't a " +
+                    "network my wallet is on. Nothing was prepared."
             )
         }
-        // The asset must exist ON THE CHOSEN CHAIN, not just
-        // somewhere in her wallet: BNB is hers on BNB Smart
-        // Chain and meaningless on Ethereum.
-        val chainForAsset = WalletGate.chainByKey(chainKey)!!
-        if (WalletGate.token(chainForAsset, asset) == null) {
-            return Result.Ambiguous(
-                "I don't hold $asset on ${chainForAsset.label} — on that " +
-                    "chain I hold " +
-                    chainForAsset.tokens.joinToString(", ") { it.symbol } +
-                    ". Nothing was prepared."
-            )
+        val family = explicitFamily ?: when {
+            asset == "BTC" || targetKind == TargetKind.BTC_ADDRESS ->
+                WalletGate.FAMILY_BITCOIN
+            asset == "SOL" || targetKind == TargetKind.SOL_ADDRESS ->
+                WalletGate.FAMILY_SOLANA
+            else -> WalletGate.FAMILY_EVM
         }
-        val isAddress = Evm.isAddress(targetRaw)
-        val isName = !isAddress &&
-            (targetRaw.startsWith("@") || NAME_RE.matches(targetRaw)) &&
-            targetRaw.any { it.isLetter() }
-        if (!isAddress && !isName) {
+        // A main-wallet (Fluid) send rides the WalletConnect
+        // session, which speaks EVM only. "From fluid" on a
+        // Bitcoin/Solana send is a question — never a silent
+        // fall-back to spending her own companion funds.
+        if (source == Source.FLUID && family != WalletGate.FAMILY_EVM) {
             return Result.Ambiguous(
-                "I couldn't read \"$targetRaw\" as a wallet address or a Fluid " +
-                    "name. An address starts 0x…; a Fluid name looks like @name. " +
+                "A send from your Fluid wallet goes over the Fluid " +
+                    "connection, which handles EVM networks only — I " +
+                    "can't send on $family from it. Without \"from " +
+                    "fluid\" I can send it from my own wallet. " +
                     "Nothing was prepared."
             )
         }
-        // Amount sanity: a parsed decimal that is zero (or
-        // unparseable at the asset's decimals) is a question,
-        // not a transaction.
+        return when (family) {
+            WalletGate.FAMILY_BITCOIN -> finishBitcoin(
+                amountText, usdAmountText, asset, targetRaw, targetKind
+            )
+            WalletGate.FAMILY_SOLANA -> finishSolana(
+                amountText, usdAmountText, asset, targetRaw, targetKind
+            )
+            else -> finishEvm(
+                amountText, usdAmountText, asset, targetRaw, chainWord,
+                targetKind, source
+            )
+        }
+    }
+
+    /** The shared amount checks: a parsed decimal that is
+     *  zero (or unparseable at the asset's decimals) is a
+     *  question, not a transaction. Null = amounts are sane. */
+    private fun amountProblem(
+        amountText: String?,
+        usdAmountText: String?,
+        asset: String,
+        token: WalletGate.Token
+    ): Result.Ambiguous? {
         if (amountText != null) {
-            val chain = WalletGate.chainByKey(chainKey)!!
-            val token = WalletGate.token(chain, asset)!!
             val raw = Evm.parseUnits(amountText, token.decimals)
             if (raw == null || raw.signum() == 0) {
                 return Result.Ambiguous(
@@ -227,13 +293,162 @@ object WalletPrompt {
                 )
             }
         }
+        return null
+    }
+
+    private fun finishBitcoin(
+        amountText: String?,
+        usdAmountText: String?,
+        asset: String,
+        targetRaw: String,
+        targetKind: TargetKind
+    ): Result {
+        val token = WalletGate.familyToken(WalletGate.FAMILY_BITCOIN, asset)
+            ?: return Result.Ambiguous(
+                "On Bitcoin I hold only BTC — $asset lives on a different " +
+                    "network in my wallet. Nothing was prepared."
+            )
+        when (targetKind) {
+            TargetKind.BTC_ADDRESS -> Unit
+            TargetKind.NAME -> return Result.Ambiguous(
+                "Fluid names resolve to EVM addresses only, so I can't " +
+                    "send Bitcoin to a name — paste the Bitcoin address " +
+                    "itself (bc1…, 1…, or 3…). Nothing was prepared."
+            )
+            TargetKind.EVM_ADDRESS -> return Result.Ambiguous(
+                "That looks like an Ethereum-style address, not a Bitcoin " +
+                    "one. Nothing was prepared."
+            )
+            TargetKind.SOL_ADDRESS -> return Result.Ambiguous(
+                "That looks like a Solana address, not a Bitcoin one. " +
+                    "Nothing was prepared."
+            )
+            TargetKind.GARBAGE -> return Result.Ambiguous(
+                "I couldn't read \"$targetRaw\" as a Bitcoin address. " +
+                    "Bitcoin addresses look like bc1…, 1…, or 3…. " +
+                    "Nothing was prepared."
+            )
+        }
+        amountProblem(amountText, usdAmountText, asset, token)?.let { return it }
         return Result.Parsed(
             SendIntent(
                 amountText = amountText,
                 usdAmountText = usdAmountText,
                 asset = asset,
                 targetRaw = targetRaw,
-                targetIsName = isName,
+                targetIsName = false,
+                chainKey = WalletGate.FAMILY_BITCOIN,
+                family = WalletGate.FAMILY_BITCOIN
+            )
+        )
+    }
+
+    private fun finishSolana(
+        amountText: String?,
+        usdAmountText: String?,
+        asset: String,
+        targetRaw: String,
+        targetKind: TargetKind
+    ): Result {
+        val token = WalletGate.familyToken(WalletGate.FAMILY_SOLANA, asset)
+            ?: return Result.Ambiguous(
+                "I don't hold $asset on Solana — there I hold " +
+                    WalletGate.SOLANA_TOKENS.joinToString(", ") { it.symbol } +
+                    ". Nothing was prepared."
+            )
+        when (targetKind) {
+            TargetKind.SOL_ADDRESS -> Unit
+            TargetKind.NAME -> return Result.Ambiguous(
+                "Fluid names resolve to EVM addresses only, so I can't " +
+                    "send on Solana to a name — paste the Solana address " +
+                    "itself. Nothing was prepared."
+            )
+            TargetKind.BTC_ADDRESS -> return Result.Ambiguous(
+                "That looks like a Bitcoin address, not a Solana one. " +
+                    "Nothing was prepared."
+            )
+            TargetKind.EVM_ADDRESS -> return Result.Ambiguous(
+                "That looks like an Ethereum-style address, not a Solana " +
+                    "one. Nothing was prepared."
+            )
+            TargetKind.GARBAGE -> return Result.Ambiguous(
+                "I couldn't read \"$targetRaw\" as a Solana address. " +
+                    "Nothing was prepared."
+            )
+        }
+        amountProblem(amountText, usdAmountText, asset, token)?.let { return it }
+        return Result.Parsed(
+            SendIntent(
+                amountText = amountText,
+                usdAmountText = usdAmountText,
+                asset = asset,
+                targetRaw = targetRaw,
+                targetIsName = false,
+                chainKey = WalletGate.FAMILY_SOLANA,
+                family = WalletGate.FAMILY_SOLANA
+            )
+        )
+    }
+
+    private fun finishEvm(
+        amountText: String?,
+        usdAmountText: String?,
+        asset: String,
+        targetRaw: String,
+        chainWord: String,
+        targetKind: TargetKind,
+        source: Source = Source.COMPANION
+    ): Result {
+        val chainKey = when (chainWord) {
+            "", "ethereum", "mainnet" -> WalletGate.ETHEREUM.key
+            "base" -> WalletGate.BASE.key
+            "arbitrum" -> WalletGate.ARBITRUM.key
+            "polygon" -> WalletGate.POLYGON.key
+            "bsc", "bnb" -> WalletGate.BSC.key
+            "avalanche", "avax" -> WalletGate.AVALANCHE.key
+            "optimism" -> WalletGate.OPTIMISM.key
+            else -> return Result.Ambiguous(
+                "I can send on ${chainList()} — \"$chainWord\" isn't a chain " +
+                    "my wallet is on. Nothing was prepared."
+            )
+        }
+        // The asset must exist ON THE CHOSEN CHAIN, not just
+        // somewhere in her wallet: BNB is hers on BNB Smart
+        // Chain and meaningless on Ethereum.
+        val chainForAsset = WalletGate.chainByKey(chainKey)!!
+        val token = WalletGate.token(chainForAsset, asset)
+            ?: return Result.Ambiguous(
+                "I don't hold $asset on ${chainForAsset.label} — on that " +
+                    "chain I hold " +
+                    chainForAsset.tokens.joinToString(", ") { it.symbol } +
+                    ". Nothing was prepared."
+            )
+        when (targetKind) {
+            TargetKind.EVM_ADDRESS, TargetKind.NAME -> Unit
+            TargetKind.BTC_ADDRESS -> return Result.Ambiguous(
+                "That looks like a Bitcoin address — on " +
+                    "${chainForAsset.label} I need a 0x… address or a " +
+                    "Fluid name. Nothing was prepared."
+            )
+            TargetKind.SOL_ADDRESS -> return Result.Ambiguous(
+                "That looks like a Solana address — on " +
+                    "${chainForAsset.label} I need a 0x… address or a " +
+                    "Fluid name. Nothing was prepared."
+            )
+            TargetKind.GARBAGE -> return Result.Ambiguous(
+                "I couldn't read \"$targetRaw\" as a wallet address or a Fluid " +
+                    "name. An address starts 0x…; a Fluid name looks like @name. " +
+                    "Nothing was prepared."
+            )
+        }
+        amountProblem(amountText, usdAmountText, asset, token)?.let { return it }
+        return Result.Parsed(
+            SendIntent(
+                amountText = amountText,
+                usdAmountText = usdAmountText,
+                asset = asset,
+                targetRaw = targetRaw,
+                targetIsName = targetKind == TargetKind.NAME,
                 chainKey = chainKey,
                 source = source
             )

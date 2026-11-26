@@ -19,6 +19,14 @@ import java.security.SecureRandom
  *
  * Her address is public data and lives in plain prefs, like
  * the Fluid identity record.
+ *
+ * FAMILIES: the wallet is one wallet with THREE keysets —
+ * EVM, Bitcoin, Solana — each generated independently,
+ * each stored under its own vault key, each riding the
+ * same encrypted backup (the backup carries the whole
+ * vault). The per-family functions below mirror the EVM
+ * ones exactly; the family engines are their only signer
+ * callers, under the same discipline.
  */
 class AgentWallet(context: Context) {
 
@@ -31,6 +39,12 @@ class AgentWallet(context: Context) {
     companion object {
         /** The vault key name for her EVM private key. */
         const val VAULT_KEY = "lille.wallet.evm.v1"
+
+        /** The vault key name for her Bitcoin private key. */
+        const val BTC_VAULT_KEY = "lille.wallet.btc.v1"
+
+        /** The vault key name for her Solana seed. */
+        const val SOL_VAULT_KEY = "lille.wallet.sol.v1"
     }
 
     fun hasWallet(): Boolean =
@@ -77,5 +91,98 @@ class AgentWallet(context: Context) {
         } catch (e: Exception) {
             null
         }
+    }
+
+    // ---------------- Bitcoin keyset ----------------
+
+    fun hasBtcWallet(): Boolean =
+        vault.hasSecret(BTC_VAULT_KEY) && btcAddress() != null
+
+    /** Her Bitcoin receive address (native segwit), or null
+     *  before the keyset exists. */
+    fun btcAddress(): String? = prefs.getString("btc_address", null)
+
+    /** Create her Bitcoin keyset — same discipline as the
+     *  EVM one: fresh randomness, a secp256k1-valid scalar,
+     *  stored only in the vault; creating twice never
+     *  replaces the key. */
+    fun createBtcWallet(): String? {
+        btcAddress()?.let { existing ->
+            if (vault.hasSecret(BTC_VAULT_KEY)) return existing
+        }
+        val rnd = SecureRandom()
+        var key = ByteArray(32)
+        do {
+            rnd.nextBytes(key)
+        } while (!Evm.isValidPrivateKey(key))
+        val address = Btc.addressOf(key)
+        if (!vault.putSecret(BTC_VAULT_KEY, Evm.bytesToHex(key))) return null
+        key.fill(0)
+        prefs.edit().putString("btc_address", address).apply()
+        return address
+    }
+
+    /** SIGNER-ONLY: her Bitcoin key bytes. BtcEngine is the
+     *  only caller; same rules as [keyBytesForSigner]. */
+    fun btcKeyBytesForSigner(): ByteArray? {
+        val hex = vault.getSecret(BTC_VAULT_KEY) ?: return null
+        return try {
+            val bytes = Evm.hexToBytes(hex)
+            if (Evm.isValidPrivateKey(bytes)) bytes else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ---------------- Solana keyset ----------------
+
+    fun hasSolWallet(): Boolean =
+        vault.hasSecret(SOL_VAULT_KEY) && solAddress() != null
+
+    /** Her Solana address (base58 of her ed25519 public
+     *  key), or null before the keyset exists. */
+    fun solAddress(): String? = prefs.getString("sol_address", null)
+
+    /** Create her Solana keyset: 32 random bytes as the
+     *  ed25519 seed (RFC 8032 — the seed is hashed and
+     *  clamped at signing time, so any 32 bytes are a valid
+     *  seed; there is no invalid-key retry loop here, by
+     *  design of the algorithm). Vault-only storage;
+     *  creating twice never replaces the key. */
+    fun createSolWallet(): String? {
+        solAddress()?.let { existing ->
+            if (vault.hasSecret(SOL_VAULT_KEY)) return existing
+        }
+        val seed = ByteArray(32)
+        SecureRandom().nextBytes(seed)
+        val address = Sol.addressOf(seed)
+        if (!vault.putSecret(SOL_VAULT_KEY, Evm.bytesToHex(seed))) return null
+        seed.fill(0)
+        prefs.edit().putString("sol_address", address).apply()
+        return address
+    }
+
+    /** SIGNER-ONLY: her Solana seed bytes. SolEngine is the
+     *  only caller; same rules as [keyBytesForSigner]. */
+    fun solSeedBytesForSigner(): ByteArray? {
+        val hex = vault.getSecret(SOL_VAULT_KEY) ?: return null
+        return try {
+            val bytes = Evm.hexToBytes(hex)
+            if (bytes.size == 32) bytes else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Create every keyset that doesn't exist yet — the
+     *  Wallet screen's one create action ("her wallet" is
+     *  all three families; a user should never have to know
+     *  the word keyset). True when all three exist after
+     *  the call. */
+    fun createAllWallets(): Boolean {
+        if (!hasWallet()) createWallet()
+        if (!hasBtcWallet()) createBtcWallet()
+        if (!hasSolWallet()) createSolWallet()
+        return hasWallet() && hasBtcWallet() && hasSolWallet()
     }
 }

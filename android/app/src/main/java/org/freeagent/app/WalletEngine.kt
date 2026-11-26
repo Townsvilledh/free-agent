@@ -55,13 +55,10 @@ class WalletEngine(context: Context) {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Price cache: the CoinGecko call prices every asset at
-    // once, so one fetch serves the whole prepare.
-    @Volatile
-    private var priceCacheAt = 0L
-    // All engine work runs on the single executor thread, so
-    // the cache map needs no volatility of its own.
-    private val priceCache = mutableMapOf<String, PriceChain.Price>()
+    // The USD price chain, shared with the Bitcoin and
+    // Solana engines (WalletPrices) — one chain, one cache
+    // discipline, every family priced the same way.
+    private val prices = WalletPrices(client)
 
     data class AssetBalance(
         val token: WalletGate.Token,
@@ -70,6 +67,10 @@ class WalletEngine(context: Context) {
         val source: String?
     )
 
+    // The outcome types below are the wallet-wide
+    // vocabulary: the Bitcoin and Solana engines report
+    // through these same types, so chat and the Wallet
+    // screen handle every family's sends identically.
     sealed class PrepareOutcome {
         data class Ready(val prepared: WalletGate.PreparedTx) : PrepareOutcome()
         data class Failed(val message: String) : PrepareOutcome()
@@ -251,64 +252,6 @@ class WalletEngine(context: Context) {
         )
         return RpcChain.parseQuantity(result)
             ?: throw WalletRpcException("unreadable nonce answer")
-    }
-
-    // ---------------- prices (executor thread only) ----------------
-
-    private fun httpGet(url: String): String? {
-        return try {
-            val request = Request.Builder().url(url).build()
-            client.newCall(request).execute().use { resp ->
-                if (resp.isSuccessful) resp.body?.string() else null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /** The price chain: CoinGecko → Coinbase → Kraken.
-     *  First answer serves and is named in the Price. */
-    private fun priceFor(priceId: String): PriceChain.Price? {
-        val now = System.currentTimeMillis()
-        if (now - priceCacheAt < 60_000) {
-            priceCache[priceId]?.let { return it }
-        }
-        // 1. CoinGecko — one call prices every asset.
-        httpGet(
-            "https://api.coingecko.com/api/v3/simple/price" +
-                "?ids=ethereum,usd-coin,tether,weth,binancecoin," +
-                "polygon-ecosystem-token,avalanche-2,wrapped-avax" +
-                "&vs_currencies=usd"
-        )?.let { body ->
-            val prices = PriceChain.parseCoinGecko(body)
-            if (prices.isNotEmpty()) {
-                priceCacheAt = now
-                for ((id, usd) in prices) {
-                    priceCache[id] = PriceChain.Price(usd, "coingecko")
-                }
-                priceCache[priceId]?.let { return it }
-            }
-        }
-        // 2. Coinbase spot.
-        PriceChain.coinbaseSymbol(priceId)?.let { symbol ->
-            httpGet("https://api.coinbase.com/v2/prices/$symbol-USD/spot")
-                ?.let { body ->
-                    PriceChain.parseCoinbase(body)?.let {
-                        return PriceChain.Price(it, "coinbase")
-                    }
-                }
-        }
-        // 3. Kraken ticker.
-        val pairs = PriceChain.krakenPairs(priceId)
-        if (pairs.isNotEmpty()) {
-            httpGet("https://api.kraken.com/0/public/Ticker?pair=${pairs[0]}")
-                ?.let { body ->
-                    PriceChain.parseKraken(body, pairs)?.let {
-                        return PriceChain.Price(it, "kraken")
-                    }
-                }
-        }
-        return null
     }
 
     // ---------------- balances (public) ----------------
@@ -586,7 +529,7 @@ class WalletEngine(context: Context) {
 
     private fun fetchRegistry(): String? {
         for (url in listOf(FluidGate.REGISTRY_URL, FluidGate.REGISTRY_FALLBACK_URL)) {
-            httpGet(url)?.let { return it }
+            prices.get(url)?.let { return it }
         }
         return null
     }
@@ -617,7 +560,7 @@ class WalletEngine(context: Context) {
             )
         val (recipient, recipientLabel) = resolveRecipient(targetRaw, targetIsName)
 
-        val price = priceFor(token.priceId)
+        val price = prices.priceFor(token.priceId)
         val amountRaw: BigInteger = when {
             sweepAmountRaw != null -> sweepAmountRaw
             usdAmountText != null -> {
@@ -700,7 +643,7 @@ class WalletEngine(context: Context) {
             )
         }
 
-        val nativePrice = priceFor(nativeToken.priceId)
+        val nativePrice = prices.priceFor(nativeToken.priceId)
         val prepared = WalletGate.PreparedTx(
             chainKey = chain.key,
             tokenSymbol = token.symbol,

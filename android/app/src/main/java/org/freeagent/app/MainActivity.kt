@@ -739,6 +739,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val walletEngine by lazy { WalletEngine(this) }
+    private val btcEngine by lazy { BtcEngine(this) }
+    private val solEngine by lazy { SolEngine(this) }
 
     /** A parsed send prompt (v0.12): prepare from live state,
      *  then the gate decides — autonomous-within-caps sends
@@ -746,83 +748,130 @@ class MainActivity : AppCompatActivity() {
      *  approval sheet HERE, in the chat the user is looking
      *  at ("sign where you stand"); if this chat isn't on
      *  screen, nothing is signed and the message says how to
-     *  approve. */
+     *  approve. The family engines share this one flow: the
+     *  intent's family picks the engine, everything after
+     *  preparation is identical. */
     private fun handleWalletPrompt(
         chatId: String,
         intent: WalletPrompt.SendIntent
     ) {
         val wallet = AgentWallet(this)
-        if (!wallet.hasWallet()) {
+        val has = when (intent.family) {
+            WalletGate.FAMILY_BITCOIN -> wallet.hasBtcWallet()
+            WalletGate.FAMILY_SOLANA -> wallet.hasSolWallet()
+            else -> wallet.hasWallet()
+        }
+        if (!has) {
+            val familyName = when (intent.family) {
+                WalletGate.FAMILY_BITCOIN -> "Bitcoin "
+                WalletGate.FAMILY_SOLANA -> "Solana "
+                else -> ""
+            }
             appendAssistantMessage(
                 chatId,
-                "I don't have my own wallet yet, so there's nothing for " +
-                    "me to send from. Create it in Settings → Lille's " +
-                    "wallet, fund it with what I may spend, then ask me " +
-                    "again in exactly that phrasing. Nothing was sent."
+                "I don't have my own ${familyName}wallet yet, so there's " +
+                    "nothing for me to send from. Create it in Settings → " +
+                    "Lille's wallet (one tap sets up every family), fund " +
+                    "it with what I may spend, then ask me again in " +
+                    "exactly that phrasing. Nothing was sent."
             )
             return
         }
+        val fromAddress = when (intent.family) {
+            WalletGate.FAMILY_BITCOIN -> wallet.btcAddress() ?: ""
+            WalletGate.FAMILY_SOLANA -> wallet.solAddress() ?: ""
+            else -> wallet.address() ?: ""
+        }
         appendAssistantMessage(chatId, "Preparing that send from my own wallet…")
-        walletEngine.prepareFromPrompt(intent) { outcome ->
-            when (outcome) {
-                is WalletEngine.PrepareOutcome.Failed ->
-                    appendAssistantMessage(chatId, outcome.message)
-                is WalletEngine.PrepareOutcome.Ready -> {
-                    val prepared = outcome.prepared
-                    walletEngine.execute(
-                        prepared, userApproved = false, rawAmountConfirmed = false
-                    ) { exec ->
-                        when (exec) {
-                            WalletEngine.ExecOutcome.NeedsApproval -> {
-                                if (chatId == renderedChatId && uiAlive &&
-                                    !isFinishing
-                                ) {
-                                    WalletApprovalUi.show(
-                                        this, prepared,
-                                        wallet.address() ?: "",
-                                        onApprove = { rawConfirmed ->
+        when (intent.family) {
+            WalletGate.FAMILY_BITCOIN ->
+                btcEngine.prepareFromPrompt(intent) { outcome ->
+                    onWalletPrepared(chatId, outcome, fromAddress) { p, a, r, d ->
+                        btcEngine.execute(p, a, r, d)
+                    }
+                }
+            WalletGate.FAMILY_SOLANA ->
+                solEngine.prepareFromPrompt(intent) { outcome ->
+                    onWalletPrepared(chatId, outcome, fromAddress) { p, a, r, d ->
+                        solEngine.execute(p, a, r, d)
+                    }
+                }
+            else ->
+                walletEngine.prepareFromPrompt(intent) { outcome ->
+                    onWalletPrepared(chatId, outcome, fromAddress) { p, a, r, d ->
+                        walletEngine.execute(p, a, r, d)
+                    }
+                }
+        }
+    }
+
+    /** The shared post-preparation flow for every family:
+     *  the gate decides (via the family's gated signer);
+     *  approval happens on the sheet, in this chat, or not
+     *  at all. [execute] is the preparing family's signer. */
+    private fun onWalletPrepared(
+        chatId: String,
+        outcome: WalletEngine.PrepareOutcome,
+        fromAddress: String,
+        execute: (
+            WalletGate.PreparedTx, Boolean, Boolean,
+            (WalletEngine.ExecOutcome) -> Unit
+        ) -> Unit
+    ) {
+        when (outcome) {
+            is WalletEngine.PrepareOutcome.Failed ->
+                appendAssistantMessage(chatId, outcome.message)
+            is WalletEngine.PrepareOutcome.Ready -> {
+                val prepared = outcome.prepared
+                execute(
+                    prepared, false, false
+                ) { exec ->
+                    when (exec) {
+                        WalletEngine.ExecOutcome.NeedsApproval -> {
+                            if (chatId == renderedChatId && uiAlive &&
+                                !isFinishing
+                            ) {
+                                WalletApprovalUi.show(
+                                    this, prepared, fromAddress,
+                                    onApprove = { rawConfirmed ->
+                                        appendAssistantMessage(
+                                            chatId,
+                                            "Approved — signing and sending " +
+                                                "from my wallet…"
+                                        )
+                                        execute(
+                                            prepared, true, rawConfirmed
+                                        ) { done ->
                                             appendAssistantMessage(
-                                                chatId,
-                                                "Approved — signing and sending " +
-                                                    "from my wallet…"
-                                            )
-                                            walletEngine.execute(
-                                                prepared,
-                                                userApproved = true,
-                                                rawAmountConfirmed = rawConfirmed
-                                            ) { done ->
-                                                appendAssistantMessage(
-                                                    chatId, walletExecText(done)
-                                                )
-                                            }
-                                        },
-                                        onCancel = {
-                                            appendAssistantMessage(
-                                                chatId,
-                                                "Cancelled — nothing was sent."
+                                                chatId, walletExecText(done)
                                             )
                                         }
-                                    )
-                                } else {
-                                    appendAssistantMessage(
-                                        chatId,
-                                        "I've prepared it: " +
-                                            "${prepared.amountDisplay} " +
-                                            "${prepared.tokenSymbol} to " +
-                                            "${prepared.recipientLabel} on " +
-                                            (WalletGate.chainByKey(prepared.chainKey)?.label
-                                                ?: prepared.chainKey) +
-                                            ". Approving only happens on the " +
-                                            "approval sheet while you're looking " +
-                                            "at this chat — ask me again here " +
-                                            "and I'll show it. Nothing was sent."
-                                    )
-                                }
+                                    },
+                                    onCancel = {
+                                        appendAssistantMessage(
+                                            chatId,
+                                            "Cancelled — nothing was sent."
+                                        )
+                                    }
+                                )
+                            } else {
+                                appendAssistantMessage(
+                                    chatId,
+                                    "I've prepared it: " +
+                                        "${prepared.amountDisplay} " +
+                                        "${prepared.tokenSymbol} to " +
+                                        "${prepared.recipientLabel} on " +
+                                        WalletGate.networkLabel(prepared.chainKey) +
+                                        ". Approving only happens on the " +
+                                        "approval sheet while you're looking " +
+                                        "at this chat — ask me again here " +
+                                        "and I'll show it. Nothing was sent."
+                                )
                             }
-                            else -> appendAssistantMessage(
-                                chatId, walletExecText(exec)
-                            )
                         }
+                        else -> appendAssistantMessage(
+                            chatId, walletExecText(exec)
+                        )
                     }
                 }
             }
