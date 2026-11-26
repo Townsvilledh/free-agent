@@ -22,10 +22,14 @@ package org.freeagent.app
  *
  *   <amount>  a plain decimal: 2, 2.5, 0.05 (no commas, no
  *             exponent, no words)
- *   <ASSET>   ETH | USDC | USDT | WETH
+ *   <ASSET>   any symbol her wallet holds (ETH, USDC, USDT,
+ *             WETH, BNB, POL, AVAX, WAVAX) — checked against
+ *             the chosen chain at the end of the parse
  *   <target>  a 0x… address (40 hex chars), @fluidname, or a
  *             bare fluidname (letters, digits, _ . -)
- *   <chain>   ethereum | mainnet | base   (default: ethereum)
+ *   <chain>   ethereum | mainnet | base | arbitrum |
+ *             polygon | bsc | bnb | avalanche | avax |
+ *             optimism   (default: ethereum)
  *
  * The "$"/"dollars" forms are USD-denominated: the prepare
  * path converts at the live price and shows the token amount
@@ -107,7 +111,7 @@ object WalletPrompt {
                 "I can send from my own wallet, but I couldn't see an amount. " +
                     "Try: \"send 2 USDC to @name\" — amount, asset, then who it's for."
             !assetMentioned ->
-                "I can send ETH, USDC, USDT or WETH from my own wallet — which " +
+                "I can send ${assetList()} from my own wallet — which " +
                     "asset did you mean? Try: \"send 2 USDC to @name\"."
             else ->
                 "I want to be exact with money, and that phrasing isn't one I " +
@@ -116,6 +120,13 @@ object WalletPrompt {
         }
         return Result.Ambiguous(question)
     }
+
+    /** Every symbol she holds anywhere, for messages. */
+    private fun assetList(): String = ASSETS.sorted().joinToString(", ")
+
+    /** Every chain name she answers to, for messages. */
+    private fun chainList(): String =
+        WalletGate.CHAINS.joinToString(", ") { it.label }
 
     private fun finish(
         amountText: String?,
@@ -127,16 +138,33 @@ object WalletPrompt {
         val asset = assetRaw.uppercase()
         if (asset !in ASSETS) {
             return Result.Ambiguous(
-                "I can only send ETH, USDC, USDT or WETH from my own wallet — " +
+                "I can only send ${assetList()} from my own wallet — " +
                     "\"$assetRaw\" isn't one I hold. Nothing was prepared."
             )
         }
         val chainKey = when (chainRaw.lowercase()) {
             "", "ethereum", "mainnet" -> WalletGate.ETHEREUM.key
             "base" -> WalletGate.BASE.key
+            "arbitrum" -> WalletGate.ARBITRUM.key
+            "polygon" -> WalletGate.POLYGON.key
+            "bsc", "bnb" -> WalletGate.BSC.key
+            "avalanche", "avax" -> WalletGate.AVALANCHE.key
+            "optimism" -> WalletGate.OPTIMISM.key
             else -> return Result.Ambiguous(
-                "I can send on Ethereum or Base — \"$chainRaw\" isn't a chain " +
+                "I can send on ${chainList()} — \"$chainRaw\" isn't a chain " +
                     "my wallet is on. Nothing was prepared."
+            )
+        }
+        // The asset must exist ON THE CHOSEN CHAIN, not just
+        // somewhere in her wallet: BNB is hers on BNB Smart
+        // Chain and meaningless on Ethereum.
+        val chainForAsset = WalletGate.chainByKey(chainKey)!!
+        if (WalletGate.token(chainForAsset, asset) == null) {
+            return Result.Ambiguous(
+                "I don't hold $asset on ${chainForAsset.label} — on that " +
+                    "chain I hold " +
+                    chainForAsset.tokens.joinToString(", ") { it.symbol } +
+                    ". Nothing was prepared."
             )
         }
         val isAddress = Evm.isAddress(targetRaw)

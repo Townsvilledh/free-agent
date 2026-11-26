@@ -1,4 +1,4 @@
-# WALLET.md — Lille's agentic wallet (v0.12)
+# WALLET.md — Lille's agentic wallet (v0.12; chains widened v0.12.4)
 
 *What her wallet is, how money moves through it, and what she can
 never do — in plain words. Design decisions trace to the
@@ -57,11 +57,15 @@ the model's free text:
    exactly: `send|pay <amount> <ASSET> to <target> [on <chain>]`,
    `send|pay $<amount> of <ASSET> to <target> [on <chain>]`, and
    `send|pay <amount> dollars of <ASSET> to <target> [on
-   <chain>]`, with ASSET ∈ {ETH, USDC, USDT, WETH}, target a 0x
-   address or a Fluid name (`@name` or bare), chain ∈ {ethereum,
-   mainnet, base} (default Ethereum). A send-shaped message that
-   doesn't match exactly gets a question back — never a guess.
-   The Wallet screen's send form feeds the same pipeline.
+   <chain>]`, with ASSET ∈ {ETH, USDC, USDT, WETH, BNB, POL,
+   AVAX, WAVAX} (checked against the chosen chain — an asset
+   she holds on one chain is not spendable on another), target
+   a 0x address or a Fluid name (`@name` or bare), chain ∈
+   {ethereum, mainnet, base, arbitrum, polygon, bsc, bnb,
+   avalanche, avax, optimism} (default Ethereum). A send-shaped
+   message that doesn't match exactly gets a question back —
+   never a guess. The Wallet screen's send form feeds the same
+   pipeline, and its asset list follows the selected chain.
 2. **Prepare.** `WalletEngine` resolves the recipient (Fluid
    names through the published names registry, primary +
    fallback fetch), reads live balances, nonce and fees from
@@ -82,16 +86,49 @@ the model's free text:
    value, network fee, and which wallet it leaves. The Approve
    tap is the only source of approval in the app; there is no
    "approve later by replying yes" path.
-5. **Sign + broadcast + verify.** The signer assembles an
-   EIP-1559 transaction, signs it with her key (in memory,
-   zeroed after), broadcasts through the RPC fallback chain,
-   and polls for the receipt. The report carries the
-   transaction hash; a broadcast whose receipt doesn't land
-   says so honestly and still gives the hash to check.
+5. **Sign + broadcast + verify.** The signer assembles the
+   transaction in the chain's own shape — EIP-1559 everywhere
+   except BNB Smart Chain, which still runs legacy gas
+   pricing and signs a type-0 EIP-155 transaction — signs it
+   with her key (in memory, zeroed after), broadcasts through
+   the RPC fallback chain, and polls for the receipt. The
+   report carries the transaction hash; a broadcast whose
+   receipt doesn't land says so honestly and still gives the
+   hash to check.
 
 Every step lands in her wallet activity list — created,
 prepared, refused (with the reason), sent, confirmed, failed,
 swept — marked as hers, separate from any Fluid activity.
+
+## Chains (v0.12.4)
+
+One keyset, every EVM chain — her address is the same on all
+of them. Seven chains, each with at least two public RPC
+routes walked in order (the serving source is named in her
+balance list; a failed read shows "couldn't load", never a
+fake zero):
+
+| Chain | Native | Tokens | Gas |
+|---|---|---|---|
+| Ethereum (1) | ETH | ETH, USDC, USDT, WETH | EIP-1559 |
+| Base (8453) | ETH | ETH, USDC, USDT, WETH | EIP-1559 |
+| Arbitrum One (42161) | ETH | ETH, USDC, USDT, WETH | EIP-1559 |
+| Polygon (137) | POL | POL, USDC, USDT, WETH | EIP-1559 |
+| BNB Smart Chain (56) | BNB | BNB, USDC, USDT | **legacy** |
+| Avalanche C-Chain (43114) | AVAX | AVAX, USDC, USDT, WAVAX | EIP-1559 |
+| Optimism (10) | ETH | ETH, USDC, USDT, WETH | EIP-1559 |
+
+Every token contract and its decimals were verified **on
+chain** on 2026-11-26 — `decimals()` and `symbol()` read from
+each chain's own public RPC before the address was allowed
+into the table, and the table is pinned by JVM tests. The
+verification caught real traps: the stables on BNB Smart
+Chain are **18-decimal** (a 6-decimal assumption would
+misprice every BSC stable send by 10¹²), and Polygon's native
+asset is **POL** (the gas token since the 2024 upgrade —
+MATIC is the retired name). Prices come through the same
+price chain (CoinGecko → Coinbase → Kraken), extended to the
+new natives.
 
 ## Caps are the user's dial, not a cage
 
@@ -187,7 +224,9 @@ Fluid's keys stay Fluid's.
 - Task-engine wallet tools: her background tasks cannot spend
   yet — wallet sends run from chat prompts and the Wallet
   screen only.
-- Non-EVM chains: her wallet is EVM (Ethereum + Base) in v0.12;
-  Solana/Bitcoin companion support is future work.
+- Non-EVM chains: her wallet is EVM-only — the seven chains
+  above. Bitcoin, Solana and the other Fluid families are NOT
+  BUILT in her wallet; PARITY.md carries them as named rows,
+  not as fine print.
 - Main-wallet transaction approvals from inside Lille: NOT
   BUILT — see the first-class row in PARITY.md.

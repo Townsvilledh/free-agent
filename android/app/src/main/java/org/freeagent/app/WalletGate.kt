@@ -45,7 +45,16 @@ object WalletGate {
          *  name it. All keyless/public. */
         val rpcUrls: List<String>,
         val explorerTxBase: String,
-        val tokens: List<Token>
+        /** The chain's tokens, NATIVE FIRST: tokens[0] is
+         *  the native asset (contract == null) that network
+         *  fees are paid in. The engine relies on this order. */
+        val tokens: List<Token>,
+        /** True when the chain prices gas the legacy way
+         *  (a single eth_gasPrice, EIP-155 signed type-0
+         *  transactions) instead of EIP-1559 fee markets.
+         *  BNB Smart Chain is the legacy chain in the set;
+         *  every other chain here runs EIP-1559. */
+        val legacyGas: Boolean = false
     )
 
     val ETHEREUM = Chain(
@@ -84,7 +93,112 @@ object WalletGate {
         )
     )
 
-    val CHAINS: List<Chain> = listOf(ETHEREUM, BASE)
+    // Token contracts below were verified ON CHAIN on
+    // 2026-11-26 (decimals() and symbol() read from each
+    // chain's own public RPC) — never copied from memory.
+    // Note the traps the verification caught: the stables
+    // on BNB Smart Chain are 18-decimal (not 6), and
+    // Polygon's native asset is POL (the chain's gas token
+    // since the 2024 upgrade; MATIC is the retired name).
+
+    val ARBITRUM = Chain(
+        key = "arbitrum",
+        label = "Arbitrum",
+        chainId = 42161L,
+        rpcUrls = listOf(
+            "https://arb1.arbitrum.io/rpc",
+            "https://arbitrum-rpc.publicnode.com",
+            "https://arbitrum.drpc.org"
+        ),
+        explorerTxBase = "https://arbiscan.io/tx/",
+        tokens = listOf(
+            Token("ETH", null, 18, "ethereum"),
+            Token("USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6, "usd-coin"),
+            Token("USDT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", 6, "tether"),
+            Token("WETH", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", 18, "weth")
+        )
+    )
+
+    val POLYGON = Chain(
+        key = "polygon",
+        label = "Polygon",
+        chainId = 137L,
+        rpcUrls = listOf(
+            "https://polygon-bor-rpc.publicnode.com",
+            "https://polygon.drpc.org",
+            "https://polygon.llamarpc.com"
+        ),
+        explorerTxBase = "https://polygonscan.com/tx/",
+        tokens = listOf(
+            Token("POL", null, 18, "polygon-ecosystem-token"),
+            Token("USDC", "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", 6, "usd-coin"),
+            Token("USDT", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", 6, "tether"),
+            Token("WETH", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", 18, "weth")
+        )
+    )
+
+    val BSC = Chain(
+        key = "bsc",
+        label = "BNB Smart Chain",
+        chainId = 56L,
+        rpcUrls = listOf(
+            "https://bsc-dataseed.bnbchain.org",
+            "https://bsc-rpc.publicnode.com",
+            "https://bsc.drpc.org"
+        ),
+        explorerTxBase = "https://bscscan.com/tx/",
+        tokens = listOf(
+            Token("BNB", null, 18, "binancecoin"),
+            // 18 decimals on BSC — verified on chain; the
+            // 6-decimal assumption from other chains would
+            // misprice every BSC stable send by 10^12.
+            Token("USDC", "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", 18, "usd-coin"),
+            Token("USDT", "0x55d398326f99059fF775485246999027B3197955", 18, "tether")
+        ),
+        // BNB Chain has no EIP-1559 fee market: gas is one
+        // eth_gasPrice and transactions sign the legacy way.
+        legacyGas = true
+    )
+
+    val AVALANCHE = Chain(
+        key = "avalanche",
+        label = "Avalanche",
+        chainId = 43114L,
+        rpcUrls = listOf(
+            "https://api.avax.network/ext/bc/C/rpc",
+            "https://avalanche-c-chain-rpc.publicnode.com",
+            "https://avalanche.drpc.org"
+        ),
+        explorerTxBase = "https://snowtrace.io/tx/",
+        tokens = listOf(
+            Token("AVAX", null, 18, "avalanche-2"),
+            Token("USDC", "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", 6, "usd-coin"),
+            Token("USDT", "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", 6, "tether"),
+            Token("WAVAX", "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7", 18, "wrapped-avax")
+        )
+    )
+
+    val OPTIMISM = Chain(
+        key = "optimism",
+        label = "Optimism",
+        chainId = 10L,
+        rpcUrls = listOf(
+            "https://mainnet.optimism.io",
+            "https://optimism-rpc.publicnode.com",
+            "https://optimism.drpc.org"
+        ),
+        explorerTxBase = "https://optimistic.etherscan.io/tx/",
+        tokens = listOf(
+            Token("ETH", null, 18, "ethereum"),
+            Token("USDC", "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", 6, "usd-coin"),
+            Token("USDT", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", 6, "tether"),
+            Token("WETH", "0x4200000000000000000000000000000000000006", 18, "weth")
+        )
+    )
+
+    val CHAINS: List<Chain> = listOf(
+        ETHEREUM, BASE, ARBITRUM, POLYGON, BSC, AVALANCHE, OPTIMISM
+    )
 
     fun chainByKey(key: String): Chain? = CHAINS.firstOrNull { it.key == key }
 
@@ -191,6 +305,15 @@ object WalletGate {
         val nonce: BigInteger,
         val maxPriorityFeePerGas: BigInteger,
         val maxFeePerGas: BigInteger,
+        /** Legacy chains only (BNB Smart Chain): the single
+         *  eth_gasPrice the transaction signs with, and the
+         *  signal to the signer to build a legacy (type-0,
+         *  EIP-155) transaction. Null on EIP-1559 chains,
+         *  where the two fee fields above rule. On a legacy
+         *  chain maxFeePerGas mirrors this value so the
+         *  worst-case fee math (gasLimit × price) is the
+         *  same shape on every chain. */
+        val gasPrice: BigInteger? = null,
         /** True for a sweep-back to the user's own Fluid
          *  address — still prepare-and-ask, always. */
         val isSweep: Boolean = false
@@ -331,8 +454,9 @@ object WalletGate {
                     "confirm the raw amount above yourself."
             )
         }
+        val nativeSymbol = chainByKey(p.chainKey)?.tokens?.firstOrNull()?.symbol ?: "ETH"
         sb.append(
-            "\nNetwork fee: up to ${Evm.formatUnits(p.maxFeeWei, 18)} ETH" +
+            "\nNetwork fee: up to ${Evm.formatUnits(p.maxFeeWei, 18)} $nativeSymbol" +
                 (p.maxFeeUsdCents?.let { " (about ${formatUsd(it)})" } ?: "") +
                 ", paid from her wallet."
         )

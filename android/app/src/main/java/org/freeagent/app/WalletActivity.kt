@@ -82,10 +82,24 @@ class WalletActivity : AppCompatActivity() {
             this, android.R.layout.simple_spinner_dropdown_item,
             WalletGate.CHAINS.map { it.label }
         )
-        assetSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item,
-            WalletGate.ETHEREUM.tokens.map { it.symbol }
-        )
+        // The asset list belongs to the selected chain:
+        // switching chains swaps the assets (BNB is not an
+        // Ethereum asset) and reloads that chain's balances.
+        chainSpinner.onItemSelectedListener =
+            object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: View?, position: Int, id: Long
+                ) {
+                    setAssetAdapter(WalletGate.CHAINS[position])
+                    if (wallet.hasWallet()) refreshBalances()
+                }
+
+                override fun onNothingSelected(
+                    parent: android.widget.AdapterView<*>?
+                ) = Unit
+            }
+        setAssetAdapter(WalletGate.ETHEREUM)
 
         findViewById<Button>(R.id.walletCreateButton).setOnClickListener {
             val address = wallet.createWallet()
@@ -128,6 +142,13 @@ class WalletActivity : AppCompatActivity() {
         WalletGate.CHAINS[chainSpinner.selectedItemPosition.coerceIn(
             0, WalletGate.CHAINS.size - 1
         )]
+
+    private fun setAssetAdapter(chain: WalletGate.Chain) {
+        assetSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            chain.tokens.map { it.symbol }
+        )
+    }
 
     private fun render() {
         val has = wallet.hasWallet()

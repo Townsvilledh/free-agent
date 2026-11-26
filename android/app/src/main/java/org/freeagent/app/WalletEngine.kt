@@ -152,10 +152,22 @@ class WalletEngine(context: Context) {
     private data class FeeData(
         val baseFee: BigInteger,
         val priorityFee: BigInteger,
-        val maxFeePerGas: BigInteger
+        val maxFeePerGas: BigInteger,
+        /** Legacy chains only: the single eth_gasPrice the
+         *  transaction signs with. maxFeePerGas mirrors it,
+         *  so worst-case fee math is one shape everywhere. */
+        val gasPrice: BigInteger? = null
     )
 
     private fun feeData(chain: WalletGate.Chain): FeeData {
+        if (chain.legacyGas) {
+            // BNB Smart Chain: no fee market. One gas price,
+            // read live; the transaction signs legacy-style.
+            val (result, _) = rpc(chain, "eth_gasPrice", JSONArray())
+            val gasPrice = RpcChain.parseQuantity(result)
+                ?: throw WalletRpcException("couldn't read the network gas price")
+            return FeeData(BigInteger.ZERO, gasPrice, gasPrice, gasPrice)
+        }
         val (historyJson, source) = rpcWithBody(
             chain, "eth_feeHistory",
             RpcChain.paramsOf("0x1", "latest", JSONArray())
@@ -264,7 +276,9 @@ class WalletEngine(context: Context) {
         // 1. CoinGecko — one call prices every asset.
         httpGet(
             "https://api.coingecko.com/api/v3/simple/price" +
-                "?ids=ethereum,usd-coin,tether,weth&vs_currencies=usd"
+                "?ids=ethereum,usd-coin,tether,weth,binancecoin," +
+                "polygon-ecosystem-token,avalanche-2,wrapped-avax" +
+                "&vs_currencies=usd"
         )?.let { body ->
             val prices = PriceChain.parseCoinGecko(body)
             if (prices.isNotEmpty()) {
@@ -530,28 +544,30 @@ class WalletEngine(context: Context) {
         val maxFeeWei = gasLimit.multiply(fees.maxFeePerGas)
 
         // The network fee comes out of her native balance.
+        val nativeToken = chain.tokens[0]
         val nativeBal = if (token.contract == null) tokenBal else try {
             nativeBalance(chain, from)
         } catch (e: WalletRpcException) {
             throw PrepareException(
-                "Lille couldn't read her ETH balance on ${chain.label} for the " +
-                    "network fee (${e.message}). Nothing was prepared."
+                "Lille couldn't read her ${nativeToken.symbol} balance on " +
+                    "${chain.label} for the network fee (${e.message}). " +
+                    "Nothing was prepared."
             )
         }
         val nativeNeeded =
             if (token.contract == null) amountRaw + maxFeeWei else maxFeeWei
         if (nativeBal < nativeNeeded) {
             throw PrepareException(
-                "She has ${Evm.formatUnits(nativeBal, 18)} ETH on ${chain.label}; " +
-                    "this send needs up to " +
-                    "${Evm.formatUnits(nativeNeeded, 18)} ETH " +
+                "She has ${Evm.formatUnits(nativeBal, 18)} ${nativeToken.symbol} " +
+                    "on ${chain.label}; this send needs up to " +
+                    "${Evm.formatUnits(nativeNeeded, 18)} ${nativeToken.symbol} " +
                     (if (token.contract == null) "(amount + network fee)."
                     else "for the network fee.") +
                     " Nothing was prepared."
             )
         }
 
-        val ethPrice = priceFor("ethereum")
+        val nativePrice = priceFor(nativeToken.priceId)
         val prepared = WalletGate.PreparedTx(
             chainKey = chain.key,
             tokenSymbol = token.symbol,
@@ -563,12 +579,13 @@ class WalletEngine(context: Context) {
             priceSource = price?.source,
             gasLimit = gasLimit,
             maxFeeWei = maxFeeWei,
-            maxFeeUsdCents = ethPrice?.let {
-                WalletGate.usdCentsOf(maxFeeWei, WalletGate.ETHEREUM.tokens[0], it.usd)
+            maxFeeUsdCents = nativePrice?.let {
+                WalletGate.usdCentsOf(maxFeeWei, nativeToken, it.usd)
             },
             nonce = nonceOverride ?: nonce(chain, from),
             maxPriorityFeePerGas = fees.priorityFee,
             maxFeePerGas = fees.maxFeePerGas,
+            gasPrice = fees.gasPrice,
             isSweep = isSweep
         )
         store.recordActivity(
@@ -665,7 +682,7 @@ class WalletEngine(context: Context) {
                 if (nativeAmount.signum() > 0) {
                     prepared.add(
                         buildPrepared(
-                            chain.key, "ETH", null, null,
+                            chain.key, chain.tokens[0].symbol, null, null,
                             identity.address, targetIsName = false,
                             isSweep = true, sweepAmountRaw = nativeAmount,
                             nonceOverride = nextNonce, feesOverride = fees
@@ -747,18 +764,43 @@ class WalletEngine(context: Context) {
                 "Lille couldn't read her own key from the vault — nothing " +
                     "was signed. Her wallet may need to be restored from backup."
             )
-        val tx = Evm.Tx1559(
-            chainId = BigInteger.valueOf(chain.chainId),
-            nonce = prepared.nonce,
-            maxPriorityFeePerGas = prepared.maxPriorityFeePerGas,
-            maxFeePerGas = prepared.maxFeePerGas,
-            gasLimit = prepared.gasLimit,
-            to = Evm.hexToBytes(token.contract ?: prepared.recipient),
-            value = if (token.contract == null) prepared.amountRaw else BigInteger.ZERO,
-            data = if (token.contract == null) ByteArray(0)
-            else Evm.erc20TransferData(prepared.recipient, prepared.amountRaw)
-        )
-        val raw = Evm.signTx(key, tx)
+        val toBytes = Evm.hexToBytes(token.contract ?: prepared.recipient)
+        val txValue =
+            if (token.contract == null) prepared.amountRaw else BigInteger.ZERO
+        val txData = if (token.contract == null) ByteArray(0)
+        else Evm.erc20TransferData(prepared.recipient, prepared.amountRaw)
+        // The chain's own fee rules decide the shape: legacy
+        // chains (BNB Smart Chain) sign a type-0 EIP-155
+        // transaction at the prepared gas price; every other
+        // chain signs EIP-1559.
+        val raw = if (prepared.gasPrice != null) {
+            Evm.signTx(
+                key,
+                Evm.TxLegacy(
+                    chainId = BigInteger.valueOf(chain.chainId),
+                    nonce = prepared.nonce,
+                    gasPrice = prepared.gasPrice,
+                    gasLimit = prepared.gasLimit,
+                    to = toBytes,
+                    value = txValue,
+                    data = txData
+                )
+            )
+        } else {
+            Evm.signTx(
+                key,
+                Evm.Tx1559(
+                    chainId = BigInteger.valueOf(chain.chainId),
+                    nonce = prepared.nonce,
+                    maxPriorityFeePerGas = prepared.maxPriorityFeePerGas,
+                    maxFeePerGas = prepared.maxFeePerGas,
+                    gasLimit = prepared.gasLimit,
+                    to = toBytes,
+                    value = txValue,
+                    data = txData
+                )
+            )
+        }
         key.fill(0)
         val expectedHash = Evm.txHash(raw)
 

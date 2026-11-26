@@ -347,4 +347,162 @@ class WalletGateTest {
         assertTrue(text.contains("coingecko"))
         assertTrue(text.contains("LILLE'S wallet only"))
     }
+
+    // ---- the widened chain set (v0.12.4) ----
+
+    @Test
+    fun chainTablePins() {
+        // key, chainId, native symbol, legacy?
+        val pins = listOf(
+            Triple("ethereum", 1L, "ETH") to false,
+            Triple("base", 8453L, "ETH") to false,
+            Triple("arbitrum", 42161L, "ETH") to false,
+            Triple("polygon", 137L, "POL") to false,
+            Triple("bsc", 56L, "BNB") to true,
+            Triple("avalanche", 43114L, "AVAX") to false,
+            Triple("optimism", 10L, "ETH") to false
+        )
+        assertEquals(pins.size, WalletGate.CHAINS.size)
+        for ((pin, legacy) in pins) {
+            val (key, chainId, native) = pin
+            val chain = WalletGate.chainByKey(key)!!
+            assertEquals("chainId for $key", chainId, chain.chainId)
+            assertEquals("legacyGas for $key", legacy, chain.legacyGas)
+            // Native first, contract-free, 18 decimals, and
+            // at least two public RPC routes (Fallback Law).
+            val nativeToken = chain.tokens[0]
+            assertEquals("native symbol for $key", native, nativeToken.symbol)
+            assertEquals("native contract for $key", null, nativeToken.contract)
+            assertEquals("native decimals for $key", 18, nativeToken.decimals)
+            assertTrue(
+                "rpc routes for $key",
+                chain.rpcUrls.size >= 2 && chain.rpcUrls.all { it.startsWith("https://") }
+            )
+        }
+        // BNB Smart Chain is the ONLY legacy-gas chain.
+        assertEquals(
+            listOf("bsc"),
+            WalletGate.CHAINS.filter { it.legacyGas }.map { it.key }
+        )
+    }
+
+    @Test
+    fun newChainTokenPins() {
+        // Every contract + decimals pair below was verified
+        // ON CHAIN on 2026-11-26 (decimals()/symbol() read
+        // from the chain's own RPC). These pins are the
+        // regression net: a fat-fingered address or a
+        // wrong-decimals edit fails the build, not a user.
+        fun pin(chainKey: String, symbol: String, contract: String, decimals: Int) {
+            val chain = WalletGate.chainByKey(chainKey)!!
+            val token = WalletGate.token(chain, symbol)!!
+            assertEquals("$chainKey/$symbol contract", contract, token.contract)
+            assertEquals("$chainKey/$symbol decimals", decimals, token.decimals)
+        }
+        pin("arbitrum", "USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6)
+        pin("arbitrum", "USDT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", 6)
+        pin("arbitrum", "WETH", "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", 18)
+        pin("polygon", "USDC", "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", 6)
+        pin("polygon", "USDT", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", 6)
+        pin("polygon", "WETH", "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", 18)
+        // BSC stables are 18-decimal. This is THE trap of
+        // the widening; it stays pinned in red.
+        pin("bsc", "USDC", "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", 18)
+        pin("bsc", "USDT", "0x55d398326f99059fF775485246999027B3197955", 18)
+        pin("avalanche", "USDC", "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", 6)
+        pin("avalanche", "USDT", "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", 6)
+        pin("avalanche", "WAVAX", "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7", 18)
+        pin("optimism", "USDC", "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", 6)
+        pin("optimism", "USDT", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", 6)
+        pin("optimism", "WETH", "0x4200000000000000000000000000000000000006", 18)
+    }
+
+    private fun preparedOn(
+        chainKey: String,
+        symbol: String,
+        usdCents: Long? = 300,
+        gasPrice: BigInteger? = null
+    ) = WalletGate.PreparedTx(
+        chainKey = chainKey,
+        tokenSymbol = symbol,
+        amountRaw = BigInteger.valueOf(3_000_000),
+        amountDisplay = "3",
+        recipient = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+        recipientLabel = "address",
+        usdCents = usdCents,
+        priceSource = if (usdCents != null) "coingecko" else null,
+        gasLimit = BigInteger.valueOf(21_000),
+        maxFeeWei = BigInteger("63000000000000"),
+        maxFeeUsdCents = 20,
+        nonce = BigInteger.ZERO,
+        maxPriorityFeePerGas = gasPrice ?: BigInteger.valueOf(1_000_000_000),
+        maxFeePerGas = gasPrice ?: BigInteger.valueOf(30_000_000_000),
+        gasPrice = gasPrice
+    )
+
+    @Test
+    fun gateBehavesTheSameOnEveryChain() {
+        // The caps/approval law is chain-blind: the same
+        // prepared value gets the same verdict on a legacy
+        // chain (BSC) and an EIP-1559 chain (Arbitrum).
+        for (p in listOf(
+            preparedOn("bsc", "BNB", gasPrice = BigInteger.valueOf(3_000_000_000)),
+            preparedOn("arbitrum", "ETH"),
+            preparedOn("polygon", "POL"),
+            preparedOn("avalanche", "AVAX"),
+            preparedOn("optimism", "ETH")
+        )) {
+            val needs = WalletGate.decide(
+                p, WalletGate.CapState(),
+                autonomousOn = false, userApproved = false,
+                rawAmountConfirmed = false, nowMs = now
+            )
+            assertEquals("${p.chainKey} unapproved", WalletGate.Decision.NeedsApproval, needs)
+            val allowed = WalletGate.decide(
+                p, WalletGate.CapState(),
+                autonomousOn = false, userApproved = true,
+                rawAmountConfirmed = false, nowMs = now
+            )
+            assertEquals("${p.chainKey} approved", WalletGate.Decision.Allow, allowed)
+            val overCap = WalletGate.decide(
+                p.copy(usdCents = 501), WalletGate.CapState(),
+                autonomousOn = true, userApproved = true,
+                rawAmountConfirmed = true, nowMs = now
+            )
+            assertTrue("${p.chainKey} over cap", overCap is WalletGate.Decision.Refused)
+        }
+    }
+
+    @Test
+    fun approvalSheetNamesTheChainsOwnNativeFee() {
+        // On BNB Smart Chain the fee is BNB, not ETH — the
+        // sheet must never name another chain's asset.
+        val bscText = WalletGate.approvalSheetText(
+            preparedOn("bsc", "BNB", gasPrice = BigInteger.valueOf(3_000_000_000)),
+            "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+        )
+        assertTrue(bscText.contains("on BNB Smart Chain"))
+        assertTrue(bscText.contains("up to 0.000063 BNB"))
+        val avaxText = WalletGate.approvalSheetText(
+            preparedOn("avalanche", "AVAX"),
+            "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+        )
+        assertTrue(avaxText.contains("up to 0.000063 AVAX"))
+    }
+
+    @Test
+    fun bscStableValuationUses18Decimals() {
+        // 3 USDT on BSC is 3 × 10^18 base units — valued at
+        // the same 300 cents as 3 × 10^6 on Ethereum. If the
+        // decimals pin above ever regresses to 6, caps
+        // would be checked against a value 10^12 times too
+        // large; this is the money-side proof.
+        val bscUsdt = WalletGate.token(WalletGate.BSC, "USDT")!!
+        assertEquals(
+            300L,
+            WalletGate.usdCentsOf(
+                BigInteger("3000000000000000000"), bscUsdt, BigDecimal("1.00")
+            )
+        )
+    }
 }

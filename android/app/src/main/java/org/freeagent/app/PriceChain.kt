@@ -99,6 +99,10 @@ object PriceChain {
         "usd-coin" -> listOf("USDCUSD")
         "tether" -> listOf("USDTUSD")
         "weth" -> listOf("XETHZUSD", "ETHUSD") // WETH prices as ETH
+        "binancecoin" -> listOf("BNBUSD")
+        "polygon-ecosystem-token" -> listOf("POLUSD")
+        "avalanche-2" -> listOf("AVAXUSD")
+        "wrapped-avax" -> listOf("AVAXUSD") // WAVAX prices as AVAX
         else -> emptyList()
     }
 
@@ -107,6 +111,9 @@ object PriceChain {
         "ethereum", "weth" -> "ETH"
         "usd-coin" -> "USDC"
         "tether" -> "USDT"
+        "binancecoin" -> "BNB"
+        "polygon-ecosystem-token" -> "POL"
+        "avalanche-2", "wrapped-avax" -> "AVAX"
         else -> null
     }
 }

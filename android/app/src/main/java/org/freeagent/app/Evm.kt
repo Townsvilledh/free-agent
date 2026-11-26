@@ -412,6 +412,49 @@ object Evm {
     /** The transaction hash of a signed raw transaction. */
     fun txHash(rawTx: ByteArray): String = "0x" + bytesToHex(keccak256(rawTx))
 
+    // ---------------- transactions (legacy, type 0, EIP-155) ----------------
+
+    /** The fields of a legacy transaction, in signing order.
+     *  BNB Smart Chain (and only it, in Lille's chain set)
+     *  still prices gas this way: one gasPrice, no fee
+     *  market. Replay protection is EIP-155: the chain id
+     *  is folded into v. */
+    data class TxLegacy(
+        val chainId: BigInteger,
+        val nonce: BigInteger,
+        val gasPrice: BigInteger,
+        val gasLimit: BigInteger,
+        val to: ByteArray,          // 20 bytes; empty for contract creation (unused here)
+        val value: BigInteger,      // wei (native) or 0 for ERC-20 calls
+        val data: ByteArray         // empty for a plain native send
+    )
+
+    /** The EIP-155 signing preimage fields: the six classic
+     *  fields, then chainId, 0, 0. */
+    private fun unsignedFields(tx: TxLegacy): List<Any> = listOf(
+        tx.nonce, tx.gasPrice, tx.gasLimit, tx.to, tx.value, tx.data,
+        tx.chainId, BigInteger.ZERO, BigInteger.ZERO
+    )
+
+    /** keccak(rlp(unsigned fields)) — what gets signed.
+     *  Legacy transactions carry no type byte. */
+    fun signingHash(tx: TxLegacy): ByteArray = keccak256(rlp(unsignedFields(tx)))
+
+    /** Sign and serialise: rlp(six fields, v, r, s) with
+     *  v = chainId × 2 + 35 + yParity (EIP-155). Returns the
+     *  raw transaction bytes for eth_sendRawTransaction. */
+    fun signTx(privateKey: ByteArray, tx: TxLegacy): ByteArray {
+        val sig = sign(privateKey, signingHash(tx))
+        val v = tx.chainId.multiply(BigInteger.TWO)
+            .add(BigInteger.valueOf(35))
+            .add(BigInteger.valueOf((sig.recoveryId and 1).toLong()))
+        val fields = listOf(
+            tx.nonce, tx.gasPrice, tx.gasLimit, tx.to, tx.value, tx.data,
+            v, sig.r, sig.s
+        )
+        return rlp(fields)
+    }
+
     // ---------------- ERC-20 ----------------
 
     /** Function selector: first 4 bytes of keccak(signature). */

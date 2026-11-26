@@ -108,6 +108,67 @@ class WalletPromptTest {
         )
     }
 
+    // ---- the widened chain set (v0.12.4) ----
+
+    @Test
+    fun newChainNamesParse() {
+        assertEquals("arbitrum", parsed("send 2 USDC to @a on arbitrum").chainKey)
+        assertEquals("polygon", parsed("send 2 USDC to @a on polygon").chainKey)
+        assertEquals("bsc", parsed("send 2 USDC to @a on bsc").chainKey)
+        assertEquals("bsc", parsed("send 2 USDC to @a on bnb").chainKey)
+        assertEquals("avalanche", parsed("send 2 USDC to @a on avalanche").chainKey)
+        assertEquals("avalanche", parsed("send 2 USDC to @a on avax").chainKey)
+        assertEquals("optimism", parsed("send 2 USDC to @a on optimism").chainKey)
+    }
+
+    @Test
+    fun newNativeAssetsParseOnTheirOwnChains() {
+        val bnb = parsed("send 0.25 BNB to @ethuram on bsc")
+        assertEquals("BNB", bnb.asset)
+        assertEquals("bsc", bnb.chainKey)
+        val pol = parsed("send 25 POL to @ethuram on polygon")
+        assertEquals("POL", pol.asset)
+        assertEquals("polygon", pol.chainKey)
+        val avax = parsed("pay 1 AVAX to @ethuram on avalanche")
+        assertEquals("AVAX", avax.asset)
+        assertEquals("avalanche", avax.chainKey)
+        val usd = parsed("send \$5 of USDT to @ethuram on bnb")
+        assertEquals("5", usd.usdAmountText)
+        assertEquals("bsc", usd.chainKey)
+    }
+
+    @Test
+    fun assetMustExistOnTheChosenChain() {
+        // BNB is hers — on BNB Smart Chain. On Ethereum it
+        // is a question, never a guess and never a crash.
+        assertTrue(
+            WalletPrompt.parse("send 2 BNB to @ethuram on ethereum")
+                is WalletPrompt.Result.Ambiguous
+        )
+        assertTrue(
+            WalletPrompt.parse("send 2 POL to @ethuram")
+                is WalletPrompt.Result.Ambiguous
+        )
+        assertTrue(
+            WalletPrompt.parse("send 2 WAVAX to @ethuram on base")
+                is WalletPrompt.Result.Ambiguous
+        )
+    }
+
+    @Test
+    fun bscStablesAllow18DecimalAmounts() {
+        // The BSC decimals trap, from the user's side: a
+        // 7-decimal USDC amount is unparseable dust on
+        // Ethereum (6 dp) and a real amount on BSC (18 dp).
+        assertTrue(
+            WalletPrompt.parse("send 0.0000001 USDC to @ethuram")
+                is WalletPrompt.Result.Ambiguous
+        )
+        val i = parsed("send 0.0000001 USDC to @ethuram on bsc")
+        assertEquals("0.0000001", i.amountText)
+        assertEquals("bsc", i.chainKey)
+    }
+
     @Test
     fun ordinaryChatIsNotWallet() {
         assertEquals(

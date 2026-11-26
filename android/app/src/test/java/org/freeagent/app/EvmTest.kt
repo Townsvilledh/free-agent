@@ -117,6 +117,64 @@ class EvmTest {
     }
 
     @Test
+    fun legacyTxMatchesEip155SpecVector() {
+        // The worked example from EIP-155 itself: key
+        // 0x4646…46, nonce 9, 20 gwei, 21000 gas, 1 ether to
+        // 0x3535…35 on chain 1. The expected bytes are the
+        // EIP's own published signed transaction (v = 37).
+        val key = Evm.hexToBytes(
+            "0x4646464646464646464646464646464646464646464646464646464646464646"
+        )
+        val tx = Evm.TxLegacy(
+            chainId = BigInteger.ONE,
+            nonce = BigInteger.valueOf(9),
+            gasPrice = BigInteger.valueOf(20_000_000_000),
+            gasLimit = BigInteger.valueOf(21_000),
+            to = Evm.hexToBytes("0x3535353535353535353535353535353535353535"),
+            value = BigInteger("1000000000000000000"),
+            data = ByteArray(0)
+        )
+        assertEquals(
+            "daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53",
+            Evm.bytesToHex(Evm.signingHash(tx))
+        )
+        val raw = Evm.signTx(key, tx)
+        assertEquals(
+            "f86c098504a817c800825208943535353535353535353535353535353535353535" +
+                "880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15" +
+                "d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555" +
+                "c9f3dc64214b297fb1966a3b6d83",
+            Evm.bytesToHex(raw)
+        )
+        // A legacy transaction has NO type byte: it starts
+        // with the RLP list header itself.
+        assertTrue(raw[0].toInt() and 0xff >= 0xc0)
+    }
+
+    @Test
+    fun legacyTxOnBscChainIdRecovers() {
+        // Chain 56 (BNB Smart Chain): v must land in
+        // {56*2+35, 56*2+36} = {147, 148} — replay
+        // protection is the chain id, folded in by EIP-155.
+        val tx = Evm.TxLegacy(
+            chainId = BigInteger.valueOf(56),
+            nonce = BigInteger.ZERO,
+            gasPrice = BigInteger.valueOf(3_000_000_000),
+            gasLimit = BigInteger.valueOf(21_000),
+            to = Evm.hexToBytes("0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"),
+            value = BigInteger.valueOf(1_000_000_000_000_000),
+            data = ByteArray(0)
+        )
+        val sig = Evm.sign(keyOne, Evm.signingHash(tx))
+        assertEquals(
+            Evm.addressOf(keyOne),
+            Evm.recoverAddress(Evm.signingHash(tx), sig)
+        )
+        val raw = Evm.signTx(keyOne, tx)
+        assertTrue(Evm.txHash(raw).startsWith("0x"))
+    }
+
+    @Test
     fun erc20TransferCalldata() {
         val data = Evm.erc20TransferData(
             "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
