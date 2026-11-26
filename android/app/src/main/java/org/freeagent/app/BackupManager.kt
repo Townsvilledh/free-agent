@@ -51,6 +51,7 @@ object BackupManager {
             chatsText = ChatStore(app).rawText(),
             tasksText = TaskStore(app).rawText(),
             proactiveText = ProactiveStore(app).rawText(),
+            referralsText = ReferralStore(app).rawText(),
             prefs = prefsSnapshot,
             vaultSecrets = vault.exportSecrets(),
             vaultAccounts = vault.exportAccountsJson(),
@@ -271,6 +272,10 @@ object BackupManager {
             parsed.chatsText?.let { ChatStore(app).replaceRaw(it) }
             parsed.tasksText?.let { TaskStore(app).replaceRaw(it) }
             parsed.proactiveText?.let { ProactiveStore(app).replaceRaw(it) }
+            // Referrals merge rather than replace (REFERRALS.md):
+            // records imported since the backup was taken must
+            // survive a restore, and first referrer wins.
+            parsed.referralsText?.let { ReferralStore(app).mergeFrom(it) }
             for ((file, entries) in parsed.prefs) {
                 if (file == "lille_backup") {
                     BackupPrefs.applyPayloadSnapshot(BackupPrefs(app), entries)

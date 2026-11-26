@@ -31,6 +31,31 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Referrals (REFERRALS.md): invite links. The
+                 https filter is a verified App Link
+                 (docs/.well-known/assetlinks.json is served
+                 from the same Pages site); the lille://
+                 scheme is the landing page's open-in-app
+                 path for copies where verification is not in
+                 place. Both land in MainActivity, which hands
+                 the inviter to ReferralStore. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="townsvilledh.github.io"
+                    android:pathPrefix="/free-agent/invite" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="lille"
+                    android:host="invite" />
+            </intent-filter>
         </activity>
 
         <!-- v0.11: multiple chats — the conversation list.

@@ -68,6 +68,28 @@
             android:textColor="#F5EFE7"
             android:textColorHint="#8A8378" />
 
+        <!-- Referrals (REFERRALS.md): the optional inviter
+             field. Pre-filled when an invite link reached the
+             app first; the user can edit or clear it. What
+             stands here at the first successful connection is
+             the inviter who counts. -->
+        <EditText
+            android:id="@+id/inviterNameInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_composer"
+            android:hint="@string/referral_inviter_hint"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1"
+            android:paddingStart="16dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="12dp"
+            android:textColor="#F5EFE7"
+            android:textColorHint="#8A8378" />
+
         <Button
             android:id="@+id/fluidConnectButton"
             android:layout_width="match_parent"

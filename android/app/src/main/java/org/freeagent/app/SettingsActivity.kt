@@ -1,5 +1,8 @@
 package org.freeagent.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
@@ -8,6 +11,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -15,8 +20,10 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Settings — who Lille is connected as, her wallet,
- * backup & restore, your own API keys (v0.12.1), and
- * disconnecting the Fluid name. The disconnect mirrors
+ * backup & restore, Lille invites (referrals — the user's
+ * link, share action, completed-invite count and the
+ * export/import sync; REFERRALS.md), your own API keys
+ * (v0.12.1), and disconnecting the Fluid name. The disconnect mirrors
  * the one on the Tasks screen (same FluidLogin call): it
  * ends every WalletConnect session and forgets the stored
  * identity, so the login gate runs again on next open.
@@ -33,6 +40,57 @@ import java.util.concurrent.TimeUnit
 class SettingsActivity : AppCompatActivity() {
 
     private val vault by lazy { DeviceVault(this) }
+    private val referralStore by lazy { ReferralStore(this) }
+    private lateinit var referralCountView: TextView
+
+    /** Referrals sync (REFERRALS.md): export writes the
+     *  ledger's completed records as JSON to a file the user
+     *  picks; import merges a file back in, first referrer
+     *  wins. The user's own two phones are the framed use;
+     *  the same export is the back-end count's input. */
+    private val exportInvites = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(referralStore.exportText().toByteArray(Charsets.UTF_8))
+            }
+            Toast.makeText(this, "Invite list exported.", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(
+                this, "That export couldn't be written.", Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private val importInvites = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            val text = contentResolver.openInputStream(uri)?.use {
+                it.readBytes().toString(Charsets.UTF_8)
+            }
+            val added = referralStore.mergeFrom(text)
+            refreshReferralCount()
+            Toast.makeText(
+                this,
+                if (added > 0) {
+                    "Imported — $added new completed invite(s) counted."
+                } else {
+                    "Nothing new in that file — your count is already in step."
+                },
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Toast.makeText(
+                this, "That file couldn't be read as an invite list.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     private val testClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -63,6 +121,7 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.settingsBackupButton).setOnClickListener {
             startActivity(Intent(this, BackupActivity::class.java))
         }
+        buildReferralBlock(identity)
         findViewById<Button>(R.id.settingsDisconnectButton).setOnClickListener {
             val store = FluidIdentityStore(this)
             FluidLogin.init(this)
@@ -78,6 +137,63 @@ class SettingsActivity : AppCompatActivity() {
         for (spec in OwnKeyRoutes.SPECS) {
             container.addView(buildKeyBlock(spec))
         }
+    }
+
+    /** The referrals block (REFERRALS.md): the user's
+     *  personal invite link (selectable, copyable), the
+     *  share action, the completed-invite count from the
+     *  on-device ledger, and export/import sync. The copy
+     *  is Lille invites only — nothing here names the
+     *  login's other product or the back-end count. */
+    private fun buildReferralBlock(identity: FluidIdentityStore.Identity?) {
+        val linkView = findViewById<TextView>(R.id.settingsReferralLink)
+        referralCountView = findViewById(R.id.settingsReferralCount)
+        val link = identity?.let { Referrals.inviteLink(it.username) }
+        linkView.text = link ?: "Sign in first — your invite link carries your name."
+        refreshReferralCount()
+
+        findViewById<Button>(R.id.settingsReferralShareButton).setOnClickListener {
+            val pitch = identity?.let { Referrals.shareText(it.username) }
+            if (pitch == null) {
+                Toast.makeText(
+                    this, "Sign in first — then your link is ready to share.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@setOnClickListener
+            }
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, pitch)
+            }
+            startActivity(Intent.createChooser(send, "Share your Lille invite"))
+        }
+        findViewById<Button>(R.id.settingsReferralCopyButton).setOnClickListener {
+            if (link == null) {
+                Toast.makeText(
+                    this, "Sign in first — then your link is ready to copy.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                return@setOnClickListener
+            }
+            val clipboard =
+                getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Lille invite link", link))
+            Toast.makeText(this, "Invite link copied.", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<Button>(R.id.settingsReferralExportButton).setOnClickListener {
+            exportInvites.launch("lille-invites.json")
+        }
+        findViewById<Button>(R.id.settingsReferralImportButton).setOnClickListener {
+            importInvites.launch(arrayOf("application/json", "text/plain", "*/*"))
+        }
+    }
+
+    private fun refreshReferralCount() {
+        if (!::referralCountView.isInitialized) return
+        val identity = FluidIdentityStore(this).load()
+        referralCountView.text =
+            "Friends who joined through your invite: " +
+                referralStore.completedCount(identity?.username)
     }
 
     private fun dp(value: Int): Int =

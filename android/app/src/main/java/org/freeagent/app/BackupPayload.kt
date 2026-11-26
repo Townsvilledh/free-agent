@@ -17,6 +17,8 @@ import org.json.JSONObject
  *   "chats":    "<lille_chats.json text>"     (optional),
  *   "tasks":    "<lille_tasks.json text>"     (optional),
  *   "proactive":"<lille_proactive.json text>" (optional),
+ *   "referrals":"<lille_referrals.json text>" (optional — merged,
+ *                never overwritten, on restore: first referrer wins),
  *   "prefs":    {"<prefs file>": {"<key>": {"t":..,"v":..}}},
  *   "vault":    {"secrets": {"<key name>": "<secret value>"},
  *                "accounts": "<lille_accounts 'accounts' string>"},
@@ -49,7 +51,8 @@ object BackupPayload {
         val prefs: Map<String, Map<String, Any?>>,
         val vaultSecrets: Map<String, String>,
         val vaultAccounts: String?,
-        val sessions: Map<String, String>
+        val sessions: Map<String, String>,
+        val referralsText: String? = null
     )
 
     fun build(
@@ -62,7 +65,8 @@ object BackupPayload {
         prefs: Map<String, Map<String, Any?>>,
         vaultSecrets: Map<String, String>,
         vaultAccounts: String?,
-        sessions: Map<String, String>?
+        sessions: Map<String, String>?,
+        referralsText: String? = null
     ): String {
         val root = JSONObject()
             .put("version", PAYLOAD_VERSION)
@@ -72,6 +76,7 @@ object BackupPayload {
         if (chatsText != null) root.put("chats", chatsText)
         if (tasksText != null) root.put("tasks", tasksText)
         if (proactiveText != null) root.put("proactive", proactiveText)
+        if (referralsText != null) root.put("referrals", referralsText)
         root.put("prefs", encodePrefs(prefs))
         val vault = JSONObject()
         val secrets = JSONObject()
@@ -123,7 +128,8 @@ object BackupPayload {
                 prefs = decodePrefs(root.optJSONObject("prefs") ?: JSONObject()),
                 vaultSecrets = secrets,
                 vaultAccounts = vault?.optString("accounts", "")?.takeIf { it.isNotEmpty() },
-                sessions = sessions
+                sessions = sessions,
+                referralsText = root.optString("referrals", "").takeIf { it.isNotEmpty() }
             )
         } catch (e: Exception) {
             null
