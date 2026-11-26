@@ -1,0 +1,130 @@
+[
+ {
+  "action": "goto",
+  "url": "https://fluidwallet.dpdns.org/",
+  "settle": 6
+ },
+ {
+  "action": "click_if_text",
+  "text": "Create new wallet",
+  "settle": 2
+ },
+ {
+  "action": "wait_selector",
+  "selector": "#createName",
+  "timeout": 30
+ },
+ {
+  "action": "type",
+  "selector": "#createName",
+  "text": "lille_login_f1"
+ },
+ {
+  "action": "type",
+  "selector": "#createPw",
+  "text": "demo-pass-1234"
+ },
+ {
+  "action": "type",
+  "selector": "#createPw2",
+  "text": "demo-pass-1234"
+ },
+ {
+  "action": "click_selector",
+  "selector": "#createBtn",
+  "settle": 4
+ },
+ {
+  "action": "wait_selector",
+  "selector": "#seedCheck",
+  "timeout": 30
+ },
+ {
+  "action": "check",
+  "selector": "#seedCheck"
+ },
+ {
+  "action": "click_selector",
+  "selector": "#seedDoneBtn",
+  "settle": 2
+ },
+ {
+  "action": "click_text",
+  "text": "I'll confirm later",
+  "settle": 8
+ },
+ {
+  "action": "wait_selector",
+  "selector": "#ncSkipBtn",
+  "timeout": 90
+ },
+ {
+  "action": "click_selector",
+  "selector": "#ncSkipBtn",
+  "settle": 5
+ },
+ {
+  "action": "screenshot",
+  "name": "fluid-home",
+  "hold": 4,
+  "caption": "Fluid is open"
+ },
+ {
+  "action": "click_text",
+  "text": "More",
+  "settle": 2
+ },
+ {
+  "action": "screenshot",
+  "name": "more-menu",
+  "hold": 3,
+  "caption": "Tap More"
+ },
+ {
+  "action": "click_text",
+  "text": "WalletConnect",
+  "settle": 5
+ },
+ {
+  "action": "screenshot",
+  "name": "wc-panel",
+  "hold": 4,
+  "caption": "Open WalletConnect"
+ },
+ {
+  "action": "type",
+  "selector": "#wcUri",
+  "text": "wc:3c9caa7b240917a9337b24fdd561c998a65c261adfcb3903e73a9fa47d176ae1@2?expiryTimestamp=1795701590&relay-protocol=irn&symKey=906261784736b9d9b5a7ea2e020330dadb874d353b500ef311c19aae8a410029"
+ },
+ {
+  "action": "screenshot",
+  "name": "wc-typed",
+  "hold": 4,
+  "caption": "Paste the code from Lille"
+ },
+ {
+  "action": "click_selector",
+  "selector": "#wcConnectBtn",
+  "settle": 1
+ },
+ {
+  "action": "wait",
+  "seconds": 12
+ },
+ {
+  "action": "screenshot",
+  "name": "state-1",
+  "hold": 3,
+  "caption": "Pairing"
+ },
+ {
+  "action": "wait",
+  "seconds": 12
+ },
+ {
+  "action": "screenshot",
+  "name": "state-2",
+  "hold": 3,
+  "caption": "Pairing"
+ }
+]

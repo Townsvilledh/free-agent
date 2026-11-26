@@ -1,0 +1,32 @@
+# Lille — login walkthrough video (Fluid name + WalletConnect)
+
+## Goal
+Produce ONE finished MP4 video that teaches a brand-new user how to log in to Lille with their Fluid name, step by step, slowly enough to follow with their own phone in hand. The Fluid half is filmed live from the real Fluid web app with the capture tool, using the prepared steps file at repo/live-tests/login-assets/fluid-steps.json (it creates a throwaway demo wallet named lille_login_f1, opens More -> WalletConnect, pastes a real pairing code, and taps Connect). The Lille ending is a genuine screenshot of the connected app at repo/live-tests/login-assets/lille-connected.png. The steps that happen inside the Lille app (typing the name, copying the code) and the approval moment are taught with designed cards in Lille's branding — true black #000000, white #f5f5f5, Bitcoin orange #f7931a, mascot — and the cards must read as cards, never as screenshots.
+
+WORK PLAN — make these calls in this order, with these arguments exactly (paths, texts and numbers copied character for character; do not invent extra calls, do not rename any file, do not read or list the repo to re-check anything — everything you need is in this plan):
+
+1. capture_walkthrough with args {"steps_file": "repo/live-tests/login-assets/fluid-steps.json"} — call it ONCE. It returns CAPTURE_OK with frames in the capture folder (001-fluid-home.png, 002-more-menu.png, 003-wc-panel.png, 004-wc-typed.png, 005-state-1.png and more state frames — you will use only the five named in the assembly below).
+2. render_card five times, once per card, with bg "#000000", fg "#f5f5f5", accent "#f7931a", width 720, height 1280 and:
+   a. {"heading": "Logging in to Lille", "lines": ["Your Fluid name is your key.", "A one-minute walkthrough"], "mascot": "jacket", "out": "repo/cards/title.png", "bg": "#000000", "fg": "#f5f5f5", "accent": "#f7931a", "width": 720, "height": 1280}
+   b. {"heading": "Step 1 — Type your Fluid name", "lines": ["Open Lille.", "Type the username you use in Fluid —", "the name on your Fluid wallet."], "mascot": "cap", "out": "repo/cards/step1.png", "bg": "#000000", "fg": "#f5f5f5", "accent": "#f7931a", "width": 720, "height": 1280}
+   c. {"heading": "Step 2 — Copy the code", "lines": ["Lille shows a long pairing code", "starting with wc: — tap Copy.", "Now switch to Fluid."], "mascot": "working", "out": "repo/cards/step2.png", "bg": "#000000", "fg": "#f5f5f5", "accent": "#f7931a", "width": 720, "height": 1280}
+   d. {"heading": "Step 4 — Approve in Fluid", "lines": ["Fluid shows a Connection request", "from Lille. Check the name,", "then tap Connect to approve."], "mascot": "jacket", "out": "repo/cards/step4.png", "bg": "#000000", "fg": "#f5f5f5", "accent": "#f7931a", "width": 720, "height": 1280}
+   e. {"heading": "You are in", "lines": ["Lille remembers you on this phone.", "Get Lille: townsvilledh.github.io/free-agent"], "mascot": "cap", "out": "repo/cards/end.png", "bg": "#000000", "fg": "#f5f5f5", "accent": "#f7931a", "width": 720, "height": 1280}
+3. narrate ONCE with args {"lines": ["Logging in to Lille takes about a minute — and your Fluid name is the only key you need.", "Step one. Open Lille and type your Fluid username — the same name you use in the Fluid wallet.", "Step two. Lille shows you a pairing code, starting with wc. Tap copy.", "Step three. Now open Fluid.", "Tap More, at the bottom of the screen.", "Then tap WalletConnect.", "Paste the code you copied from Lille into this box.", "Tap Connect, and give it a moment to pair.", "Step four. Fluid shows you who is asking. Check that it says Lille — then tap Connect to approve.", "Step five. Go back to Lille. She is already open, connected with your Fluid name.", "That is the whole login. No password, and no API key — Lille remembers you on this phone."], "out_dir": "repo/narration"}
+4. assemble_video ONCE with args {"scenes": [{"image": "repo/cards/title.png", "hold": 5, "caption": "Logging in to Lille"}, {"image": "repo/cards/step1.png", "hold": 6, "caption": "Step 1 — Type your Fluid name"}, {"image": "repo/cards/step2.png", "hold": 6, "caption": "Step 2 — Copy the code Lille shows you"}, {"image": "capture/001-fluid-home.png", "hold": 4, "caption": "Step 3 — Open Fluid"}, {"image": "capture/002-more-menu.png", "hold": 3, "caption": "Tap More"}, {"image": "capture/003-wc-panel.png", "hold": 4, "caption": "Tap WalletConnect"}, {"image": "capture/004-wc-typed.png", "hold": 5, "caption": "Paste the code from Lille"}, {"image": "capture/005-state-1.png", "hold": 5, "caption": "Tap Connect — Fluid pairs with Lille"}, {"image": "repo/cards/step4.png", "hold": 6, "caption": "Step 4 — Check it says Lille, then tap Connect"}, {"image": "repo/live-tests/login-assets/lille-connected.png", "hold": 6, "caption": "Step 5 — Back in Lille: you are connected"}, {"image": "repo/cards/end.png", "hold": 6, "caption": "Your Fluid name is your login"}], "narration_dir": "repo/narration", "out": "repo/live-tests/2026-11-26-lille-login-walkthrough.mp4"}
+5. verify_video ONCE with args {"path": "repo/live-tests/2026-11-26-lille-login-walkthrough.mp4"}
+Then finish, listing the MP4 as the only output.
+
+CALL DISCIPLINE: exactly one capture_walkthrough, five render_card, one narrate, one assemble_video, one verify_video, in the order above. If a call returns an error, read it and retry THAT call once with corrected arguments; never substitute a different tool for any step, never write the steps file yourself (it already exists at the path in step 1), and never use any state frame beyond 005-state-1.png.
+
+## Hard rules
+- The finished MP4 must land at repo/live-tests/2026-11-26-lille-login-walkthrough.mp4 — no other output path.
+- Real footage only: the Fluid scenes come from the capture in step 1 and the Lille ending from the staged genuine screenshot. The cards teach the in-app steps; they must not imitate screenshots.
+- No "₿itcoin or nothing" anywhere — that slogan is not Lille's branding.
+- The narration lines and card texts are final copy — use them exactly as written in the plan.
+- The demo wallet created during filming is a throwaway; its seed screen is never a scene in this video.
+
+## Acceptance criteria
+- The finished video's duration is between 70 and 130 seconds, measured with ffprobe on the final MP4.
+- The finished video has spoken narration or burned-in captions throughout.
+- Cost: $0 — keyless routes only.
