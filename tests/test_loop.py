@@ -2,7 +2,7 @@
 import json, os, shutil, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from free_agent.loop import TaskLoop
+from free_agent.loop import TaskLoop, parse_text_tool_call
 from free_agent import sandbox
 
 
@@ -121,6 +121,35 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(res.status, "done")
         with open(os.path.join(res.task_dir, "a.txt")) as f:
             self.assertEqual(f.read(), "hi")
+
+    def test_xml_dialect_tool_calls(self):
+        # Dialect seen live 2026-11-26 (AI Horde community model):
+        # <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value>.
+        # Before the parser learned it, a spec run died BLOCKED
+        # with three well-formed calls read as plain text.
+        loop = self.make_loop([
+            text('<tool_call>write_file<arg_key>path</arg_key>'
+                 '<arg_value>a.txt</arg_value><arg_key>content'
+                 '</arg_key><arg_value>hi</arg_value></tool_call>'),
+            text('<tool_call>finish<arg_key>summary</arg_key>'
+                 '<arg_value>wrote a.txt</arg_value><arg_key>outputs'
+                 '</arg_key><arg_value>["a.txt"]</arg_value></tool_call>'),
+        ])
+        res = loop.run("use the xml dialect")
+        self.assertEqual(res.status, "done")
+        with open(os.path.join(res.task_dir, "a.txt")) as f:
+            self.assertEqual(f.read(), "hi")
+
+    def test_xml_dialect_decodes_json_values(self):
+        call, err = parse_text_tool_call(
+            '<tool_call>narrate<arg_key>lines</arg_key>'
+            '<arg_value>["one", "two"]</arg_value>'
+            '<arg_key>count</arg_key><arg_value>2</arg_value>'
+            '</tool_call>')
+        self.assertIsNone(err)
+        self.assertEqual(call["name"], "narrate")
+        self.assertEqual(call["args"]["lines"], ["one", "two"])
+        self.assertEqual(call["args"]["count"], 2)
 
     def test_sandbox_run_python_captures_and_times_out(self):
         d = os.path.join(self.root, "t")

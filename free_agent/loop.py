@@ -49,6 +49,10 @@ Rules:
 """
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
+_TOOLCALL_XML_RE = re.compile(
+    r"<tool_call>\s*([A-Za-z_][\w.-]*)\s*(.*?)</tool_call>", re.S)
+_ARG_PAIR_RE = re.compile(
+    r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S)
 
 @dataclass
 class Step:
@@ -86,6 +90,25 @@ def parse_text_tool_call(content):
     reply clearly TRIED to make a tool call but it was malformed."""
     if not content:
         return None, None
+    # Dialect seen live (2026-11-26, AI Horde community models on
+    # the loop path): an XML-ish tool call —
+    #   <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>
+    # It cost a whole spec run before it was recognised (three
+    # well-formed calls read as plain text; the nudge budget ran
+    # out). Values that parse as JSON (arrays, objects, numbers)
+    # are decoded; anything else stays a string.
+    tm = _TOOLCALL_XML_RE.search(content)
+    if tm:
+        pairs = _ARG_PAIR_RE.findall(tm.group(2))
+        if pairs or not tm.group(2).strip():
+            args = {}
+            for k, v in pairs:
+                v = v.strip()
+                try:
+                    args[k.strip()] = json.loads(v)
+                except ValueError:
+                    args[k.strip()] = v
+            return {"name": tm.group(1), "args": args}, None
     m = _FENCE_RE.search(content)
     candidate = None
     if m:
