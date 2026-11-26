@@ -32,13 +32,48 @@ object FluidGate {
     const val REGISTRY_URL = "https://fluidwallet.dpdns.org/names.json"
     const val REGISTRY_FALLBACK_URL = "https://fluidwallet.netlify.app/names.json"
 
-    /** Fluid's WalletConnect is EVM-only in v1, so the session
-     *  requests exactly one chain and one method. personal_sign
-     *  is the least privilege that proves wallet control; no
-     *  transaction method is ever requested (LOGIN.md). */
+    /** Fluid's WalletConnect is EVM-only in v1. The login
+     *  itself needs only chain eip155:1 and personal_sign —
+     *  the least privilege that proves wallet control.
+     *
+     *  v0.13.1 widens the session PROPOSAL (see
+     *  [proposalChains] / [proposalMethods]): the session
+     *  also asks for eth_sendTransaction on every chain her
+     *  companion wallet operates on, so a main-wallet send
+     *  can be requested over the same session later
+     *  ("sign where you stand", WALLET.md). Fluid has
+     *  accepted eth_sendTransaction over WalletConnect all
+     *  along — the earlier gate was Lille's own minimal
+     *  proposal: WalletKit rejects any method the session
+     *  never granted. Identity verification is unchanged:
+     *  it still reads the connected eip155 account (any
+     *  chain's spelling of it) against the registry.
+     *
+     *  A wallet may approve LESS than proposed (an older
+     *  Fluid, or a user-narrowed approval): the login then
+     *  still works, and FluidTx degrades transaction
+     *  requests to an honest "unavailable" — never a crash,
+     *  never a silent failure. */
     const val CHAIN_ID = "eip155:1"
     const val NAMESPACE = "eip155"
     const val METHOD_PERSONAL_SIGN = "personal_sign"
+    const val METHOD_SEND_TRANSACTION = "eth_sendTransaction"
+
+    /** Every chain the session proposal asks for, as CAIP-2
+     *  strings — exactly her companion wallet's EVM chains
+     *  (WalletGate.CHAINS), in the same order. */
+    fun proposalChains(): List<String> =
+        WalletGate.CHAINS.map { "$NAMESPACE:${it.chainId}" }
+
+    /** Every method the session proposal asks for:
+     *  personal_sign (identity + the backup key) and
+     *  eth_sendTransaction (main-wallet sends). */
+    fun proposalMethods(): List<String> =
+        listOf(METHOD_PERSONAL_SIGN, METHOD_SEND_TRANSACTION)
+
+    /** The CAIP-2 chain id for a WalletGate chain key. */
+    fun caipChainId(chainKey: String): String? =
+        WalletGate.chainByKey(chainKey)?.let { "$NAMESPACE:${it.chainId}" }
 
     /** What the startup gate should do. */
     enum class Decision { OPEN, LOGIN, LOGIN_PREFILLED }

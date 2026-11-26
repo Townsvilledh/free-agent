@@ -147,23 +147,31 @@ class LoginActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.openFluidSheetButton).setOnClickListener {
             // "Sign where you stand" (v0.12): Fluid opens
-            // INSIDE Lille — no app-switching. The pairing
-            // code rides the clipboard, because Fluid has no
-            // wc: deep link today (its WalletConnect panel is
-            // paste-only — checked against Fluid's source,
-            // 2026-11-26). The approval still reaches the
-            // session listener below: this screen stays alive
-            // under the sheet.
+            // INSIDE Lille — no app-switching. Since v0.13.1
+            // the pairing code rides Fluid's #wc= DEEP LINK
+            // (Fluid build stamp 4d7f509193): the sheet loads
+            // Fluid straight at its WalletConnect panel with
+            // the pairing started — no paste step. The code
+            // still goes to the clipboard as the fallback: if
+            // the deep-link load fails, the sheet lands on
+            // Fluid's plain page and the paste flow works
+            // exactly as before. The approval reaches the
+            // session listener below either way: this screen
+            // stays alive under the sheet.
+            val code = pairingCode.text.toString()
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(
-                ClipData.newPlainText("Lille WalletConnect code", pairingCode.text.toString())
+                ClipData.newPlainText("Lille WalletConnect code", code)
             )
             Toast.makeText(
                 this,
-                "Code copied — in Fluid: More → WalletConnect → paste → Approve.",
+                "Opening Fluid here — unlock it and approve the connection.",
                 Toast.LENGTH_LONG
             ).show()
-            startActivity(Intent(this, FluidSheetActivity::class.java))
+            startActivity(
+                Intent(this, FluidSheetActivity::class.java)
+                    .putExtra(FluidSheetActivity.EXTRA_PAIRING_URI, code)
+            )
         }
         findViewById<Button>(R.id.cancelPairingButton).setOnClickListener {
             busy = false

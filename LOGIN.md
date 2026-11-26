@@ -48,12 +48,20 @@ from scratch.
 ## The fine print, plainly
 
 - **EVM only.** Fluid's WalletConnect speaks eip155 only in
-  v1, so the session requests exactly one namespace (eip155),
-  one chain (`eip155:1`), and one method: **`personal_sign`**.
-  No transaction method is requested, ever — the session
-  exists to prove which wallet owns a name, nothing more.
-  Lille never asks the connected wallet to sign or send
-  anything as part of login.
+  v1. At login (v0.10–v0.12) the session requested exactly
+  one chain (`eip155:1`) and one method, **`personal_sign`** —
+  the least privilege that proves which wallet owns a name,
+  and Lille never asks the connected wallet to sign or send
+  anything as part of login. **Since v0.13.1** the proposal
+  also asks for **`eth_sendTransaction`** on every chain her
+  companion wallet operates on, so a main-wallet send can be
+  requested over the same session later (WALLET.md,
+  "Main-wallet sends"). The login itself is unchanged — the
+  registry ownership check reads the connected account
+  exactly as before — and a wallet that approves only
+  `personal_sign` still logs in fine; transaction requests
+  then simply report unavailable. Approving a transaction is
+  always a separate act, on Fluid's own sheet, per send.
 - **An identity + promotion gate, not a security wall.**
   Lille is open source; the gate decides what the shipped
   app does, it cannot make any copy tamper-proof. Its job is

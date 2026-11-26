@@ -169,6 +169,45 @@ class WalletPromptTest {
         assertEquals("bsc", i.chainKey)
     }
 
+    // ---- the source clause (v0.13.1) ----
+
+    @Test
+    fun defaultSourceIsHerOwnWallet() {
+        val i = parsed("send 2 USDC to @ethuram")
+        assertEquals(WalletPrompt.Source.COMPANION, i.source)
+    }
+
+    @Test
+    fun fromFluidChoosesTheMainWallet() {
+        val i = parsed("send 2 USDC to @ethuram from fluid")
+        assertEquals(WalletPrompt.Source.FLUID, i.source)
+        assertEquals("USDC", i.asset)
+        assertEquals("ethereum", i.chainKey)
+    }
+
+    @Test
+    fun fromMyFluidWalletWithChain() {
+        val i = parsed("send 0.5 eth to @ethuram on base from my fluid wallet")
+        assertEquals(WalletPrompt.Source.FLUID, i.source)
+        assertEquals("base", i.chainKey)
+        assertEquals("ETH", i.asset)
+    }
+
+    @Test
+    fun fromFluidOnTheUsdForm() {
+        val i = parsed("send \$3 of ETH to @ethuram from fluid")
+        assertEquals(WalletPrompt.Source.FLUID, i.source)
+        assertEquals("3", i.usdAmountText)
+    }
+
+    @Test
+    fun fromFluidToleratesPleaseAndFullStop() {
+        val i = parsed("pay 1 USDT to @ethuram from fluid please")
+        assertEquals(WalletPrompt.Source.FLUID, i.source)
+        val j = parsed("send 2 USDC to @ethuram from my fluid wallet.")
+        assertEquals(WalletPrompt.Source.FLUID, j.source)
+    }
+
     @Test
     fun ordinaryChatIsNotWallet() {
         assertEquals(

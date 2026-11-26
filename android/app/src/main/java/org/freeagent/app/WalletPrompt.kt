@@ -14,11 +14,19 @@ package org.freeagent.app
  * Supported phrasings (case-insensitive; the whole message
  * must match, an optional trailing "." or "please" allowed):
  *
- *   send <amount> <ASSET> to <target> [on <chain>]
- *   pay  <amount> <ASSET> to <target> [on <chain>]
- *   send $<amount> of <ASSET> to <target> [on <chain>]
- *   pay  $<amount> of <ASSET> to <target> [on <chain>]
+ *   send <amount> <ASSET> to <target> [on <chain>] [from fluid]
+ *   pay  <amount> <ASSET> to <target> [on <chain>] [from fluid]
+ *   send $<amount> of <ASSET> to <target> [on <chain>] [from fluid]
+ *   pay  $<amount> of <ASSET> to <target> [on <chain>] [from fluid]
  *   send <amount> dollars of <ASSET> to <target> [on <chain>]
+ *
+ *   The optional trailing "from fluid" / "from my fluid
+ *   wallet" clause (v0.13.1) chooses the SOURCE: the user's
+ *   main Fluid wallet instead of Lille's own. Without it a
+ *   send is hers (the default, unchanged since v0.12). A
+ *   Fluid-wallet send is a different flow entirely — she
+ *   prepares it and Fluid's own sheet approves it (FluidTx);
+ *   her caps and her signer never touch main funds.
  *
  *   <amount>  a plain decimal: 2, 2.5, 0.05 (no commas, no
  *             exponent, no words)
@@ -38,6 +46,11 @@ package org.freeagent.app
  */
 object WalletPrompt {
 
+    /** Where a send's funds come from: her own companion
+     *  wallet (the default), or the user's main Fluid wallet
+     *  (requested over the session, approved in Fluid). */
+    enum class Source { COMPANION, FLUID }
+
     data class SendIntent(
         /** Token amount as typed (token-denominated forms). */
         val amountText: String?,
@@ -46,7 +59,8 @@ object WalletPrompt {
         val asset: String,              // uppercase symbol
         val targetRaw: String,          // as typed
         val targetIsName: Boolean,
-        val chainKey: String            // WalletGate chain key
+        val chainKey: String,           // WalletGate chain key
+        val source: Source = Source.COMPANION
     )
 
     sealed class Result {
@@ -61,10 +75,10 @@ object WalletPrompt {
     private val ASSETS = WalletGate.SUPPORTED_SYMBOLS
 
     private val TOKEN_FORM = Regex(
-        """^(?:send|pay)\s+(\d+(?:\.\d+)?)\s+([a-zA-Z]+)\s+to\s+(\S+)(?:\s+on\s+([a-zA-Z]+))?$"""
+        """^(?:send|pay)\s+(\d+(?:\.\d+)?)\s+([a-zA-Z]+)\s+to\s+(\S+)(?:\s+on\s+([a-zA-Z]+))?(\s+from\s+(?:my\s+)?fluid(?:\s+wallet)?)?$"""
     )
     private val USD_FORM = Regex(
-        """^(?:send|pay)\s+(?:\$(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s+dollars)\s+of\s+([a-zA-Z]+)\s+to\s+(\S+)(?:\s+on\s+([a-zA-Z]+))?$"""
+        """^(?:send|pay)\s+(?:\$(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s+dollars)\s+of\s+([a-zA-Z]+)\s+to\s+(\S+)(?:\s+on\s+([a-zA-Z]+))?(\s+from\s+(?:my\s+)?fluid(?:\s+wallet)?)?$"""
     )
     private val NAME_RE = Regex("""^[A-Za-z0-9_.\-]{2,32}$""")
 
@@ -90,14 +104,24 @@ object WalletPrompt {
 
         TOKEN_FORM.matchEntire(text)?.let { m ->
             val (amount, assetRaw, target, chainRaw) = m.destructured
-            return finish(amount, null, assetRaw, target, chainRaw)
+            val source = if (m.groupValues[5].isNotEmpty()) {
+                Source.FLUID
+            } else {
+                Source.COMPANION
+            }
+            return finish(amount, null, assetRaw, target, chainRaw, source)
         }
         USD_FORM.matchEntire(text)?.let { m ->
             val usd = m.groupValues[1].ifEmpty { m.groupValues[2] }
             val assetRaw = m.groupValues[3]
             val target = m.groupValues[4]
             val chainRaw = m.groupValues[5]
-            return finish(null, usd, assetRaw, target, chainRaw)
+            val source = if (m.groupValues[6].isNotEmpty()) {
+                Source.FLUID
+            } else {
+                Source.COMPANION
+            }
+            return finish(null, usd, assetRaw, target, chainRaw, source)
         }
 
         // It began like a send but matched neither form: ask,
@@ -133,7 +157,8 @@ object WalletPrompt {
         usdAmountText: String?,
         assetRaw: String,
         targetRaw: String,
-        chainRaw: String
+        chainRaw: String,
+        source: Source = Source.COMPANION
     ): Result {
         val asset = assetRaw.uppercase()
         if (asset !in ASSETS) {
@@ -209,7 +234,8 @@ object WalletPrompt {
                 asset = asset,
                 targetRaw = targetRaw,
                 targetIsName = isName,
-                chainKey = chainKey
+                chainKey = chainKey,
+                source = source
             )
         )
     }
