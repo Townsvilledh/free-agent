@@ -82,8 +82,13 @@ class Config:
             # walks (OwnKeyRoutes). Keys come from the environment ONLY;
             # absent = the route is simply not in the chain.
             # Groq free tier. External provider => not trusted by default.
+            # Model order matters: the router sends models[0] only, and
+            # the 2026-11-26 live proof 404'd on llama-3.3-70b-versatile
+            # (model_not_found on this account) while openai/gpt-oss-120b
+            # — the connector helper's proven model — answered 200. The
+            # proven model leads; llama stays as a spare.
             ProviderCfg("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY",
-                        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False,
+                        ["openai/gpt-oss-120b", "llama-3.3-70b-versatile"], trusted_for_private=False,
                         enabled=bool(os.environ.get("GROQ_API_KEY"))),
             # Gemini free tier (AI Studio key), via Google's
             # OpenAI-compatible endpoint. gemini-flash-latest is the
