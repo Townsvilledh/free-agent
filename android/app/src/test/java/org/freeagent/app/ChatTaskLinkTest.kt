@@ -115,6 +115,18 @@ class ChatTaskLinkTest {
     }
 
     @Test
+    fun intakeNoteCarriesTheFluencyStandard() {
+        // The standing direction on every chat-born task:
+        // gather missing pieces herself; the only stop is a
+        // step that is genuinely the user's alone.
+        assertTrue(ChatTaskLink.INTAKE_NOTE.contains("gather it yourself"))
+        assertTrue(
+            ChatTaskLink.INTAKE_NOTE.contains("genuinely the user's alone")
+        )
+        assertTrue(ChatTaskLink.INTAKE_NOTE.contains("do not stop to ask"))
+    }
+
+    @Test
     fun tasksScreenTasksNeverReportToChat() {
         for (state in ChatTaskLink.MATERIAL) {
             assertNull(

@@ -35,6 +35,19 @@ import org.json.JSONObject
  * summaries of pasted text) is CHAT, never a task: a task is
  * for work that needs tools, the world, or time.
  *
+ * FLUENCY (Ethuram's standard, 2026-11-26): input does not
+ * have to arrive as a tidy instruction sentence. A bare link,
+ * a link with two words, a file sent with "fix this" or with
+ * nothing at all — each is job input: the task carries what
+ * he sent (the URL, the attachment reference) plus the
+ * inferred instruction, and the task text carries the
+ * standing gather-it-yourself direction (ChatTaskLink's
+ * INTAKE_NOTE) so missing pieces are fetched, read or
+ * searched for during execution — never begged for one by
+ * one. The only asks are single steps that are genuinely
+ * his alone (a sign-in tap, a human check), and those
+ * surface as parked steps, not questions in chat.
+ *
  * Pure Kotlin + org.json (the house pattern): every rule is
  * pinned by JobDetectTest over a fixture set of job-shaped,
  * ambiguous and chat-shaped messages.
@@ -139,26 +152,52 @@ object JobDetect {
 
     // ---------- the classifier ----------
 
+    /** Appended to a link sent with little or no explanation:
+     *  the inferred instruction the task executes. */
+    const val LINK_NOTE =
+        "The user sent this link with little or no explanation. " +
+            "Fetch it, read what it is, and report back what it " +
+            "is and anything about it that needs doing."
+
     /**
      * Classify the message the user just sent. [history] is
      * the chat's stored messages INCLUDING the one just sent
      * (submitMessage stores before it detects, the v0.11
      * discipline) — the pending-question resolution reads the
-     * messages behind it.
+     * messages behind it. [hasAttachment] is the fluency
+     * flag: a message carrying a file is judged by the words
+     * that came with it plus the fact of the file itself.
      */
-    fun classify(text: String, history: List<JSONObject>): Outcome {
+    fun classify(
+        text: String,
+        history: List<JSONObject>,
+        hasAttachment: Boolean = false
+    ): Outcome {
         val raw = text.trim()
-        if (raw.isEmpty()) return Outcome.NotJob
         val low = raw.lowercase()
 
         // 0. A reply to the clarifying question resolves first:
         //    "yes" starts the ask that was on the table; "no"
         //    drops it and the message is ordinary chat.
-        val pending = pendingInstruction(history)
-        if (pending != null) {
-            if (isAffirmative(raw)) return Outcome.StartTask(pending)
-            if (isNegative(raw)) return Outcome.NotJob
+        if (raw.isNotEmpty()) {
+            val pending = pendingInstruction(history)
+            if (pending != null) {
+                if (isAffirmative(raw)) return Outcome.StartTask(pending)
+                if (isNegative(raw)) return Outcome.NotJob
+            }
         }
+
+        // 0.5 Fluency intake: what he sent can BE the job.
+        if (hasAttachment) {
+            // A file with no words, or with a fragment ("fix
+            // this", "this one"), is a job handed over, not a
+            // conversation opener. A file with a real question
+            // falls through and is answered in chat.
+            if (raw.isEmpty()) return Outcome.StartTask(raw)
+            if (isFragment(low)) return Outcome.StartTask(raw)
+        }
+        if (raw.isEmpty()) return Outcome.NotJob
+        linkInstruction(raw, low)?.let { return Outcome.StartTask(it) }
 
         // 1. Strong signals — a task, no question asked.
         if (hasStrongSignal(raw, low)) return Outcome.StartTask(raw)
@@ -261,6 +300,42 @@ object JobDetect {
         Regex("(^|[^a-z])" + Regex.escape(phrase) + "([^a-z]|$)")
             .containsMatchIn(low)
 
+    private val URL_RE = Regex("https?://\\S+|www\\.\\S+")
+
+    /**
+     * A link sent bare, or with only a few words around it,
+     * is a job: fetch it and report. Returns the task text —
+     * what he sent, plus the inferred instruction — or null
+     * when the message is not link-shaped. A link carrying a
+     * question is NOT this: questions fall through to the
+     * chat guards below.
+     */
+    private fun linkInstruction(raw: String, low: String): String? {
+        if (!URL_RE.containsMatchIn(low)) return null
+        if (isQuestionShaped(low)) return null
+        val words = low.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.size > LINK_MAX_WORDS) return null
+        return raw + "\n\n" + LINK_NOTE
+    }
+
+    private val FRAGMENT_EXACT = setOf(
+        "this", "this one", "here", "it", "do it", "fix this",
+        "handle this", "sort this", "check this", "post this",
+        "send this", "deal with this", "look at this"
+    )
+
+    /** A fragment: a handful of words, not a question, that
+     *  either is a known hand-over phrase or opens with a
+     *  work verb. "thank you" with a photo is conversation;
+     *  "fix this" with a photo is a job. */
+    private fun isFragment(low: String): Boolean {
+        if (low.endsWith("?")) return false
+        val words = low.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.isEmpty() || words.size > 4) return false
+        if (low in FRAGMENT_EXACT) return true
+        return WORK_VERBS.any { low.startsWith(it) }
+    }
+
     // ---------- the pending question ----------
 
     /**
@@ -313,4 +388,5 @@ object JobDetect {
     private const val LONG_BRIEF_CHARS = 600
     private const val MEDIUM_BRIEF_CHARS = 200
     private const val MAX_REPLY_CHARS = 40
+    private const val LINK_MAX_WORDS = 6
 }

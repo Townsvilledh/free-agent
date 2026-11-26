@@ -138,6 +138,75 @@ class JobDetectTest {
         assertAsk(brief)
     }
 
+    // ---------- fluency intake: links, fragments, files ----------
+
+    @Test
+    fun bareLinkStartsTaskWithInferredInstruction() {
+        val url = "https://dorahacks.io/hackathon/agentware/detail"
+        val out = JobDetect.classify(url, emptyList())
+        assertTrue(out is JobDetect.Outcome.StartTask)
+        val ins = (out as JobDetect.Outcome.StartTask).instruction
+        assertTrue(ins.contains(url))
+        assertTrue(ins.contains("Fetch it"))
+    }
+
+    @Test
+    fun linkPlusFragmentStartsTask() {
+        val msg = "https://agentwarehack.com/rules this one"
+        val out = JobDetect.classify(msg, emptyList())
+        assertTrue(out is JobDetect.Outcome.StartTask)
+    }
+
+    @Test
+    fun linkWithAQuestionStaysChat() {
+        assertChat("https://example.com/page what is this site?")
+    }
+
+    @Test
+    fun fileWithNoWordsStartsTask() {
+        val out = JobDetect.classify(
+            "", emptyList(), hasAttachment = true
+        )
+        assertTrue(out is JobDetect.Outcome.StartTask)
+    }
+
+    @Test
+    fun fileWithFragmentStartsTask() {
+        for (frag in listOf("fix this", "this one", "check this")) {
+            val out = JobDetect.classify(
+                frag, emptyList(), hasAttachment = true
+            )
+            assertTrue(
+                "fragment '$frag' with a file should start a task",
+                out is JobDetect.Outcome.StartTask
+            )
+        }
+    }
+
+    @Test
+    fun fileWithAQuestionStaysChat() {
+        val out = JobDetect.classify(
+            "what is in this picture?", emptyList(),
+            hasAttachment = true
+        )
+        assertEquals(JobDetect.Outcome.NotJob, out)
+    }
+
+    @Test
+    fun fileWithThanksStaysChat() {
+        val out = JobDetect.classify(
+            "thank you", emptyList(), hasAttachment = true
+        )
+        assertEquals(JobDetect.Outcome.NotJob, out)
+    }
+
+    @Test
+    fun fragmentWithoutFileIsNotATask() {
+        // The same words with nothing sent are conversation —
+        // the file is what makes them a hand-over.
+        assertChat("fix this")
+    }
+
     // ---------- the pending question ----------
 
     private fun thread(vararg pairs: Pair<String, String>): List<JSONObject> =

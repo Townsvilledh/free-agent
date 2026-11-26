@@ -567,6 +567,10 @@ class MainActivity : AppCompatActivity() {
         val raw = input.text.toString().trim()
         if (raw.isEmpty() && pendingAttachment == null) return
         val chatId = activeChatId
+        // Fluency intake (v0.13): captured now — the picker
+        // state is cleared below, but whether this message
+        // carried a file is part of what it means.
+        val hadAttachment = pendingAttachment != null
 
         var outgoing = raw
         val display = pendingAttachment?.let { (_, name, mime) ->
@@ -616,7 +620,8 @@ class MainActivity : AppCompatActivity() {
         // in this thread (ChatTaskReporter). An ambiguous ask
         // gets ONE short question, never a guess.
         when (val jd = JobDetect.classify(
-            raw, ChatData.messages(chatStore.root(), chatId)
+            raw, ChatData.messages(chatStore.root(), chatId),
+            hasAttachment = hadAttachment
         )) {
             is JobDetect.Outcome.StartTask -> {
                 // A fresh detection starts THIS message (its
@@ -682,7 +687,12 @@ class MainActivity : AppCompatActivity() {
      *  exactly as for a task created on the Tasks screen. */
     private fun startChatTask(chatId: String, instruction: String) {
         val taskStore = TaskStore(this)
-        val task = taskStore.create(instruction)
+        // The task carries what the user sent, in full, plus
+        // the standing fluency direction: gather missing
+        // pieces herself during execution (ChatTaskLink).
+        val task = taskStore.create(
+            instruction + "\n\n" + ChatTaskLink.INTAKE_NOTE
+        )
         val taskId = task.optString("id")
         taskStore.update(taskId) {
             it.put(ChatTaskLink.ORIGIN_FIELD, chatId)

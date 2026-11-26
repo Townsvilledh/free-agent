@@ -33,6 +33,28 @@ object ChatTaskLink {
 
     const val COST_LINE = "Cost: $0 — keyless routes only."
 
+    /**
+     * The standing direction appended to every chat-born
+     * task's text (the fluency standard, 2026-11-26): the
+     * job may have arrived as a fragment, a link or a file
+     * reference rather than a tidy instruction, and missing
+     * pieces are HERS to gather with her tools during
+     * execution — never a reason to come back asking for
+     * inputs one by one. The only legitimate stop is a step
+     * that is genuinely the user's alone.
+     */
+    const val INTAKE_NOTE =
+        "[Chat intake: this job arrived in chat, possibly as " +
+            "a fragment, a link, or a file reference rather " +
+            "than a tidy instruction. Work out the full shape " +
+            "of the job yourself. If a piece is missing and " +
+            "you can obtain it with your tools — fetch the " +
+            "link, read what was sent, search — gather it " +
+            "yourself and keep going; do not stop to ask the " +
+            "user for inputs one by one. Stop only for a step " +
+            "that is genuinely the user's alone — a sign-in " +
+            "tap or a human check — and name that one step.]"
+
     /** States worth a message in the originating chat. */
     val MATERIAL: Set<String> = setOf(
         TaskStates.COMPLETED,
