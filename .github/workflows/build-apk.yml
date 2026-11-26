@@ -105,9 +105,24 @@ jobs:
           LILLE_DRIVE_ENABLED: ${{ vars.LILLE_DRIVE_ENABLED }}
         run: gradle assembleDebug --stacktrace
 
+      - name: Write version.json (in-app update check, v0.12.1)
+        # The app polls version.json on the apk distribution
+        # branch (UpdateCheck.kt) to learn a newer build
+        # exists. Generated from build.gradle — the version's
+        # source of truth — and uploaded with the APK so the
+        # publish step commits both to the apk branch.
+        run: |
+          VC=$(grep -oP 'versionCode\s+\K[0-9]+' android/app/build.gradle | head -1)
+          VN=$(grep -oP 'versionName\s+"\K[^"]+' android/app/build.gradle | head -1)
+          test -n "$VC" && test -n "$VN"
+          printf '{"versionCode": %s, "versionName": "%s"}\n' "$VC" "$VN" > version.json
+          cat version.json
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: freeagent-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            version.json
           if-no-files-found: error
