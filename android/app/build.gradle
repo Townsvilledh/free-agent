@@ -11,8 +11,8 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 12
-        versionName "0.10.0"
+        versionCode 13
+        versionName "0.10.1"
         // The WalletConnect SDK (v0.10) takes the app past one
         // dex; minSdk 29 (ART) runs multidex natively, this just
         // lets Gradle emit it.

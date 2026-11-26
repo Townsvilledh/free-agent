@@ -29,6 +29,11 @@ import org.json.JSONObject
  *   step there and hands back; she resumes alone.
  * - "Lille: create my X account" — the packaged acceptance task
  *   (XAccountTask), one tap to create + start on the device lane.
+ *   OWNER INSTANCES ONLY (v0.10.1, OwnerGate): her X account is
+ *   hers alone, so the button is rendered only when the verified
+ *   Fluid login identity is the owner's — for everyone else it is
+ *   simply absent, and the task cannot be created from the UI
+ *   (XLANE.md, "Hers alone").
  * - Report / Share — the graded spec report for a task
  *   (XAccountTask.reportFor for packaged tasks), readable here
  *   and shareable out of the app.
@@ -51,6 +56,7 @@ class TasksActivity : AppCompatActivity() {
 
     private lateinit var store: TaskStore
     private lateinit var proactive: ProactiveStore
+    private lateinit var createXButton: Button
     private lateinit var listView: ListView
     private lateinit var detail: TextView
     private lateinit var input: EditText
@@ -124,6 +130,8 @@ class TasksActivity : AppCompatActivity() {
             val identityStore = FluidIdentityStore(this)
             FluidLogin.init(this)
             FluidLogin.disconnectSessions(identityStore, forgetIdentity = true)
+            // The identity is gone, so owner-only surfaces go too.
+            applyOwnerGate()
             Toast.makeText(
                 this,
                 "Fluid name disconnected — Lille will ask for a fresh " +
@@ -131,7 +139,8 @@ class TasksActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG
             ).show()
         }
-        findViewById<Button>(R.id.createXTaskButton).setOnClickListener {
+        createXButton = findViewById(R.id.createXTaskButton)
+        createXButton.setOnClickListener {
             val existing = store.all().firstOrNull {
                 it.optString("title") == XAccountTask.TITLE &&
                     !TaskStates.isTerminal(it.optString("state"))
@@ -224,7 +233,26 @@ class TasksActivity : AppCompatActivity() {
         return id
     }
 
+    /** Owner gate (v0.10.1): the X-account creation button is
+     *  rendered ONLY when the verified Fluid login identity is
+     *  an owner identity (OwnerGate) — Lille's own X account is
+     *  created and managed from the owner's instance alone.
+     *  For any other login, and with no verified login at all,
+     *  the button is GONE — not greyed, not mentioned — and the
+     *  task cannot be created from this UI. Re-applied on every
+     *  refresh so a disconnect hides it immediately. */
+    private fun applyOwnerGate() {
+        val username = FluidIdentityStore(this).load()?.username
+        createXButton.visibility =
+            if (OwnerGate.canCreateXAccountTask(username)) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+    }
+
     private fun refresh() {
+        applyOwnerGate()
         tasks = store.all().reversed()
         val built = mutableListOf<Row>()
         val parked = tasks.filter {

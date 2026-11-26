@@ -174,6 +174,37 @@ the lane's first live exercise is Ethuram starting that task,
 and the acceptance test's verdict comes from that run's graded
 report — not from anything claimed here.
 
+## Hers alone — the account belongs to Lille, the button to the owner (v0.10.1)
+
+The X account is **Lille's own** — her page, for promoting
+herself and Fluid. It is created once, by her loop, from
+**Ethuram's phone**, and it is created and managed from his
+instance only. It was never a feature owed to every install:
+from v0.10.1, distributed copies carry **no creation path at
+all**.
+
+The mechanism is the v0.10 Fluid login identity. The
+"Lille: create my X account" button on the Tasks screen is
+rendered only when the app's *verified* Fluid login name is
+an owner identity (`OwnerGate.OWNER_USERNAMES` — one
+clearly-marked constant set in code, today just `ethuram`,
+compared case-insensitively through the login gate's own
+name normalisation). No verified login, or any other
+username → the button is simply absent (not greyed, not
+mentioned) and the task cannot be created from the UI. The
+gate is pinned by JVM tests (`OwnerGateTest`: owner incl.
+case variants → visible; other name → hidden; no login →
+hidden).
+
+Why not ship it to everyone: every distributed copy would
+race for the same handles (only one can ever win), the
+winning account would live in a stranger's vault and session
+outside Ethuram's control, and a crowd of identical signups
+could draw X's spam/bot scrutiny onto the Lille identity
+itself. Management and posting tasks for her account
+likewise run from the owner's instance — her page is run
+from the one place her creator actually is.
+
 ## Brain pacing on the device lane (v0.9.1)
 
 The first live run (2026-11-26) exposed a stall: the task sat
