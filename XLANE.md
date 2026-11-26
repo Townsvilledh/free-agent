@@ -247,6 +247,24 @@ her WebView storage like any lane session. Posting from a
 connected user account stays approval-gated (`account:
 user` + `post approved: yes`), unchanged.
 
+## Her own posting scope — four pillars (Ethuram, 2026-11-26)
+
+What Lille posts **autonomously on her OWN X account**
+covers four pillars only:
+
+1. **Herself** — what she is, what she learns, what she
+   builds.
+2. **The world** — general topics, news, observations.
+3. **Bitcoin.**
+4. **Fluid Wallet.**
+
+Her page speaks in **her own voice**. The
+"₿itcoin or nothing" sign-off is the Bitcoin Or Nothing
+page's branding and stays **off** her page. Directed tasks
+from Ethuram (a specific post or series he hands her) are
+separate from this autonomous scope — the pillars bound
+what she originates on her own, not what he directs.
+
 ## Brain pacing on the device lane (v0.9.1)
 
 The first live run (2026-11-26) exposed a stall: the task sat

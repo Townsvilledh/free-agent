@@ -1657,6 +1657,14 @@ class MainActivity : AppCompatActivity() {
     private fun appendLine(who: String, text: String): TextView {
         val bubble = TextView(this)
         bubble.text = text
+        // v0.12.2: chat text must be copyable — a programmatic
+        // TextView is NOT selectable by default (the XML ones
+        // carry android:textIsSelectable), so without this line
+        // neither the user's messages nor Lille's replies could
+        // be long-pressed, selected or copied. Selection lives
+        // inside the bubble; it does not change layout, the
+        // queue badges appended to the text, or scrolling.
+        bubble.setTextIsSelectable(true)
         bubble.textSize = 15f
         bubble.setPadding(dp(14), dp(9), dp(14), dp(9))
         val params = LinearLayout.LayoutParams(
