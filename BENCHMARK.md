@@ -223,6 +223,17 @@ stands NEEDS ETHURAM at a genuine human-only wall — not counted
 as a completion. The v0.7 (a)/(c) rows are bar-8 measurements
 rather than loop tasks and are not counted. All at $0.
 
+## Job classes on the register
+
+Proficiency is claimed per job class, proven by a real task, or not
+claimed at all. Proven so far: chat, repo work, spec-driven builds,
+demo video, proactivity/sweeps, browser basics. Registered but **not
+yet proven**: **trading** — rules in TRADING.md (real data only,
+simulation labelled PAPER and never self-graded, per-asset approval,
+caps at signing, outcomes from state), written 2026-11-26 from the
+autopsy of Ethuram's first agent (LESSONS.md). Its first proof will
+be a paper-trading task on real data, graded from state.
+
 ## Open gaps — where Manus genuinely leads today
 
 1. **Raw model power.** Manus routes to frontier-class models;
