@@ -46,6 +46,7 @@ class LoginActivity : AppCompatActivity() {
 
     private lateinit var store: FluidIdentityStore
     private lateinit var nameInput: EditText
+    private lateinit var inviterInput: EditText
     private lateinit var connectButton: Button
     private lateinit var status: TextView
     private lateinit var pairingBox: View
@@ -123,10 +124,18 @@ class LoginActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_login)
         nameInput = findViewById(R.id.fluidNameInput)
+        inviterInput = findViewById(R.id.inviterNameInput)
         connectButton = findViewById(R.id.fluidConnectButton)
         status = findViewById(R.id.fluidStatus)
         pairingBox = findViewById(R.id.pairingBox)
         pairingCode = findViewById(R.id.pairingCode)
+
+        // Referrals (REFERRALS.md): if an invite link reached
+        // the app before sign-in, its inviter pre-fills the
+        // optional field. The user can edit or clear it —
+        // what stands there at the first successful
+        // connection is the inviter who counts.
+        ReferralStore(this).pendingReferrer()?.let { inviterInput.setText(it) }
 
         // Prefill: a returning user whose session expired, or a
         // pending attempt interrupted mid-flight.
@@ -287,6 +296,13 @@ class LoginActivity : AppCompatActivity() {
                         FluidIdentityStore.Identity(pending.username, result.address)
                     )
                     store.clearPending()
+                    // Referrals: the sign-in is the proof — a
+                    // referral completes exactly here, against
+                    // the inviter field's contents (or the
+                    // pending inviter behind it).
+                    ReferralStore(this).settleOnLogin(
+                        pending.username, inviterInput.text?.toString()
+                    )
                     openMain()
                 }
                 is FluidGate.Verify.Mismatch -> {

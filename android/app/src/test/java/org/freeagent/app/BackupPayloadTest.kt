@@ -47,6 +47,28 @@ class BackupPayloadTest {
     }
 
     @Test
+    fun referralsTextRoundTripsAndDefaultsToNull() {
+        // Older payloads (no referrals field) parse with null.
+        assertNull(BackupPayload.parse(samplePayload())!!.referralsText)
+        val ledger = """{"version":1,"records":[{"referrer":"alice",""" +
+            """"referred":"ethuram","at":5,"source":"name"}]}"""
+        val text = BackupPayload.build(
+            username = "ethuram",
+            address = "0xAbC0000000000000000000000000000000000001",
+            createdAt = 1L,
+            chatsText = null,
+            tasksText = null,
+            proactiveText = null,
+            prefs = emptyMap(),
+            vaultSecrets = emptyMap(),
+            vaultAccounts = null,
+            sessions = null,
+            referralsText = ledger
+        )
+        assertEquals(ledger, BackupPayload.parse(text)!!.referralsText)
+    }
+
+    @Test
     fun prefsRoundTripKeepsTypes() {
         val parsed = BackupPayload.parse(samplePayload())!!
         val file = parsed.prefs["lille_fluid_identity"]!!

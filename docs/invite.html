@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>You've been invited to Lille</title>
+<meta name="description" content="Lille is a free, open-source AI agent for your phone. She chats, runs tasks in the background, browses the web and keeps everything on your device.">
+<style>
+  :root{
+    --bg:#000000;
+    --card:#111111;
+    --card-border:#262626;
+    --text:#f5f5f5;
+    --muted:#b8b8b8;
+    --orange:#f7931a;
+    --orange-dark:#8a5200;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;
+    padding:32px 18px 48px;
+  }
+  .wrap{max-width:520px;margin:0 auto}
+  .card{
+    background:var(--card);
+    border:1px solid var(--card-border);
+    border-radius:18px;
+    padding:26px 22px;
+    margin-bottom:20px;
+    text-align:center;
+  }
+  .card img.mascot{
+    width:120px;height:auto;border-radius:14px;margin-bottom:14px;
+  }
+  .brand{
+    font-size:15px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--orange);
+  }
+  .card h1{font-size:26px;line-height:1.25;font-weight:800;margin:10px 0 8px}
+  .card p{color:var(--muted);font-size:16px;margin-bottom:16px}
+  .card p strong{color:var(--text)}
+  .btn{
+    display:block;width:100%;
+    background:var(--orange);color:#000;
+    font-size:17px;font-weight:700;text-decoration:none;
+    padding:15px 18px;border-radius:12px;margin-bottom:12px;
+  }
+  .btn:active{background:var(--orange-dark);color:#fff}
+  .secondary{
+    display:block;width:100%;
+    background:transparent;color:var(--text);
+    border:1px solid var(--card-border);
+    font-size:16px;font-weight:600;text-decoration:none;
+    padding:14px 18px;border-radius:12px;
+  }
+  .steps{text-align:left;color:var(--muted);font-size:15px;margin:0 auto 4px;max-width:400px}
+  .steps li{margin-bottom:8px}
+  .name{
+    color:var(--orange);font-weight:700;
+  }
+  footer{text-align:center;color:var(--muted);font-size:13px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <img class="mascot" src="lille-mascot-jacket.webp" alt="Lille, the free AI agent">
+    <div class="brand">Lille</div>
+    <h1 id="headline">You've been invited to Lille</h1>
+    <p id="inviterLine" hidden><strong class="name" id="inviterName"></strong> invited you to try her.</p>
+    <p>Lille is a free, open-source AI agent that lives on your phone.
+       She chats, runs tasks in the background while you do other things,
+       browses the web, and keeps everything on your device — no fees,
+       no account with us, no API key to buy.</p>
+    <a class="btn" href="https://raw.githubusercontent.com/Townsvilledh/free-agent/apk/app-debug.apk">Download Lille for Android</a>
+    <a class="secondary" id="openInApp" href="#" hidden>Already have Lille? Open this invite in the app</a>
+  </div>
+  <div class="card" id="howCard" hidden>
+    <p style="margin-bottom:10px"><strong>So your invite counts:</strong></p>
+    <ol class="steps">
+      <li>Install Lille from the download above.</li>
+      <li>When she asks who invited you, enter the name
+          <strong class="name" id="inviterName2"></strong>.</li>
+      <li>That's it — the invite counts the moment you sign in.</li>
+    </ol>
+  </div>
+  <footer>Lille is free forever, for everyone.</footer>
+</div>
+<script>
+  // The inviter's name arrives as ?ref=<name>. It is shown
+  // with textContent only — never as HTML — and reused to
+  // build the open-in-app link. No name, no inviter lines:
+  // the page is a plain download page without one.
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var ref = (params.get("ref") || "").trim().replace(/^@/, "").toLowerCase();
+    if (!/^[a-z0-9._-]{1,64}$/.test(ref)) return;
+    document.getElementById("inviterName").textContent = ref;
+    document.getElementById("inviterName2").textContent = ref;
+    document.getElementById("inviterLine").hidden = false;
+    document.getElementById("howCard").hidden = false;
+    var open = document.getElementById("openInApp");
+    open.href = "lille://invite?ref=" + encodeURIComponent(ref);
+    open.hidden = false;
+  })();
+</script>
+</body>
+</html>

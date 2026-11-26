@@ -276,6 +276,17 @@ class MainActivity : AppCompatActivity() {
         FluidLogin.init(this)
         FluidLogin.reconcilePending(identityStore)
         fluidIdentity = identityStore.load()
+
+        // Referrals (REFERRALS.md): an invite link that
+        // reached the app names its inviter until sign-in
+        // (captured only while no identity stands — an
+        // invite is for a new user), and a standing identity
+        // settles any pending inviter against its first
+        // sign-in. Both are no-ops in the ordinary case.
+        captureInviteLink(intent)
+        fluidIdentity?.let {
+            ReferralStore(this).settleOnLogin(it.username, null)
+        }
         val decision = FluidGate.decide(
             fluidIdentity?.username, FluidLogin.sessionStateFor(identityStore)
         )
@@ -344,9 +355,22 @@ class MainActivity : AppCompatActivity() {
         renderChat(activeChatId)
     }
 
+    /** Referrals: remember an invite link's inviter as
+     *  pending — only while no verified identity stands on
+     *  this device (an invite is for a new user; a signed-in
+     *  user opening a link changes nothing). */
+    private fun captureInviteLink(incoming: android.content.Intent?) {
+        val inviter = Referrals.referrerFromUri(incoming?.data?.toString())
+            ?: return
+        if (FluidIdentityStore(this).load() == null) {
+            ReferralStore(this).setPendingFromLink(inviter)
+        }
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        captureInviteLink(intent)
         // Returning from the chat list (CLEAR_TOP reuses this
         // instance): the active chat may have changed.
         if (::chatStore.isInitialized) {
