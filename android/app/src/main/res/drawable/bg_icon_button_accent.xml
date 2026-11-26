@@ -1,0 +1,9 @@
+<!-- Round glossy orange for the send icon button (v0.10 UI polish). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <gradient
+        android:startColor="#FFB84D"
+        android:centerColor="#F7931A"
+        android:endColor="#DE7F04"
+        android:angle="270" />
+</shape>

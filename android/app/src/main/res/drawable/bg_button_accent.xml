@@ -1,0 +1,11 @@
+<!-- Glossy orange pill for primary buttons (v0.10 UI polish) —
+     the login screen's Connect button. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:startColor="#FFB84D"
+        android:centerColor="#F7931A"
+        android:endColor="#DE7F04"
+        android:angle="270" />
+    <corners android:radius="24dp" />
+</shape>

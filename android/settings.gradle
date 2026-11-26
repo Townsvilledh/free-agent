@@ -10,6 +10,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // v0.10: the WalletConnect Kotlin SDK's transitive deps
+        // (Scarlet, kethereum, java-multibase) are published via
+        // JitPack only — the SDK's own install docs require it.
+        maven { url "https://jitpack.io" }
     }
 }
 rootProject.name = "FreeAgent"

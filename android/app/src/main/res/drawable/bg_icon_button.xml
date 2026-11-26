@@ -1,0 +1,8 @@
+<!-- Round surface for the attach icon button (v0.10 UI polish). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <gradient
+        android:startColor="#33302B"
+        android:endColor="#232120"
+        android:angle="270" />
+</shape>

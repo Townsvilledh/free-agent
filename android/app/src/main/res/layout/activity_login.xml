@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#0B0B0B">
 
+    <!-- v0.10 UI polish: the login arrives on the same rounded
+         card language as the chat screen — dark warm surface,
+         glossy orange primary button. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:background="@drawable/bg_card"
         android:orientation="vertical"
         android:padding="24dp">
 
@@ -23,6 +29,7 @@
             android:layout_marginTop="12dp"
             android:gravity="center"
             android:text="@string/app_name"
+            android:textColor="#F5EFE7"
             android:textSize="26sp"
             android:textStyle="bold" />
 
@@ -32,6 +39,7 @@
             android:layout_marginTop="6dp"
             android:gravity="center"
             android:text="@string/fluid_tagline"
+            android:textColor="#F7931A"
             android:textSize="16sp" />
 
         <TextView
@@ -40,6 +48,7 @@
             android:layout_marginTop="10dp"
             android:gravity="center"
             android:text="@string/fluid_explain"
+            android:textColor="#CFC8BC"
             android:textSize="13sp" />
 
         <EditText
@@ -47,23 +56,36 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:background="@drawable/bg_composer"
             android:hint="@string/fluid_name_hint"
             android:importantForAutofill="no"
             android:inputType="text"
-            android:maxLines="1" />
+            android:maxLines="1"
+            android:paddingStart="16dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="12dp"
+            android:textColor="#F5EFE7"
+            android:textColorHint="#8A8378" />
 
         <Button
             android:id="@+id/fluidConnectButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/fluid_connect" />
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_button_accent"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:text="@string/fluid_connect"
+            android:textColor="#1A1206"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/fluidStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
+            android:textColor="#F5EFE7"
             android:textSize="14sp" />
 
         <!-- Pairing view: shown once a wc: code exists. The code
@@ -81,6 +103,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/fluid_pairing_steps"
+                android:textColor="#F5EFE7"
                 android:textSize="14sp" />
 
             <TextView
@@ -88,8 +111,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:background="#14000000"
+                android:background="@drawable/bg_pairing_code"
                 android:padding="10dp"
+                android:textColor="#F5EFE7"
                 android:textIsSelectable="true"
                 android:textSize="12sp" />
 
@@ -106,6 +130,7 @@
                 android:layout_marginTop="8dp"
                 android:gravity="center"
                 android:text="@string/fluid_waiting"
+                android:textColor="#CFC8BC"
                 android:textSize="13sp" />
 
             <Button
@@ -121,6 +146,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
-            android:text="@string/fluid_get" />
+            android:background="@drawable/bg_composer"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:text="@string/fluid_get"
+            android:textColor="#F5EFE7" />
     </LinearLayout>
 </ScrollView>

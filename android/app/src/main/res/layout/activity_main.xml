@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Chat screen (v0.10 UI polish): near-black ground in Fluid's
+     identity, message bubbles (dark warm surface for Lille,
+     glossy Bitcoin-orange for the user), and a pill composer
+     with ICON buttons — paperclip attach, paper-plane send —
+     instead of text buttons. Same ids, same behaviour. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#0B0B0B"
     android:orientation="vertical"
     android:padding="16dp">
 
@@ -24,6 +30,7 @@
             android:layout_weight="1"
             android:layout_marginStart="10dp"
             android:text="@string/app_name"
+            android:textColor="#F5EFE7"
             android:textSize="22sp"
             android:textStyle="bold" />
         <Button
@@ -38,11 +45,15 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-        <TextView
+        <!-- Bubbles are added here by MainActivity.appendLine —
+             one rounded bubble view per message. -->
+        <LinearLayout
             android:id="@+id/transcript"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="15sp" />
+            android:orientation="vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp" />
     </ScrollView>
 
     <!-- Attachment preview: shown above the input when a file/image
@@ -68,6 +79,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="8dp"
+            android:textColor="#F5EFE7"
             android:textSize="13sp" />
         <Button
             android:id="@+id/clearAttachmentButton"
@@ -76,26 +88,49 @@
             android:text="@string/remove" />
     </LinearLayout>
 
+    <!-- Composer: pill field with integrated icon buttons.
+         Touch targets are 48dp; contentDescriptions carry the
+         words the buttons used to wear. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
         android:orientation="horizontal">
-        <Button
+        <ImageButton
             android:id="@+id/attachButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/attach" />
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/bg_icon_button"
+            android:contentDescription="Attach a file"
+            android:padding="12dp"
+            android:src="@drawable/ic_attach"
+            android:tint="#E8E2D9" />
         <EditText
             android:id="@+id/messageInput"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
             android:layout_weight="1"
+            android:background="@drawable/bg_composer"
             android:hint="@string/message_hint"
-            android:inputType="textMultiLine" />
-        <Button
+            android:inputType="textMultiLine"
+            android:maxLines="4"
+            android:paddingStart="16dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="10dp"
+            android:textColor="#F5EFE7"
+            android:textColorHint="#8A8378" />
+        <ImageButton
             android:id="@+id/sendButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/send" />
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_icon_button_accent"
+            android:contentDescription="Send message"
+            android:padding="12dp"
+            android:src="@drawable/ic_send"
+            android:tint="#1A1206" />
     </LinearLayout>
 </LinearLayout>

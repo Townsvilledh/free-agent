@@ -1,16 +1,20 @@
 package org.freeagent.app
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Size
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -73,11 +77,17 @@ class MainActivity : AppCompatActivity() {
             "\"Write a Python script that …\" naming exactly what it should do.)"
     }
 
-    private lateinit var transcript: TextView
+    private lateinit var transcript: LinearLayout
     private lateinit var scrollView: ScrollView
     private lateinit var input: EditText
-    private lateinit var sendButton: Button
-    private lateinit var attachButton: Button
+    private lateinit var sendButton: ImageButton
+    private lateinit var attachButton: ImageButton
+
+    /** v0.10 UI polish: messages are bubbles now. This is the
+     *  most recent Lille bubble — the one replaceCurrentReply
+     *  rewrites as an answer streams in (the "…thinking" bubble
+     *  first, then continuations and the final text). */
+    private var lastReplyBubble: TextView? = null
     private lateinit var attachmentBar: View
     private lateinit var attachmentThumb: ImageView
     private lateinit var attachmentName: TextView
@@ -528,24 +538,55 @@ class MainActivity : AppCompatActivity() {
         attachButton.isEnabled = enabled
     }
 
-    /** Replace the current (last) Lille reply — the "…thinking" line,
-     *  or a preserved partial answer — with the given text. */
+    /** Replace the current (last) Lille reply — the "…thinking"
+     *  bubble, or a preserved partial answer — with the given
+     *  text. Falls back to a fresh bubble if none is live. */
     private fun replaceCurrentReply(text: String) {
-        val current = transcript.text.toString()
-        val marker = "\nLille: "
-        val idx = current.lastIndexOf(marker)
-        transcript.text = if (idx >= 0) {
-            current.substring(0, idx + marker.length) + text + "\n"
+        val bubble = lastReplyBubble
+        if (bubble != null && bubble.parent === transcript) {
+            bubble.text = text
+            scrollToBottom()
         } else {
-            current + "\nLille: $text\n"
+            appendLine("Lille", text)
         }
+    }
+
+    /** One message, one bubble (v0.10 UI polish): Lille's are
+     *  dark warm surfaces hugging the left; the user's are
+     *  glossy Bitcoin-orange hugging the right, dark text on
+     *  the orange for contrast. Same call contract as the old
+     *  plain-text transcript — every display path in this
+     *  activity goes through here or replaceCurrentReply. */
+    private fun appendLine(who: String, text: String) {
+        val bubble = TextView(this)
+        bubble.text = text
+        bubble.textSize = 15f
+        bubble.setPadding(dp(14), dp(9), dp(14), dp(9))
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        params.topMargin = dp(3)
+        params.bottomMargin = dp(3)
+        if (who == "You") {
+            bubble.setBackgroundResource(R.drawable.bg_bubble_user)
+            bubble.setTextColor(Color.parseColor("#1A1206"))
+            params.gravity = Gravity.END
+            params.marginStart = dp(48)
+        } else {
+            bubble.setBackgroundResource(R.drawable.bg_bubble_lille)
+            bubble.setTextColor(Color.parseColor("#F5EFE7"))
+            params.gravity = Gravity.START
+            params.marginEnd = dp(48)
+            lastReplyBubble = bubble
+        }
+        bubble.layoutParams = params
+        transcript.addView(bubble)
         scrollToBottom()
     }
 
-    private fun appendLine(who: String, text: String) {
-        transcript.append("\n$who: $text\n")
-        scrollToBottom()
-    }
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     private fun scrollToBottom() {
         scrollView.post { scrollView.fullScroll(View.FOCUS_DOWN) }
