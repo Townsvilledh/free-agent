@@ -25,10 +25,17 @@ everything runs on a host the user controls.
   chat, never via a message to any assistant, never in a file that syncs.
 
 ## Gmail
-- Read-only scope first; listing/search/metadata only in v0.1.
+- Read-only scope first (`gmail.readonly` + `calendar.readonly`,
+  v0.13 core tools — MAIL.md). The write scopes are separate
+  opt-ins at connect time and stay disabled at run time unless
+  the host flags (`FREEAGENT_GMAIL_SEND` / `FREEAGENT_CALENDAR_WRITE`)
+  AND a per-action approval AND the token scope all line up.
 - Mail is fetched to the host; an LLM receives at most a 500-char
   **redacted snippet** (`redact.snippet`). No full mailbox dumps, ever.
 - Verification codes in mail are redacted by pattern before any model call.
+- Links are extracted host-side from the redacted body only, with
+  query strings stripped and credential-cue URLs (reset/token/
+  verify/password) dropped — a reset link never rides along.
 
 ## Logins (X/Twitter, GitHub, Google, …)
 - Login happens **in the host browser** (Playwright persistent profile),

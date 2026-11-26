@@ -28,6 +28,7 @@ import json, os, re, time
 from dataclasses import dataclass, field
 
 from . import recovery, sandbox, tasktools
+from .config import Config
 from .router import Router, PrivacyBlocked, AllProvidersFailed
 
 DEFAULT_MAX_STEPS = 12
@@ -46,6 +47,7 @@ Rules:
 - If a tool result is an error, read it, fix the cause, and try again. Do not repeat an identical failing call.
 - Never invent results: only claim what tool outputs actually showed.
 - Browser tasks: work from browser_read's element refs (refs are reassigned on every read — re-read after each navigation). Passwords are NEVER typed by you or written into any file: create them with vault_gen_secret (you receive only a key name) and type them with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only wall (CAPTCHA, an emailed code, a phone demand): STOP immediately and call finish with a summary naming that exact wall — never try to solve, bypass, or route around it.
+- Mail/calendar tasks: if a gmail/calendar tool returns a *_NOT_CONNECTED result, Google is not set up on this host — STOP and call finish naming the single setup step it describes. Never ask the user to fetch, copy or paste mail or calendar contents for you: reaching the mailbox yourself is the point of the tool. gmail_send / calendar_create denials are correct-by-default; never work around one.
 """
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
@@ -167,9 +169,26 @@ class TaskLoop:
             "FREEAGENT_WORKSPACE", os.path.expanduser("~/.freeagent/tasks"))
         self.max_steps = max_steps
         self.max_total_chars = max_total_chars
+        # v0.13 mail/calendar write gates: the Sentinel reads the
+        # write flags from its spec context, so the loop injects
+        # them from the host Config (env flags — the user's
+        # decision on the host, never the model's) unless the
+        # caller set them explicitly. The runtime context also
+        # carries the Config + approver so the mail/calendar
+        # handlers can run their defence-in-depth gate
+        # (approvals.require_approval + token-scope check).
+        ctx = dict(sentinel_context or {})
+        cfg = config or Config.from_env()
+        ctx.setdefault("gmail_send_enabled",
+                       bool(cfg.gmail_send_enabled))
+        ctx.setdefault("calendar_write_enabled",
+                       bool(cfg.calendar_write_enabled))
         self.sentinel = tasktools.Sentinel(approver=approver,
-                                           spec_context=sentinel_context)
-        tasktools.set_runtime_context(sentinel_context)
+                                           spec_context=ctx)
+        runtime_ctx = dict(ctx)
+        runtime_ctx["_config"] = cfg
+        runtime_ctx["_approver"] = approver
+        tasktools.set_runtime_context(runtime_ctx)
         self.clock = clock or time.time
         # Pacing: the keyless anonymous tier allows ~1 request per
         # ~45s per IP. pace_seconds (or FREEAGENT_PACE_SECONDS) makes

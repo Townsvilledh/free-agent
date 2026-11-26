@@ -94,8 +94,32 @@ def main(argv=None):
                     help="export lane-eligible state (non-private commitments + reports) to DIR; private entries are refused")
     ap.add_argument("--sweep", metavar="TOPIC",
                     help="run a THOROUGH sweep on a topic: multiple keyless surfaces, several query phrasings, dedup against the known-items record, mandatory coverage note (Thoroughness Law)")
+    ap.add_argument("--google-connect", action="store_true",
+                    help="one-time HOST-side setup: connect Google (Gmail + Calendar, READ-ONLY scopes) via browser consent; the token is stored only in the encrypted vault")
+    ap.add_argument("--google-send", action="store_true",
+                    help="with --google-connect: ALSO request the gmail.send scope (sending still needs FREEAGENT_GMAIL_SEND=1 and a per-send approval at run time)")
+    ap.add_argument("--google-calendar-write", action="store_true",
+                    help="with --google-connect: ALSO request the calendar.events scope (creating still needs FREEAGENT_CALENDAR_WRITE=1 and a per-create approval at run time)")
+    ap.add_argument("--google-status", action="store_true",
+                    help="report whether Google is connected (scope names only — never the token)")
+    ap.add_argument("--google-disconnect", action="store_true",
+                    help="delete the Google token from the encrypted vault")
     args = ap.parse_args(argv)
     cfg = Config.from_env()
+
+    if args.google_connect or args.google_status or args.google_disconnect:
+        from . import mailtools
+        if args.google_status:
+            print(mailtools.status())
+            return 0
+        if args.google_disconnect:
+            print(mailtools.disconnect())
+            return 0
+        ok, message = mailtools.connect(
+            with_send=args.google_send,
+            with_calendar_write=args.google_calendar_write)
+        print(message)
+        return 0 if ok else 1
 
     if args.commit or args.commitments or args.close_commitment \
             or args.enqueue or args.proactive_run or args.export_lane \
