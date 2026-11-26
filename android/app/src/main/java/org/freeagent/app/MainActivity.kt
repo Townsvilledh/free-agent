@@ -198,6 +198,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var attachmentBar: View
     private lateinit var quoteBar: View
     private lateinit var quoteBarText: TextView
+    private lateinit var walletCardText: TextView
     private lateinit var attachmentThumb: ImageView
     private lateinit var attachmentName: TextView
 
@@ -395,17 +396,27 @@ class MainActivity : AppCompatActivity() {
 
         // v1.0.1 UI organisation: the header is quiet —
         // mascot + name, Chats, New, and one menu holding
-        // the packaged jobs and the remaining destinations
+        // Slim icon chrome (v1.0.1): chats list, new chat
+        // and settings are small symbol buttons in the
+        // header; the ⋯ menu holds only the packaged jobs
         // (MainChatActions). The Tasks destination is GONE:
         // work lives in chats now, nowhere else.
-        findViewById<Button>(R.id.chatsButton).setOnClickListener {
+        findViewById<View>(R.id.chatsButton).setOnClickListener {
             startActivity(android.content.Intent(this, ChatListActivity::class.java))
         }
-        findViewById<Button>(R.id.newChatButton).setOnClickListener {
+        findViewById<View>(R.id.newChatButton).setOnClickListener {
             renderChat(chatStore.createChat())
         }
-        val menuButton = findViewById<Button>(R.id.menuButton)
+        findViewById<View>(R.id.settingsButton).setOnClickListener {
+            startActivity(android.content.Intent(this, SettingsActivity::class.java))
+        }
+        val menuButton = findViewById<View>(R.id.menuButton)
         menuButton.setOnClickListener { showMainMenu(menuButton) }
+        walletCardText = findViewById(R.id.walletCardText)
+        findViewById<View>(R.id.walletCard).setOnClickListener {
+            startActivity(android.content.Intent(this, WalletActivity::class.java))
+        }
+        refreshWalletCard()
 
         browserPanel = findViewById(R.id.browserPanel)
         browserPanelLabel = findViewById(R.id.browserPanelLabel)
@@ -473,6 +484,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         uiAlive = true
+        if (::walletCardText.isInitialized) refreshWalletCard()
         if (::chatStore.isInitialized && renderedChatId.isNotEmpty()) {
             val current = ChatData.activeId(chatStore.root())
             if ((current.isNotEmpty() && current != renderedChatId) ||
@@ -1055,18 +1067,58 @@ class MainActivity : AppCompatActivity() {
                     startLilleXConnectInChat()
                 MainChatActions.Action.CONNECT_X_ACCOUNT ->
                     startXConnectInChat()
-                MainChatActions.Action.WALLET ->
-                    startActivity(
-                        android.content.Intent(this, WalletActivity::class.java)
-                    )
-                MainChatActions.Action.SETTINGS ->
-                    startActivity(
-                        android.content.Intent(this, SettingsActivity::class.java)
-                    )
             }
             true
         }
         popup.show()
+    }
+
+    /**
+     * The main-page wallet card (v1.0.1): her balances at a
+     * glance across the three families, read through the
+     * same engines the Wallet screen uses. Each family
+     * lands independently; WalletSummary keeps every state
+     * honest (real value, true zero, couldn't load — never
+     * a fake zero). The EVM glance reads Ethereum, the
+     * default chain; the full screen has every chain.
+     */
+    private fun refreshWalletCard() {
+        if (!::walletCardText.isInitialized) return
+        val wallet = AgentWallet(this)
+        if (!wallet.hasWallet() && !wallet.hasBtcWallet() &&
+            !wallet.hasSolWallet()
+        ) {
+            walletCardText.text = "Not set up yet — tap to create her wallet"
+            return
+        }
+        val families = linkedMapOf<String, WalletSummary.Family>(
+            "Ethereum" to WalletSummary.Family.Loading,
+            "Bitcoin" to WalletSummary.Family.Loading,
+            "Solana" to WalletSummary.Family.Loading
+        )
+        fun render() {
+            if (isFinishing || isDestroyed) return
+            walletCardText.text = WalletSummary.cardText(families.toList())
+        }
+        if (wallet.hasWallet()) {
+            WalletEngine(this).loadBalances(WalletGate.ETHEREUM) { balances ->
+                families["Ethereum"] = WalletSummary.Family.Loaded(balances)
+                render()
+            }
+        } else families["Ethereum"] = WalletSummary.Family.NotSetUp
+        if (wallet.hasBtcWallet()) {
+            BtcEngine(this).loadBalances { balances ->
+                families["Bitcoin"] = WalletSummary.Family.Loaded(balances)
+                render()
+            }
+        } else families["Bitcoin"] = WalletSummary.Family.NotSetUp
+        if (wallet.hasSolWallet()) {
+            SolEngine(this).loadBalances { balances ->
+                families["Solana"] = WalletSummary.Family.Loaded(balances)
+                render()
+            }
+        } else families["Solana"] = WalletSummary.Family.NotSetUp
+        render()
     }
 
     /** "Create Lille's X account" (owner only): her own

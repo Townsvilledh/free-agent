@@ -34,9 +34,7 @@ object MainChatActions {
     enum class Action(val menuTitle: String) {
         CREATE_X_ACCOUNT("Create Lille's X account"),
         CONNECT_LILLE_X_ACCOUNT("Connect Lille's X account"),
-        CONNECT_X_ACCOUNT("Connect my X account"),
-        WALLET("Wallet"),
-        SETTINGS("Settings")
+        CONNECT_X_ACCOUNT("Connect my X account")
     }
 
     /** The packaged-job actions for the main chat's menu,
@@ -61,12 +59,12 @@ object MainChatActions {
         return out
     }
 
-    /** The full menu: packaged jobs first (they are work),
-     *  then the quiet destinations. */
+    /** The ⋯ menu holds ONLY the packaged jobs: the wallet
+     *  has its own card on the main page and settings its
+     *  own header icon (v1.0.1 slim chrome), so neither
+     *  rides the menu any more. */
     fun menuActions(
         isOwner: Boolean,
         lilleXVerified: Boolean
-    ): List<Action> =
-        packagedActions(isOwner, lilleXVerified) +
-            listOf(Action.WALLET, Action.SETTINGS)
+    ): List<Action> = packagedActions(isOwner, lilleXVerified)
 }

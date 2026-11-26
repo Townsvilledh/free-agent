@@ -11,23 +11,23 @@
     android:orientation="vertical"
     android:padding="16dp">
 
-    <!-- Header (v1.0.1 organisation): mascot + name, then
-         QUIET tonal controls — Chats, New, and one menu
-         (packaged jobs, Wallet, Settings). True black,
-         tonal surfaces, orange spent only as the alive
-         accent (the composer's send button). The old stack
-         of big orange buttons over the conversation is
-         gone; nothing shouts over the chat. -->
+    <!-- Header (v1.0.1 slim chrome): mascot + name, then
+         SMALL icon controls — chats list, new chat,
+         settings, and the packaged-actions menu — as
+         symbols, not text buttons. Tonal and quiet;
+         orange stays the alive accent only (the
+         composer's send button). Nothing shouts over
+         the conversation. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingBottom="8dp">
+        android:paddingBottom="6dp">
         <ImageView
             android:id="@+id/headerMascot"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="34dp"
+            android:layout_height="34dp"
             android:src="@drawable/mascot_idle"
             android:contentDescription="@string/app_name"
             android:scaleType="centerCrop" />
@@ -35,34 +35,75 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="8dp"
             android:text="@string/app_name"
             android:textColor="#F5EFE7"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-        <Button
+            android:textSize="17sp" />
+        <ImageButton
             android:id="@+id/chatsButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
             android:background="@drawable/bg_icon_button"
-            android:text="@string/chats"
-            android:textColor="#E8E2D9" />
-        <Button
+            android:contentDescription="@string/chats"
+            android:padding="9dp"
+            android:src="@drawable/ic_chats" />
+        <ImageButton
             android:id="@+id/newChatButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="6dp"
             android:background="@drawable/bg_icon_button"
-            android:text="@string/new_chat"
-            android:textColor="#E8E2D9" />
+            android:contentDescription="@string/new_chat"
+            android:padding="9dp"
+            android:src="@drawable/ic_new_chat" />
+        <ImageButton
+            android:id="@+id/settingsButton"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/bg_icon_button"
+            android:contentDescription="@string/settings"
+            android:padding="9dp"
+            android:src="@drawable/ic_settings" />
         <Button
             android:id="@+id/menuButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:layout_marginStart="6dp"
             android:background="@drawable/bg_icon_button"
             android:text="⋯"
-            android:textColor="#E8E2D9" />
+            android:textColor="#E8E2D9"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- Wallet card (v1.0.1): her companion wallet lives
+         on the main page — balances at a glance across
+         her families, honest load states (a failed read
+         says "couldn't load", never a fake zero). Tap
+         opens the full Wallet screen. -->
+    <LinearLayout
+        android:id="@+id/walletCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/bg_bubble_lille"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:padding="10dp">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Lille's wallet"
+            android:textColor="#B8B0A4"
+            android:textSize="12sp" />
+        <TextView
+            android:id="@+id/walletCardText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#F5EFE7"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <!-- Update banner (v0.12.1): hidden unless

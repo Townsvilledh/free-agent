@@ -64,13 +64,26 @@ class MainChatActionsTest {
     }
 
     @Test
-    fun menuKeepsEveryDestinationReachable() {
+    fun menuIsPackagedJobsOnlyNow() {
+        // v1.0.1 slim chrome: the wallet has its own card on
+        // the main page and settings its own header icon —
+        // the ⋯ menu carries only the packaged jobs.
         val menu = MainChatActions.menuActions(
             isOwner = false, lilleXVerified = false
         )
-        assertTrue(menu.contains(MainChatActions.Action.WALLET))
-        assertTrue(menu.contains(MainChatActions.Action.SETTINGS))
-        assertTrue(menu.contains(MainChatActions.Action.CONNECT_X_ACCOUNT))
+        assertEquals(
+            listOf(MainChatActions.Action.CONNECT_X_ACCOUNT), menu
+        )
+        val ownerMenu = MainChatActions.menuActions(
+            isOwner = true, lilleXVerified = false
+        )
+        assertEquals(
+            listOf(
+                MainChatActions.Action.CREATE_X_ACCOUNT,
+                MainChatActions.Action.CONNECT_X_ACCOUNT
+            ),
+            ownerMenu
+        )
     }
 
     @Test

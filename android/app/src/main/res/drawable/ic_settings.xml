@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings icon (v1.0.1 slim header): adjustment sliders —
+     three lines, a knob on each. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#E8E2D9">
+    <path
+        android:pathData="M3,6 h18 M3,12 h18 M3,18 h18"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M8,4.2 h3.6 v3.6 h-3.6 z M14,10.2 h3.6 v3.6 h-3.6 z M5,16.2 h3.6 v3.6 h-3.6 z"
+        android:fillColor="#FFFFFF" />
+</vector>
