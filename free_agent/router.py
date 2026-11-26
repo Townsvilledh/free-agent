@@ -83,6 +83,7 @@ class Router:
         self.audit = audit if audit is not None else []   # list[RouteEvent]
         self.clock = clock or time.time                   # injectable for tests
         self.cooldowns = {}                               # provider -> unlock ts
+        self.fail_counts = {}                             # provider -> consecutive failures (v0.12 health: escalates the cooldown; a success clears it)
 
     # ---------- transport ----------
     def _http_transport(self, provider, messages):
@@ -352,12 +353,23 @@ class Router:
             if status == 200 and message is not None and (
                     message.get("content") or message.get("tool_calls")):
                 self.cooldowns.pop(p.name, None)
+                self.fail_counts.pop(p.name, None)
                 self.audit.append(RouteEvent(p.name, category, "ok"))
                 return {"provider": p.name, "message": message}
             self.audit.append(RouteEvent(p.name, category, f"http-{status}"))
             tried.append((p.name, status))
             if status in FALLBACK_STATUSES or status == 0:
-                cd = retry_after if retry_after else p.cooldown_seconds
+                # v0.12 route health: repeated failures
+                # escalate this route's cooldown (x1, x2, x4,
+                # x8 cap) — a demotion that recovers on its
+                # own when the cooldown expires and the next
+                # probe succeeds (success pops both records).
+                fails = self.fail_counts.get(p.name, 0) + 1
+                self.fail_counts[p.name] = fails
+                if retry_after:
+                    cd = retry_after
+                else:
+                    cd = p.cooldown_seconds * (2 ** min(fails - 1, 3))
                 unlock = self.clock() + cd
                 self.cooldowns[p.name] = unlock
                 unlock_times.append(unlock)
@@ -455,12 +467,23 @@ class Router:
             status, text, retry_after = self._dispatch(p, messages)
             if status == 200 and text:
                 self.cooldowns.pop(p.name, None)
+                self.fail_counts.pop(p.name, None)
                 self.audit.append(RouteEvent(p.name, category, "ok"))
                 return {"provider": p.name, "text": text}
             self.audit.append(RouteEvent(p.name, category, f"http-{status}"))
             tried.append((p.name, status))
             if status in FALLBACK_STATUSES or status == 0:
-                cd = retry_after if retry_after else p.cooldown_seconds
+                # v0.12 route health: repeated failures
+                # escalate this route's cooldown (x1, x2, x4,
+                # x8 cap) — a demotion that recovers on its
+                # own when the cooldown expires and the next
+                # probe succeeds (success pops both records).
+                fails = self.fail_counts.get(p.name, 0) + 1
+                self.fail_counts[p.name] = fails
+                if retry_after:
+                    cd = retry_after
+                else:
+                    cd = p.cooldown_seconds * (2 ** min(fails - 1, 3))
                 unlock = self.clock() + cd
                 self.cooldowns[p.name] = unlock
                 unlock_times.append(unlock)

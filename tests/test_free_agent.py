@@ -390,6 +390,36 @@ class TestHordeRoute(unittest.TestCase):
         events = [(e.provider, e.outcome) for e in r.audit]
         self.assertIn(("ai-horde", "skipped-no-toolcalls"), events)
 
+    def test_repeated_failures_escalate_the_cooldown(self):
+        # v0.12 route health: a route that keeps failing is
+        # demoted with an escalating cooldown (x1, x2, x4),
+        # and a success clears the record entirely.
+        now = [1_000.0]
+        clock = lambda: now[0]
+        p = ProviderCfg("keyless-pollinations",
+                        "https://text.pollinations.ai/openai", "",
+                        ["openai"], chat_path="", keyless=True,
+                        cooldown_seconds=100)
+        state = {"fail": True}
+        def transport(prov_, messages):
+            return (402, "", None) if state["fail"] else (200, "ok")
+        r = Router(cfg_with([p]), transport=transport, clock=clock)
+        out1 = r.chat([{"role": "user", "content": "hi"}])
+        self.assertTrue(out1["queued"])
+        self.assertEqual(out1["retry_at"], 1_100.0)          # x1
+        now[0] = 1_100.0
+        out2 = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out2["retry_at"], 1_300.0)          # x2
+        now[0] = 1_300.0
+        out3 = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out3["retry_at"], 1_700.0)          # x4
+        now[0] = 1_700.0
+        state["fail"] = False
+        out4 = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out4["text"], "ok")
+        self.assertNotIn("keyless-pollinations", r.fail_counts)
+        self.assertNotIn("keyless-pollinations", r.cooldowns)
+
     def test_default_config_has_horde_second_and_keyless(self):
         import unittest.mock as mock
         with mock.patch.dict(os.environ, {}, clear=True):

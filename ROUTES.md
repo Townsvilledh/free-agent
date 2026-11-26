@@ -61,17 +61,107 @@ Cooldowns in code: Pollinations 45s (or its Retry-After), AI Horde
 300s, AgentRouter 1800s (daily-batch rhythm), Groq 60s, others 60s
 default.
 
-**Route verification log — v0.12 brain-resilience pass (real calls
-from the build VM, 2026-11-26 ~12:33–12:47 UTC).** Every candidate
-was called for real; only the ones that answered keyless are
-wired, and the failures are recorded, not hidden:
+**The exhaustive keyless-brain hunt — v0.12 (real completion calls
+from the build VM, 2026-11-26, three rounds, ~45 candidates).**
+Ethuram's order: "if we can find ten use them all, if 50 use them
+all, so we never face this again." Every candidate below got a
+real call with the same fixed prompt. **Exactly two routes on the
+internet answered keyless today, and both are wired.** The rest
+are recorded with their verdicts — refused, needs-key, dead,
+broken, or challenge-walled — because a hunt that only reports
+its winners is how the next outage stays invisible.
+
+**WIRED (answered keyless with a real completion):**
 
 | Candidate | Verdict | Evidence |
 |---|---|---|
-| Pollinations | **ANSWERS — route 1 (re-confirmed)** | POST answered 402 FREE_LIMIT: "Free limit reached: 100 replies a day per IP. It resets at 00:00 UTC" — the shared egress IP was already over the daily cap. The route exists and is keyless (proven since v0.2); the 402 IS the per-IP limit Ethuram's phone hit. |
-| AI Horde (stablehorde.net) | **ANSWERS KEYLESS — wired as route 2** | Anonymous key `0000000000` accepted. A job submitted with a live worker model completed on the second poll (~40 s) with the requested text. Slow, queue-based, community models — fallback of last resort, labelled as such in the app ("using the slow community route"). |
-| api.airforce | **REFUSED keyless — not wired** | Free-tier models exist in its catalog, but a keyless chat call returned 401 "Missing Authorization"; a paid model returned 402 "paid_model_required". Free still needs a (free) account key → not keyless → excluded by the no-keys doctrine. |
-| llm7.io (api.llm7.io) | **REFUSED keyless — not wired** | Catalog contains zero free-tier models (all pro/turbo); a keyless chat probe returned 401 "Missing API key". Not keyless → excluded. |
+| Pollinations | **WIRED — route 1** | POST answered 402 FREE_LIMIT: "Free limit reached: 100 replies a day per IP. It resets at 00:00 UTC" — this VM's shared egress IP was already over the daily cap. The route exists and is keyless (proven since v0.2); the 402 IS the per-IP limit Ethuram's phone hit. Its anonymous tier serves exactly one model (`openai` = GPT-OSS 20B); `openai-large` returned 404 "isn't on the Classic API". |
+| AI Horde (stablehorde.net) | **WIRED — route 2 (fallback of last resort)** | Anonymous key `0000000000` accepted; a job completed on the second poll (~40 s) with the requested text. Slow, queue-based, community models — labelled as such in the app ("using the slow community route"). This is also the Kobold community pool — the "public Kobold instances" candidate class is this same route. |
+
+**NEEDS A KEY (answered, but demand an account key — excluded by
+the no-keys doctrine; a free key is still a key):**
+llm7.io (401 "Missing API key"; catalog has zero free models) ·
+api.airforce (401 "Missing Authorization"; its "free" models
+still need a free account key) · Pollinations' new gateway
+gen.pollinations.ai (401 "A valid API key is required") ·
+OpenRouter (401) · Hugging Face Router (401) · GitHub Models
+(needs a GitHub token; also unreachable from this VM — connection
+dropped twice) · NVIDIA NIM (410 — the preview models probed
+have been retired; the service is key-gated regardless) ·
+SiliconFlow (401) · Zhipu BigModel (401, no Authorization) ·
+Cohere (401 "no api key supplied") · Mistral (401) · Cerebras
+(401) · Groq (401) · Gemini OpenAI-compat (400 "Missing or
+invalid Authorization header") · Together (401) · Cloudflare
+Workers AI (401 auth error 10000; also needs an account id) ·
+free.gpt.ge (401 "no token provided") · TextSynth (403 "Missing
+bearer authorization") · Puter (401 "Missing authentication
+token") · DeepAI (401 "pass a valid Api-Key") · SambaNova (401) ·
+Novita (403 INVALID_API_KEY) · AI21 (400 "bad or missing
+authentication") · DeepSeek (401) · xAI (401 "No credentials
+presented") · Perplexity (401) · OpenAI (401) · DeepInfra
+(timed out; key-required by its docs) · Routeway (403 —
+Cloudflare wall in front of a key-gated API).
+
+**DEAD / GONE (no live API at the other end):**
+Anyscale Endpoints (404 with its shutdown notice) · OctoAI
+(connection dropped; service shut down after acquisition) ·
+Lepton (connection dropped; shut down) · Hyperbolic (404 "This
+inference endpoint has been decommissioned") · churchless.tech
+and chatgpt-api.shn.hk (historical free GPT proxies — connection
+dropped, gone) · api.g4f.dev (connection dropped — no live
+hosted g4f API) · Akash chatapi (HTTP 200 serving the chat web
+UI's HTML — no API answers at that path any more) · KeylessAI
+worker, keylessai.thryx.workers.dev (connection dropped twice,
+no response — and it is a wrapper fronting Pollinations +
+ApiAirforce, so it would have shared their fate anyway).
+
+**BROKEN (answered, but unusably):**
+api.apillmfree.com, api.freeapillmkey.com, api.apisfreellm.com —
+three domains, evidently ONE shared "free-ai" backend: it
+refuses a benign test prompt ("Reply with exactly: ROUTE OK")
+with an unrelated sexual-content policy template (403), or
+times out / drops the connection. A route that refuses benign
+prompts with a junk template is not a brain. NOT wired.
+
+**CHALLENGE-WALLED (keyless for humans in a browser, not
+callable by an app):**
+duck.ai (DuckDuckGo AI Chat) — the status endpoint minted a
+token, and the chat call still answered **418 ERR_CHALLENGE**:
+its requests now require proofs minted by JavaScript running
+in a real page plus interaction telemetry. Wiring it would
+mean defeating a consumer service's anti-bot challenge from
+inside the app — the same class of wall as X's Arkose, which
+Lille parks at rather than fights (WALLS.md doctrine). NOT
+wired; recorded so nobody re-tests it monthly.
+
+**CLASSES WITH NO STABLE ENDPOINT (not individually called):**
+Hugging Face Spaces demos (thousands of per-space Gradio
+endpoints; they appear and vanish weekly — no stable route) ·
+other consumer web-chat internals (Phind / Copilot / Gemini
+web — same browser-minted-token class as duck.ai) · public
+Ollama / LM-Studio instances (no registry exists) · paid relay
+shops (api2d / aigc2d class — their "keys" are purchased
+credit, the opposite of keyless).
+
+**Shared-fate honesty:** several "different" services front the
+same upstreams (KeylessAI wraps Pollinations; the free-ai trio
+is one backend; half the keyed APIs resell the same open
+models), so a long list would overstate diversity. The two
+wired routes fail independently in every way that matters:
+Pollinations is one company's free tier with a per-IP daily
+cap; the Horde is a volunteer compute pool with a queue. Their
+only shared fate is the user's own network — which is why the
+offline class exists and says so.
+
+**Per-route health (wired with the hunt):** a route that keeps
+failing is demoted automatically. In the app, consecutive
+failures rest a route for 2 min, then 10, then 30 (cap); the
+chain skips resting routes, starts new messages at the first
+healthy route, and probes a rested route automatically when
+its rest expires — a success clears its record (BrainFailure,
+JVM-pinned). In the core router, consecutive failures escalate
+a provider's cooldown ×1/×2/×4/×8 until a success clears it.
+Nobody has to notice, forgive, or reset anything by hand.
 
 **Chat failure discipline (v0.12, app + core):** brain-call
 failures are classified (device-offline / timeout-network /

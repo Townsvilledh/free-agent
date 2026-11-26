@@ -159,4 +159,60 @@ class BrainFailureTest {
         assertTrue(line.contains("offline"))
         assertTrue(line.contains("saved here"))
     }
+
+    // ---- per-route health (v0.12 hunt) ----
+
+    @Test
+    fun routeCooldownEscalatesAndCaps() {
+        assertEquals(0L, BrainFailure.routeCooldownMs(0))
+        assertEquals(120_000L, BrainFailure.routeCooldownMs(1))
+        assertEquals(600_000L, BrainFailure.routeCooldownMs(2))
+        assertEquals(1_800_000L, BrainFailure.routeCooldownMs(3))
+        assertEquals(1_800_000L, BrainFailure.routeCooldownMs(9))
+    }
+
+    @Test
+    fun pickNextSkipsRestingRoutes() {
+        val now = 1_000_000L
+        val cooling = mapOf(BrainFailure.Route.HORDE to now + 60_000L)
+        // Horde is resting: nothing healthy after Pollinations.
+        assertNull(
+            BrainFailure.pickNext(BrainFailure.Route.POLLINATIONS, cooling, now)
+        )
+        // Once its rest expires, it is picked again (automatic
+        // recovery — no manual reset anywhere).
+        assertEquals(
+            BrainFailure.Route.HORDE,
+            BrainFailure.pickNext(
+                BrainFailure.Route.POLLINATIONS, cooling, now + 61_000L
+            )
+        )
+        // Nothing exists after the last route.
+        assertNull(
+            BrainFailure.pickNext(BrainFailure.Route.HORDE, emptyMap(), now)
+        )
+    }
+
+    @Test
+    fun firstHealthyStartsWhereTheChainIsAlive() {
+        val now = 5_000L
+        assertEquals(
+            BrainFailure.Route.POLLINATIONS,
+            BrainFailure.firstHealthy(emptyMap(), now)
+        )
+        val mainResting = mapOf(BrainFailure.Route.POLLINATIONS to now + 1_000L)
+        assertEquals(
+            BrainFailure.Route.HORDE,
+            BrainFailure.firstHealthy(mainResting, now)
+        )
+        val allResting = mapOf(
+            BrainFailure.Route.POLLINATIONS to now + 1_000L,
+            BrainFailure.Route.HORDE to now + 2_000L
+        )
+        assertNull(BrainFailure.firstHealthy(allResting, now))
+        assertEquals(
+            BrainFailure.Route.POLLINATIONS,
+            BrainFailure.firstHealthy(allResting, now + 1_500L)
+        )
+    }
 }

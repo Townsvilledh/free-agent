@@ -166,6 +166,65 @@ object BrainFailure {
         return routes[idx + 1]
     }
 
+    // ---- per-route health (v0.12 hunt) ----
+    //
+    // A route that keeps failing is DEMOTED: it cools down
+    // for an escalating stretch and the chain skips it while
+    // it rests. Recovery is automatic — when the cooldown
+    // expires the route is simply eligible again and the next
+    // message probes it; a success clears its record. The
+    // state itself (failure counts + cooldown deadlines)
+    // lives in the glue; the arithmetic lives here, pinned
+    // by tests.
+
+    /** How long a route rests after [consecutiveFailures]
+     *  failures in a row: 2 min, then 10, then 30 (cap).
+     *  Zero failures = not resting. */
+    fun routeCooldownMs(consecutiveFailures: Int): Long = when {
+        consecutiveFailures <= 0 -> 0L
+        consecutiveFailures == 1 -> 120_000L
+        consecutiveFailures == 2 -> 600_000L
+        else -> 1_800_000L
+    }
+
+    /** The next route to try after [after] failed, SKIPPING
+     *  any route whose health cooldown is still running at
+     *  [nowMs] ([coolingUntilMs] maps route -> deadline).
+     *  Null when every later route is resting (or none is
+     *  left) — the attempt then waits for recovery, and the
+     *  earliest deadline is when a probe makes sense. */
+    fun pickNext(
+        after: Route,
+        coolingUntilMs: Map<Route, Long>,
+        nowMs: Long
+    ): Route? {
+        val routes = Route.values()
+        val idx = routes.indexOf(after)
+        if (idx < 0) return null
+        for (i in idx + 1 until routes.size) {
+            val candidate = routes[i]
+            val until = coolingUntilMs[candidate] ?: 0L
+            if (until <= nowMs) return candidate
+        }
+        return null
+    }
+
+    /** The first route of the chain that is not resting at
+     *  [nowMs] — where a NEW message should start. Null when
+     *  the whole chain is resting (the message then waits
+     *  for the earliest recovery instead of firing into a
+     *  wall). */
+    fun firstHealthy(
+        coolingUntilMs: Map<Route, Long>,
+        nowMs: Long
+    ): Route? {
+        for (route in Route.values()) {
+            val until = coolingUntilMs[route] ?: 0L
+            if (until <= nowMs) return route
+        }
+        return null
+    }
+
     /** True when a failure on the LAST route ends the whole
      *  attempt terminally (permanent everywhere). Retryable
      *  last-route failures schedule the next attempt instead. */

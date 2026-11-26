@@ -189,6 +189,28 @@ class MainActivity : AppCompatActivity() {
     private var lastBrainCallAtMs = 0L
     private var consecutiveRateLimits = 0
 
+    /** v0.12 per-route health (BrainFailure): consecutive
+     *  failure counts + cooldown deadlines per brain route.
+     *  A route that keeps failing is demoted (skipped while
+     *  it rests); recovery is automatic when the deadline
+     *  passes, and a success clears the record. In-memory on
+     *  purpose — a process restart simply re-probes every
+     *  route fresh. */
+    private val routeFailures = mutableMapOf<BrainFailure.Route, Int>()
+    private val routeCoolingUntil = mutableMapOf<BrainFailure.Route, Long>()
+
+    private fun noteRouteFailure(route: BrainFailure.Route) {
+        val n = (routeFailures[route] ?: 0) + 1
+        routeFailures[route] = n
+        routeCoolingUntil[route] =
+            System.currentTimeMillis() + BrainFailure.routeCooldownMs(n)
+    }
+
+    private fun noteRouteSuccess(route: BrainFailure.Route) {
+        routeFailures.remove(route)
+        routeCoolingUntil.remove(route)
+    }
+
     /** The verified Fluid identity behind this session (v0.10
      *  gate), for the greeting line. Null only if the gate let
      *  the app open with an uncheckable session state. */
@@ -743,9 +765,11 @@ class MainActivity : AppCompatActivity() {
      * 402/429. While the one keyless text route is merely busy,
      * the behaviour is "she thinks a little longer" — the call
      * waits and fires when the route allows; there is no retry
-     * cap and no error wall for a busy route. (Honest count:
-     * exactly ONE keyless text route exists today — see
-     * ROUTES.md — so pacing + queueing is its resilience.)
+     * cap and no error wall for a busy route. (v0.12: TWO
+     * keyless text routes are live-verified — Pollinations +
+     * AI Horde — out of ~45 candidates tested; ROUTES.md
+     * carries every verdict. Pacing + fall-through + per-route
+     * health below are the chain's resilience.)
      */
     private fun askBrain(chatId: String, userText: String, attempt: Int) {
         askBrain(chatId, userText, attempt, reframed = false, carry = "", continuations = 0,
@@ -758,6 +782,48 @@ class MainActivity : AppCompatActivity() {
     private fun askBrain(chatId: String, userText: String, attempt: Int, reframed: Boolean,
                          carry: String, continuations: Int, historyText: String) {
         val flight = flightFor(chatId)
+        // v0.12 route health: a fresh call starts at the
+        // first route that isn't resting after repeated
+        // failures (BrainFailure). If the main route is
+        // demoted, go straight to the community route; if
+        // the whole chain is resting, wait for the earliest
+        // recovery instead of firing into a wall. Recovery
+        // is automatic — a rested route is simply eligible
+        // again, and its next success clears its record.
+        if (carry.isEmpty() && continuations == 0) {
+            val now = System.currentTimeMillis()
+            when (BrainFailure.firstHealthy(routeCoolingUntil, now)) {
+                BrainFailure.Route.HORDE -> {
+                    replaceCurrentReply(
+                        chatId,
+                        "The main free route is resting after repeated " +
+                            "failures — going straight to the slow " +
+                            "community route."
+                    )
+                    tryHorde(chatId, userText, historyText)
+                    return
+                }
+                null -> {
+                    val earliest = routeCoolingUntil.values.minOrNull() ?: now
+                    val waitMs = maxOf(earliest - now, 30_000L)
+                    flight.waiting = true
+                    if (chatId == activeChatId) updateComposerState()
+                    replaceCurrentReply(
+                        chatId,
+                        "Every free brain route is resting after repeated " +
+                            "failures. Your message is queued — Lille " +
+                            "retries on her own in about " +
+                            BrainPacing.describeWait(waitMs) + "."
+                    )
+                    schedule(flight, waitMs) {
+                        askBrain(chatId, userText, attempt + 1, reframed,
+                                 "", 0, historyText)
+                    }
+                    return
+                }
+                else -> Unit // main route healthy: normal path
+            }
+        }
         val remaining = BrainPacing.remainingIntervalMs(
             lastBrainCallAtMs, System.currentTimeMillis()
         )
@@ -934,6 +1000,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         code == 200 && full.isNotEmpty() -> {
                             flight.brainStreak = 0
+                            noteRouteSuccess(BrainFailure.Route.POLLINATIONS)
                             val shown = when {
                                 reframed && isRefusalReply(full) -> full + REFUSAL_STILL
                                 reframed -> "$REFUSAL_NOTE\n\n$full"
@@ -1020,7 +1087,10 @@ class MainActivity : AppCompatActivity() {
         retryAfterSec: Long?
     ) {
         val flight = flightFor(chatId)
-        val next = BrainFailure.nextRoute(route)
+        noteRouteFailure(route)
+        val next = BrainFailure.pickNext(
+            route, routeCoolingUntil, System.currentTimeMillis()
+        )
         if (next != null) {
             replaceCurrentReply(
                 chatId, BrainFailure.statusLine(failure, next.label, "")
@@ -1236,6 +1306,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         val flight = flightFor(chatId)
         flight.brainStreak = 0
+        noteRouteSuccess(BrainFailure.Route.HORDE)
         val shown = rawAnswer.trim() +
             "\n\n(Answered by the slow community route — the main free " +
             "route is busy. Community models can be rougher than usual.)"
