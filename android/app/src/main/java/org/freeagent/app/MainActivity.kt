@@ -597,7 +597,14 @@ class MainActivity : AppCompatActivity() {
         // else falls through to the brain as ordinary chat.
         when (val w = WalletPrompt.parse(raw)) {
             is WalletPrompt.Result.Parsed -> {
-                handleWalletPrompt(chatId, w.intent)
+                // v0.13.1: the trailing "from fluid" clause
+                // chooses the source — the user's main Fluid
+                // wallet (FluidTx flow) instead of her own.
+                if (w.intent.source == WalletPrompt.Source.FLUID) {
+                    handleFluidWalletPrompt(chatId, w.intent)
+                } else {
+                    handleWalletPrompt(chatId, w.intent)
+                }
                 return
             }
             is WalletPrompt.Result.Ambiguous -> {
@@ -791,6 +798,100 @@ class MainActivity : AppCompatActivity() {
                             else -> appendAssistantMessage(
                                 chatId, walletExecText(exec)
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** A parsed send prompt with "from fluid" (v0.13.1):
+     *  a MAIN-WALLET send. Lille prepares it, checks the
+     *  session actually granted transaction requests (a
+     *  sign-in-only session degrades honestly, here, before
+     *  anything is prepared), then sends eth_sendTransaction
+     *  over the session with Fluid's own sheet — opened
+     *  inside Lille — as the only approval. The result
+     *  reported in chat is Fluid's answer: the hash it
+     *  broadcast, or its error verbatim. Her caps, her
+     *  signer and her wallet are never involved. */
+    private fun handleFluidWalletPrompt(
+        chatId: String,
+        intent: WalletPrompt.SendIntent
+    ) {
+        val identity = FluidIdentityStore(this).load()
+        if (identity == null) {
+            appendAssistantMessage(
+                chatId,
+                "That send is from your Fluid wallet, but no Fluid name " +
+                    "is connected here — connect it first, then ask me " +
+                    "again. Nothing was sent."
+            )
+            return
+        }
+        FluidLogin.init(this)
+        val granted = FluidLogin.grantedFor(identity.address)
+        if (granted == null) {
+            appendAssistantMessage(
+                chatId,
+                "Your Fluid session isn't live right now, so Lille can't " +
+                    "ask it for anything. Reconnect your Fluid name, then " +
+                    "ask me again. Nothing was sent."
+            )
+            return
+        }
+        FluidTx.txUnavailableReason(granted, intent.chainKey)?.let { reason ->
+            appendAssistantMessage(chatId, reason)
+            return
+        }
+        appendAssistantMessage(chatId, "Preparing that send from your Fluid wallet…")
+        walletEngine.prepareFluidSend(intent) { outcome ->
+            when (outcome) {
+                is WalletEngine.FluidSendOutcome.Failed ->
+                    appendAssistantMessage(chatId, outcome.message)
+                is WalletEngine.FluidSendOutcome.Ready -> {
+                    val send = outcome.send
+                    // The payload gate once more, at the last
+                    // moment before the request exists.
+                    val refusal = FluidTx.validateCall(send.to, send.dataHex)
+                    if (refusal != null) {
+                        appendAssistantMessage(chatId, refusal)
+                        return@prepareFluidSend
+                    }
+                    appendAssistantMessage(chatId, FluidTx.summaryText(send))
+                    // Fluid's approval must be on screen when
+                    // the request lands: open the sheet first,
+                    // then send the request over the session.
+                    if (chatId == renderedChatId && uiAlive && !isFinishing) {
+                        startActivity(Intent(this, FluidSheetActivity::class.java))
+                    }
+                    FluidLogin.requestSendTransaction(
+                        identity.address, send.chainId,
+                        FluidTx.txParamsJson(send)
+                    ) { txHash, error ->
+                        runOnUiThread {
+                            if (txHash != null) {
+                                WalletStore(this).recordActivity(
+                                    "SENT-FLUID",
+                                    "Sent from your Fluid wallet: " +
+                                        "${send.amountDisplay} " +
+                                        "${send.tokenSymbol} → " +
+                                        "${send.recipient} on " +
+                                        (WalletGate.chainByKey(send.chainKey)?.label
+                                            ?: send.chainKey),
+                                    txHash
+                                )
+                                appendAssistantMessage(
+                                    chatId, FluidTx.resultText(send, txHash)
+                                )
+                            } else {
+                                appendAssistantMessage(
+                                    chatId,
+                                    FluidTx.errorText(
+                                        error ?: "The request was refused."
+                                    )
+                                )
+                            }
                         }
                     }
                 }

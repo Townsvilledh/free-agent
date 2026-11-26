@@ -19,11 +19,19 @@ import com.walletconnect.sign.client.SignClient
  *   Ethuram's existing Reown projectId (the "Fluid Wallet"
  *   project from Fluid's WalletGuide work — his own project,
  *   reused for his own companion app).
- * - connect(): proposes a session requesting ONLY the eip155
- *   namespace, ONLY chain eip155:1, ONLY the personal_sign
- *   method. No transaction method is ever requested — the
- *   session exists to prove which wallet owns a Fluid name,
- *   nothing more.
+ * - connect(): proposes a session on the eip155 namespace
+ *   asking for personal_sign AND eth_sendTransaction on
+ *   every chain her companion wallet operates on
+ *   (FluidGate.proposalChains/proposalMethods). v0.10–0.12
+ *   proposed personal_sign on eip155:1 only — and since
+ *   WalletKit rejects any method the session never granted,
+ *   that minimal proposal, not Fluid, was the gate on
+ *   main-wallet transaction requests: Fluid has accepted
+ *   eth_sendTransaction over WalletConnect all along.
+ *   Identity verification is unchanged (the connected
+ *   account must still equal the typed name's registry
+ *   address), and a session that grants less than proposed
+ *   degrades honestly (FluidTx.txAvailable).
  * - The SDK persists the session itself; gate checks read it
  *   back from local storage, so a remembered login needs no
  *   network round-trip.
@@ -60,6 +68,14 @@ object FluidLogin {
     private val signCallbacks =
         java.util.concurrent.ConcurrentHashMap<Long, (String?, String?) -> Unit>()
 
+    /** In-flight eth_sendTransaction requests (v0.13.1),
+     *  keyed by request id like [signCallbacks]. A result is
+     *  the transaction hash Fluid broadcast; an error is
+     *  Fluid's own answer (a rejection included), carried
+     *  verbatim to the caller. */
+    private val txCallbacks =
+        java.util.concurrent.ConcurrentHashMap<Long, (String?, String?) -> Unit>()
+
     @Volatile
     private var initialised = false
 
@@ -87,18 +103,37 @@ object FluidLogin {
         }
 
         override fun onSessionRequestResponse(response: Sign.Model.SessionRequestResponse) {
-            // v0.11: route personal_sign results (the backup
-            // key flow) to their waiting callers by request id.
+            // Route session-request results to their waiting
+            // callers by request id: personal_sign (v0.11, the
+            // backup key flow) and eth_sendTransaction
+            // (v0.13.1, main-wallet sends) keep separate maps;
+            // an id lives in exactly one of them.
             // sign 2.21.0 shape (verified against the SDK
             // sources): SessionRequestResponse is a data class
             // wrapping a sealed JsonRpcResponse.
             when (val result = response.result) {
-                is Sign.Model.JsonRpcResponse.JsonRpcResult ->
-                    signCallbacks.remove(result.id)?.invoke(result.result, null)
-                is Sign.Model.JsonRpcResponse.JsonRpcError ->
-                    signCallbacks.remove(result.id)?.invoke(
-                        null, result.message.ifEmpty { "Signing was refused." }
-                    )
+                is Sign.Model.JsonRpcResponse.JsonRpcResult -> {
+                    val sign = signCallbacks.remove(result.id)
+                    if (sign != null) {
+                        sign(result.result, null)
+                    } else {
+                        txCallbacks.remove(result.id)?.invoke(result.result, null)
+                    }
+                }
+                is Sign.Model.JsonRpcResponse.JsonRpcError -> {
+                    val sign = signCallbacks.remove(result.id)
+                    if (sign != null) {
+                        sign(
+                            null,
+                            result.message.ifEmpty { "Signing was refused." }
+                        )
+                    } else {
+                        txCallbacks.remove(result.id)?.invoke(
+                            null,
+                            result.message.ifEmpty { "The request was refused." }
+                        )
+                    }
+                }
             }
         }
 
@@ -155,9 +190,13 @@ object FluidLogin {
 
     /**
      * Propose a session and hand back the pairing URI
-     * (wc:…) for the user to paste into Fluid. The proposal is
-     * deliberately minimal: eip155 only, chain eip155:1 only,
-     * personal_sign only.
+     * (wc:…) for the user to carry into Fluid (the #wc= deep
+     * link, or a paste as fallback). The proposal (v0.13.1)
+     * asks for personal_sign + eth_sendTransaction on every
+     * chain her companion wallet operates on — FluidGate
+     * carries the exact lists, pinned by tests. Fluid may
+     * approve less; the gate and FluidTx read what was
+     * actually granted and degrade honestly.
      */
     fun connect(onPairingUri: (String) -> Unit, onError: (String) -> Unit) {
         if (!initialised) {
@@ -166,8 +205,8 @@ object FluidLogin {
         }
         val namespaces = mapOf(
             FluidGate.NAMESPACE to Sign.Model.Namespace.Proposal(
-                chains = listOf(FluidGate.CHAIN_ID),
-                methods = listOf(FluidGate.METHOD_PERSONAL_SIGN),
+                chains = FluidGate.proposalChains(),
+                methods = FluidGate.proposalMethods(),
                 events = emptyList()
             )
         )
@@ -268,6 +307,90 @@ object FluidLogin {
             )
         } catch (e: Exception) {
             onResult(null, e.message ?: "Could not send the signing request.")
+        }
+    }
+
+    /**
+     * What the live session for [address] actually granted
+     * (v0.13.1): the eip155 namespace's methods and the
+     * chains the identity's account appears on — the inputs
+     * to FluidTx.txAvailable. Null when there is no live
+     * session for the identity (or the stack is down): the
+     * caller then treats the session as gone, not degraded.
+     */
+    fun grantedFor(address: String): FluidTx.Granted? {
+        if (!initialised) return null
+        return try {
+            val session = SignClient.getListOfActiveSessions().firstOrNull { s ->
+                val accounts = s.namespaces.values.flatMap { it.accounts }
+                FluidGate.sessionMatchesIdentity(accounts, address)
+            } ?: return null
+            val ns = session.namespaces[FluidGate.NAMESPACE] ?: return null
+            val chains = ns.accounts
+                .filter { account ->
+                    FluidGate.accountAddress(account)?.let {
+                        FluidGate.addressesEqual(it, address)
+                    } == true
+                }
+                .mapNotNull { account ->
+                    account.split(":").getOrNull(1)?.toLongOrNull()
+                }
+                .toSet()
+            FluidTx.Granted(methods = ns.methods.toSet(), accountChains = chains)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Ask the connected Fluid wallet to send a transaction
+     * (v0.13.1, main-wallet sends): an eth_sendTransaction
+     * session request on [chainId]. Fluid renders its own
+     * approval sheet (inside Lille's embedded Fluid sheet,
+     * when the caller has it open), signs and broadcasts on
+     * the user's approval, and the answer comes back here
+     * exactly once: the transaction hash, or Fluid's error
+     * verbatim (a rejection included). Lille never sees a
+     * key and cannot approve anything herself.
+     *
+     * The caller MUST have run FluidTx.validateCall over
+     * the payload first — this layer sends what it is given.
+     */
+    fun requestSendTransaction(
+        address: String,
+        chainId: String,
+        paramsJson: String,
+        onResult: (txHash: String?, error: String?) -> Unit
+    ) {
+        if (!initialised) {
+            onResult(null, initError ?: "WalletConnect is not ready yet.")
+            return
+        }
+        val topic = activeSessionTopicFor(address)
+        if (topic == null) {
+            onResult(null, "No live Fluid session — reconnect your Fluid name first.")
+            return
+        }
+        try {
+            SignClient.request(
+                Sign.Params.Request(
+                    sessionTopic = topic,
+                    method = FluidGate.METHOD_SEND_TRANSACTION,
+                    params = paramsJson,
+                    chainId = chainId
+                ),
+                onSuccess = { sent: Sign.Model.SentRequest ->
+                    txCallbacks[sent.requestId] = onResult
+                },
+                onError = { error ->
+                    onResult(
+                        null,
+                        error.throwable.message ?: "Could not send the transaction request."
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            onResult(null, e.message ?: "Could not send the transaction request.")
         }
     }
 

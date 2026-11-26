@@ -3,6 +3,7 @@ package org.freeagent.app
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.widget.ArrayAdapter
@@ -47,6 +48,7 @@ class WalletActivity : AppCompatActivity() {
     private lateinit var assetSpinner: Spinner
     private lateinit var amountInput: EditText
     private lateinit var usdCheck: CheckBox
+    private lateinit var fromFluidCheck: CheckBox
     private lateinit var recipientInput: EditText
     private lateinit var capPerTxInput: EditText
     private lateinit var capDailyInput: EditText
@@ -71,6 +73,7 @@ class WalletActivity : AppCompatActivity() {
         assetSpinner = findViewById(R.id.walletSendAsset)
         amountInput = findViewById(R.id.walletSendAmount)
         usdCheck = findViewById(R.id.walletSendUsd)
+        fromFluidCheck = findViewById(R.id.walletSendFromFluid)
         recipientInput = findViewById(R.id.walletSendRecipient)
         capPerTxInput = findViewById(R.id.walletCapPerTx)
         capDailyInput = findViewById(R.id.walletCapDaily)
@@ -218,6 +221,14 @@ class WalletActivity : AppCompatActivity() {
         }
         val chain = selectedChain()
         val asset = assetSpinner.selectedItem.toString()
+        // v0.13.1: the source choice — her own wallet
+        // (default, the prepare-and-ask flow below) or the
+        // user's main Fluid wallet (FluidTx: Fluid approves
+        // in its own sheet; her signer is never involved).
+        if (fromFluidCheck.isChecked) {
+            prepareFluidFromForm(chain, asset, amount, recipient)
+            return
+        }
         statusView.text = "Preparing…"
         engine.prepareFromForm(
             chainKey = chain.key,
@@ -234,6 +245,93 @@ class WalletActivity : AppCompatActivity() {
                     offerApproval(outcome.prepared)
             }
             renderActivity()
+        }
+    }
+
+    /** A MAIN-WALLET send from this form (v0.13.1): the
+     *  same discipline as the chat path — capability check
+     *  first, live prepare, payload gate, then the request
+     *  goes over the session with Fluid's sheet (opened
+     *  inside Lille) as the only approval. The result shown
+     *  is Fluid's answer: its hash, or its error verbatim. */
+    private fun prepareFluidFromForm(
+        chain: WalletGate.Chain,
+        asset: String,
+        amount: String,
+        recipient: String
+    ) {
+        val identity = FluidIdentityStore(this).load()
+        if (identity == null) {
+            statusView.text =
+                "No Fluid name is connected, so Lille doesn't know which " +
+                    "wallet to ask. Connect your Fluid name first."
+            return
+        }
+        FluidLogin.init(this)
+        val granted = FluidLogin.grantedFor(identity.address)
+        if (granted == null) {
+            statusView.text =
+                "Your Fluid session isn't live right now — reconnect " +
+                    "your Fluid name, then try again. Nothing was sent."
+            return
+        }
+        FluidTx.txUnavailableReason(granted, chain.key)?.let { reason ->
+            statusView.text = reason
+            return
+        }
+        val intent = WalletPrompt.SendIntent(
+            amountText = if (usdCheck.isChecked) null else amount,
+            usdAmountText = if (usdCheck.isChecked) amount else null,
+            asset = asset,
+            targetRaw = recipient,
+            targetIsName = !Evm.isAddress(recipient),
+            chainKey = chain.key,
+            source = WalletPrompt.Source.FLUID
+        )
+        statusView.text = "Preparing a send from your Fluid wallet…"
+        engine.prepareFluidSend(intent) { outcome ->
+            if (isFinishing || isDestroyed) return@prepareFluidSend
+            when (outcome) {
+                is WalletEngine.FluidSendOutcome.Failed ->
+                    statusView.text = outcome.message
+                is WalletEngine.FluidSendOutcome.Ready -> {
+                    val send = outcome.send
+                    val refusal = FluidTx.validateCall(send.to, send.dataHex)
+                    if (refusal != null) {
+                        statusView.text = refusal
+                        return@prepareFluidSend
+                    }
+                    statusView.text =
+                        "Opening Fluid here — approve the send on its " +
+                            "own sheet. Nothing moves unless you approve."
+                    startActivity(Intent(this, FluidSheetActivity::class.java))
+                    FluidLogin.requestSendTransaction(
+                        identity.address, send.chainId,
+                        FluidTx.txParamsJson(send)
+                    ) { txHash, error ->
+                        runOnUiThread {
+                            if (isFinishing || isDestroyed) return@runOnUiThread
+                            if (txHash != null) {
+                                store.recordActivity(
+                                    "SENT-FLUID",
+                                    "Sent from your Fluid wallet: " +
+                                        "${send.amountDisplay} " +
+                                        "${send.tokenSymbol} → " +
+                                        "${send.recipient} on ${chain.label}",
+                                    txHash
+                                )
+                                statusView.text =
+                                    FluidTx.resultText(send, txHash)
+                            } else {
+                                statusView.text = FluidTx.errorText(
+                                    error ?: "The request was refused."
+                                )
+                            }
+                            renderActivity()
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -186,9 +186,12 @@ model itself can be talked into things. That is exactly why:
 
 What she can **never** do:
 
-- Touch the main Fluid wallet — no key, no session method, no
-  code path. Her WalletConnect session is identity-only
-  (`personal_sign`); it cannot sign transactions.
+- Sign or spend from the main Fluid wallet herself. She can
+  ASK it for a send (see "Main-wallet sends" below) — the
+  request travels over the WalletConnect session and Fluid's
+  own approval sheet decides. She holds no main-wallet key,
+  has no approval she can manufacture, and there is no
+  autonomous path for main funds, ever.
 - Exceed the caps the user set, or spend unapproved while the
   autonomous switch is off.
 - Spend from an empty or unpriced position silently — unpriced
@@ -204,11 +207,15 @@ Fluid → paste → approve → switch back. The login screen now
 also offers **Open Fluid inside Lille**: the pairing code is
 placed on the clipboard automatically, and Fluid's own web app
 loads in an in-app sheet (`FluidSheetActivity`) — the user
-unlocks Fluid and approves without leaving Lille. Fluid has
-**no `wc:` deep link** today (checked against its source
-2026-11-26: its WalletConnect panel is paste-only), so the
-sheet carries the clipboard flow rather than a deep link;
-PARITY.md records the Fluid-side follow-up. One honest caveat:
+unlocks Fluid and approves without leaving Lille. Since
+v0.13.1 the pairing code rides Fluid's **`#wc=` deep link**
+(Fluid build stamp 4d7f509193, 2026-11-26):
+`https://fluidwallet.dpdns.org/#wc=` + the encoded pairing
+URI opens Fluid straight at its WalletConnect panel with the
+pairing started — no paste step. The code still goes to the
+clipboard, and if the deep-link load fails the sheet falls
+back to Fluid's plain page, where the paste flow works
+exactly as before. One honest caveat:
 the embedded browser's storage is separate from Chrome/the
 installed Fluid, so a user whose wallet lives elsewhere may
 need to create or import it inside the sheet once — it then
@@ -219,6 +226,52 @@ installs no JavaScript bridge, injects no script, and never
 reads keystrokes, form values, or page content inside Fluid.
 Fluid's keys stay Fluid's.
 
+## Main-wallet sends (v0.13.1)
+
+The other direction of "sign where you stand": a send whose
+source is the user's **main Fluid wallet**, not hers. Two
+doors, same flow:
+
+- **Chat:** any strict send phrasing with a trailing
+  `from fluid` / `from my fluid wallet` —
+  `send 2 USDC to @name on base from fluid`. Without the
+  clause a send is hers, exactly as before.
+- **Wallet screen:** the "Send from my Fluid wallet instead"
+  checkbox on the send form.
+
+The flow: she prepares the send from live state (recipient
+resolved against the names registry; $-amounts converted at
+a live price — she shows concrete numbers, never a formula),
+checks the payload against the discipline below, opens Fluid
+inside Lille, and sends an `eth_sendTransaction` request over
+the WalletConnect session. **Fluid's own approval sheet** —
+showing its own live fee estimate — is the only approval;
+Fluid signs and broadcasts. Chat reports Fluid's answer: the
+transaction hash, or its error verbatim (a rejection reads as
+a rejection).
+
+What made this possible, corrected for the record: Fluid has
+accepted `eth_sendTransaction` over WalletConnect all along.
+The gate was Lille's own session proposal — v0.10–v0.12 asked
+for `personal_sign` on Ethereum only, and WalletKit rejects
+any method the session never granted. The proposal now asks
+for `personal_sign` + `eth_sendTransaction` on all seven of
+her wallet's chains. A session that granted less (an older
+Fluid, a narrowed approval) still proves identity — the login
+works — and transaction requests degrade to an honest
+"unavailable" naming the remedy. Nothing crashes.
+
+**Payload discipline** (`FluidTx.validateCall`, applied
+before any request is sent): Fluid decodes what it signs, so
+Lille only asks for what Fluid can decode — a plain native
+send, or an ERC-20 `transfer` / `transferFrom` / `approve`
+call of exactly the right shape. Contract creation, unknown
+selectors and malformed calls are refused by Lille first,
+with the reason in plain language. Her caps never apply to
+main funds (they are not hers to cap), and no setting makes
+a main-wallet send autonomous: every one is approved by the
+user in Fluid, every time.
+
 ## Not built (honest)
 
 - Task-engine wallet tools: her background tasks cannot spend
@@ -228,5 +281,7 @@ Fluid's keys stay Fluid's.
   above. Bitcoin, Solana and the other Fluid families are NOT
   BUILT in her wallet; PARITY.md carries them as named rows,
   not as fine print.
-- Main-wallet transaction approvals from inside Lille: NOT
-  BUILT — see the first-class row in PARITY.md.
+- Main-wallet sends from her background tasks: chat and the
+  Wallet screen only — a task cannot ask Fluid for a send,
+  because Fluid's approval needs the user present at the
+  sheet anyway.

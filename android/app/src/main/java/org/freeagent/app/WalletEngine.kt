@@ -393,6 +393,139 @@ class WalletEngine(context: Context) {
         )
     }
 
+    // ---------------- main-wallet (Fluid) sends ----------------
+
+    sealed class FluidSendOutcome {
+        data class Ready(val send: FluidTx.MainSend) : FluidSendOutcome()
+        data class Failed(val message: String) : FluidSendOutcome()
+    }
+
+    /**
+     * Prepare a MAIN-WALLET send (v0.13.1, FluidTx): the
+     * same live preparation discipline as her own sends —
+     * recipient resolved against the names registry, the
+     * amount computed from live prices for the $ forms —
+     * minus everything that is Fluid's business, not hers:
+     * no balance check (Fluid knows its own balance), no
+     * fees, no nonce (Fluid fills them; its sheet shows its
+     * own live fee estimate). Nothing is signed here and
+     * nothing can be: the request goes over the session and
+     * Fluid's approval sheet decides.
+     */
+    fun prepareFluidSend(
+        intent: WalletPrompt.SendIntent,
+        done: (FluidSendOutcome) -> Unit
+    ) {
+        executor.execute {
+            val outcome = try {
+                FluidSendOutcome.Ready(buildFluidSend(intent))
+            } catch (e: PrepareException) {
+                FluidSendOutcome.Failed(e.message!!)
+            } catch (e: Exception) {
+                FluidSendOutcome.Failed(
+                    "Lille couldn't prepare that Fluid-wallet send " +
+                        "(${e.message}). Nothing was sent."
+                )
+            }
+            mainHandler.post { done(outcome) }
+        }
+    }
+
+    private fun buildFluidSend(
+        intent: WalletPrompt.SendIntent
+    ): FluidTx.MainSend {
+        val chain = WalletGate.chainByKey(intent.chainKey)
+            ?: throw PrepareException("Unknown chain. Nothing was prepared.")
+        val token = WalletGate.token(chain, intent.asset)
+            ?: throw PrepareException(
+                "Lille can't build a ${intent.asset} send on ${chain.label} — " +
+                    "she only asks Fluid for assets whose contracts she " +
+                    "knows. Nothing was prepared."
+            )
+        val identity = identityStore.load()
+            ?: throw PrepareException(
+                "No Fluid name is connected, so Lille doesn't know which " +
+                    "wallet to ask. Connect your Fluid name first. " +
+                    "Nothing was sent."
+            )
+        val from = Evm.toChecksumAddress(identity.address.removePrefix("0x"))
+        val (recipient, recipientLabel) =
+            resolveRecipient(intent.targetRaw, intent.targetIsName)
+        val price = priceFor(token.priceId)
+        val amountRaw = computeAmountRaw(
+            token, intent.amountText, intent.usdAmountText, price
+        )
+        val (to, valueWei, dataHex) = FluidTx.payloadFor(token, recipient, amountRaw)
+        // The payload gate, defence in depth: her own builder
+        // only produces allowed shapes, and if that ever
+        // changed, the refusal still fires BEFORE any request.
+        FluidTx.validateCall(to, dataHex)?.let { throw PrepareException(it) }
+        val send = FluidTx.MainSend(
+            chainKey = chain.key,
+            chainId = FluidGate.caipChainId(chain.key)
+                ?: throw PrepareException("Unknown chain. Nothing was prepared."),
+            tokenSymbol = token.symbol,
+            amountRaw = amountRaw,
+            amountDisplay = Evm.formatUnits(amountRaw, token.decimals),
+            fromAddress = from,
+            recipient = recipient,
+            recipientLabel = recipientLabel,
+            to = to,
+            valueWei = valueWei,
+            dataHex = dataHex,
+            usdCents = WalletGate.usdCentsOf(amountRaw, token, price?.usd)
+        )
+        store.recordActivity(
+            "PREPARED-FLUID",
+            "Prepared (your Fluid wallet): ${send.amountDisplay} " +
+                "${send.tokenSymbol} → $recipient on ${chain.label}"
+        )
+        return send
+    }
+
+    /** The amount math shared by the Fluid prepare path:
+     *  token-denominated parses directly; USD-denominated
+     *  converts at the live price and refuses when no price
+     *  route answers (an unpriced formula never reaches a
+     *  signature — the user approves concrete numbers). */
+    private fun computeAmountRaw(
+        token: WalletGate.Token,
+        amountText: String?,
+        usdAmountText: String?,
+        price: PriceChain.Price?
+    ): BigInteger {
+        return when {
+            usdAmountText != null -> {
+                if (price == null) {
+                    throw PrepareException(
+                        "Lille couldn't price ${token.symbol} in dollars " +
+                            "right now (every price route is busy), so she " +
+                            "can't turn \$$usdAmountText into an amount. " +
+                            "Nothing was prepared — name the amount in " +
+                            "${token.symbol} itself, or try again shortly."
+                    )
+                }
+                val usd = BigDecimal(usdAmountText)
+                val tokenAmount = usd.divide(price.usd, 18, RoundingMode.HALF_UP)
+                val raw = tokenAmount.multiply(BigDecimal.TEN.pow(token.decimals))
+                    .setScale(0, RoundingMode.HALF_UP).toBigInteger()
+                if (raw.signum() == 0) {
+                    throw PrepareException(
+                        "\$$usdAmountText of ${token.symbol} is too small " +
+                            "to send. Nothing was prepared."
+                    )
+                }
+                raw
+            }
+            amountText != null -> Evm.parseUnits(amountText, token.decimals)
+                ?: throw PrepareException(
+                    "\"$amountText ${token.symbol}\" isn't an amount Lille " +
+                        "can send. Nothing was prepared."
+                )
+            else -> throw PrepareException("No amount given. Nothing was prepared.")
+        }
+    }
+
     private fun prepare(
         chainKey: String,
         asset: String,

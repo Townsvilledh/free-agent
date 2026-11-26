@@ -55,6 +55,7 @@
     <string name="wallet_send_title">Send from her wallet</string>
     <string name="wallet_send_amount_hint">Amount (e.g. 2.5)</string>
     <string name="wallet_send_usd">Amount is in US dollars ($)</string>
+    <string name="wallet_send_from_fluid">Send from my Fluid wallet instead (Fluid approves it in its own sheet)</string>
     <string name="wallet_send_recipient_hint">To: 0x… address or @fluidname</string>
     <string name="wallet_send_prepare">Prepare send</string>
     <string name="wallet_sweep">Return funds to my Fluid wallet</string>

@@ -133,6 +133,13 @@
                 android:text="@string/wallet_send_usd"
                 android:textColor="#B9B0A2" />
 
+            <CheckBox
+                android:id="@+id/walletSendFromFluid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/wallet_send_from_fluid"
+                android:textColor="#B9B0A2" />
+
             <Spinner
                 android:id="@+id/walletSendAsset"
                 android:layout_width="match_parent"
