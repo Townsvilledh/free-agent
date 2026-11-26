@@ -2,7 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0B0B0B">
+    android:background="#000000">
 
     <!-- v0.10 UI polish: the login arrives on the same rounded
          card language as the chat screen — dark warm surface,
@@ -19,7 +19,7 @@
             android:layout_width="72dp"
             android:layout_height="72dp"
             android:layout_gravity="center_horizontal"
-            android:src="@drawable/lille_mascot"
+            android:src="@drawable/mascot_idle"
             android:contentDescription="@string/app_name"
             android:scaleType="centerCrop" />
 

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mascot state (design fold-in Direction 1): pose + antenna
+     dot. Static drawable swap only - no animation. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <bitmap android:src="@drawable/lille_mascot" android:gravity="fill" />
+    </item>
+    <item android:width="15dp" android:height="15dp"
+        android:gravity="top|right" android:top="1dp" android:right="1dp"
+        android:drawable="@drawable/dot_green" />
+</layer-list>

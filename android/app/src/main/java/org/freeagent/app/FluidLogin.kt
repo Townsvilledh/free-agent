@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.walletconnect.android.Core
 import com.walletconnect.android.CoreClient
-import com.walletconnect.android.connection.ConnectionType
+import com.walletconnect.android.relay.ConnectionType
 import com.walletconnect.sign.client.Sign
 import com.walletconnect.sign.client.SignClient
 
@@ -80,12 +80,10 @@ object FluidLogin {
 
         override fun onSessionRequestResponse(response: Sign.Model.SessionRequestResponse) {}
 
-        override fun onProposalExpired(proposal: Sign.Model.ExpiredProposal) {
-            listener?.onError(
-                "That pairing code expired before it was approved. " +
-                    "Tap Connect to print a fresh one."
-            )
-        }
+        // sign 2.21.0's DappDelegate has no proposal-expiry
+        // callback: an expired pairing simply never approves,
+        // and the waiting screen's Cancel + fresh Connect is
+        // the honest path (LOGIN.md says so).
 
         override fun onConnectionStateChange(state: Sign.Model.ConnectionState) {}
 
@@ -152,11 +150,25 @@ object FluidLogin {
             )
         )
         try {
+            // sign 2.21.0 flow: create the pairing first (its uri
+            // IS the wc: code), then propose the session on it.
+            val pairing = CoreClient.Pairing.create { error ->
+                onError(
+                    error.throwable.message
+                        ?: "Could not create a pairing code."
+                )
+            }
             SignClient.connect(
-                Sign.Params.Connect(namespaces = namespaces),
-                onProposedSequence = { sequence -> onPairingUri(sequence.pairingURI) },
+                Sign.Params.Connect(
+                    namespaces = namespaces,
+                    pairing = pairing
+                ),
+                onSuccess = { onPairingUri(pairing.uri) },
                 onError = { error ->
-                    onError(error.throwable.message ?: "Could not create a pairing code.")
+                    onError(
+                        error.throwable.message
+                            ?: "Could not create a pairing code."
+                    )
                 }
             )
         } catch (e: Exception) {
@@ -170,7 +182,7 @@ object FluidLogin {
     fun sessionAccounts(): List<String>? {
         if (!initialised) return null
         return try {
-            SignClient.getSessions().flatMap { session ->
+            SignClient.getListOfActiveSessions().flatMap { session ->
                 session.namespaces.values.flatMap { it.accounts }
             }
         } catch (e: Exception) {
@@ -213,7 +225,8 @@ object FluidLogin {
     fun cancelPendingPairing() {
         if (!initialised) return
         try {
-            val sessionTopics = SignClient.getSessions().map { it.topic }.toSet()
+            val sessionTopics = SignClient.getListOfActiveSessions()
+                .map { it.topic }.toSet()
             CoreClient.Pairing.getPairings()
                 .filter { it.topic !in sessionTopics }
                 .forEach { pairing ->
@@ -233,11 +246,10 @@ object FluidLogin {
     fun disconnectSessions(store: FluidIdentityStore, forgetIdentity: Boolean) {
         if (initialised) {
             try {
-                SignClient.getSessions().forEach { session ->
+                SignClient.getListOfActiveSessions().forEach { session ->
                     SignClient.disconnect(
                         Sign.Params.Disconnect(
-                            sessionTopic = session.topic,
-                            reason = "Session ended from Lille."
+                            sessionTopic = session.topic
                         )
                     ) {}
                 }

@@ -10,6 +10,7 @@ import android.provider.OpenableColumns
 import android.util.Size
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
@@ -82,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var input: EditText
     private lateinit var sendButton: ImageButton
     private lateinit var attachButton: ImageButton
+    private lateinit var headerMascot: ImageView
 
     /** v0.10 UI polish: messages are bubbles now. This is the
      *  most recent Lille bubble — the one replaceCurrentReply
@@ -106,6 +108,31 @@ class MainActivity : AppCompatActivity() {
 
     /** True while a request is in flight — the keyless tier is 1-at-a-time. */
     private var busy = false
+
+    /** Chat parity (v0.10 fold-in): the visible send queue.
+     *  While a reply is in flight the composer stays live; a
+     *  message sent then is queued (bubble shown at once with
+     *  a "queued" badge) and sent in order when the flight
+     *  ends or is stopped. ChatQueue owns the order; the
+     *  bubbles for waiting messages live in [queuedBubbles],
+     *  FIFO-parallel to it, so the badge can be stripped when
+     *  a message starts. */
+    private val chatQueue = ChatQueue()
+    private val queuedBubbles = ArrayDeque<Pair<TextView, String>>()
+
+    /** The in-flight OkHttp call (so Stop can cancel it), a
+     *  generation counter (so a cancelled call's late callback
+     *  is ignored), the partial answer so far (so Stop keeps
+     *  it, honestly marked), and the tracked delayed actions
+     *  (pacing gate / cooldown retries Stop must cancel). */
+    private var currentCall: Call? = null
+    private var generation = 0
+    private var currentPartial = ""
+    private var currentCarry = ""
+    private var replyOpen = false
+    private var chatWaiting = false
+    private val pendingActions = mutableListOf<Runnable>()
+    private var defaultHint: CharSequence = ""
 
     /** Fallback law: when the keyless route is cooling down after a
      *  rate limit, this holds the wall-clock time it recovers. */
@@ -159,6 +186,8 @@ class MainActivity : AppCompatActivity() {
         input = findViewById(R.id.messageInput)
         sendButton = findViewById(R.id.sendButton)
         attachButton = findViewById(R.id.attachButton)
+        headerMascot = findViewById(R.id.headerMascot)
+        defaultHint = input.hint ?: ""
         attachmentBar = findViewById(R.id.attachmentBar)
         attachmentThumb = findViewById(R.id.attachmentThumb)
         attachmentName = findViewById(R.id.attachmentName)
@@ -168,7 +197,21 @@ class MainActivity : AppCompatActivity() {
             // task there, run it, then close the app / go offline.
             startActivity(android.content.Intent(this, TasksActivity::class.java))
         }
-        sendButton.setOnClickListener { send() }
+        // Chat parity: while a reply is in flight the send
+        // button IS the stop button (same slot); the composer
+        // stays live and the keyboard's send key queues the
+        // next message (see submitMessage).
+        sendButton.setOnClickListener {
+            if (busy) stopReply() else submitMessage()
+        }
+        input.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                submitMessage()
+                true
+            } else {
+                false
+            }
+        }
         attachButton.setOnClickListener {
             // Images AND files; the note in the outgoing message says what
             // was attached. */* keeps the picker open to any document.
@@ -226,26 +269,130 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- chat ----------
 
-    private fun send() {
+    /**
+     * Submit whatever is in the composer. Before v0.10, sending
+     * during a reply was refused with a "still waiting" line and
+     * the composer locked. Now (chat parity): the message joins
+     * the transcript IMMEDIATELY — sent at once when Lille is
+     * free, or badged "queued" and sent in order when the
+     * current reply finishes or is stopped. A user's message is
+     * never erased by a busy route or a failed send.
+     */
+    private fun submitMessage() {
         val raw = input.text.toString().trim()
-        if (busy) {
-            appendLine("Lille", "(Still waiting on the free brain — one request at a time. Your message will be sendable in a moment.)")
-            return
-        }
         if (raw.isEmpty() && pendingAttachment == null) return
 
         var outgoing = raw
-        pendingAttachment?.let { (_, name, mime) ->
+        val display = pendingAttachment?.let { (_, name, mime) ->
             val note = "[Attached file: $name (${mime ?: "unknown type"}). " +
                 "Note: in this version the attachment is recorded by name only — " +
                 "full file/image understanding is a next step, so do not claim to have seen its contents.]"
             outgoing = if (outgoing.isEmpty()) note else "$outgoing\n$note"
-            appendLine("You", (if (raw.isEmpty()) "" else "$raw ") + "[attachment: $name]")
-        } ?: appendLine("You", raw)
+            (if (raw.isEmpty()) "" else "$raw ") + "[attachment: $name]"
+        } ?: raw
+        val bubble = appendLine("You", display)
 
         input.text.clear()
         clearAttachment()
-        askBrain(outgoing, attempt = 0)
+
+        val position = chatQueue.offer(outgoing)
+        if (position == 0) {
+            chatQueue.beginFlight()
+            busy = true
+            updateComposerState()
+            askBrain(outgoing, attempt = 0)
+        } else {
+            queuedBubbles.addLast(bubble to display)
+            bubble.text = display + "\n· " + ChatQueue.badge(position)
+        }
+    }
+
+    /** Stop the in-flight reply (the send button's other face).
+     *  The partial answer stays in the transcript, honestly
+     *  marked as stopped — never silently completed — and the
+     *  next queued message, if any, goes next. */
+    private fun stopReply() {
+        generation++
+        currentCall?.cancel()
+        currentCall = null
+        pendingActions.forEach { mainHandler.removeCallbacks(it) }
+        pendingActions.clear()
+        val partial = stitch(currentCarry, currentPartial)
+        if (replyOpen) {
+            replaceCurrentReply(
+                if (partial.isNotEmpty()) {
+                    partial + "\n\n(Stopped by you — this reply is incomplete.)"
+                } else {
+                    "(Stopped by you.)"
+                }
+            )
+        }
+        currentPartial = ""
+        currentCarry = ""
+        replyOpen = false
+        finishFlight()
+    }
+
+    /** A reply cycle ended (delivered, errored, or stopped):
+     *  release the flight and start the next queued message,
+     *  if one is waiting — in order, badge stripped. */
+    private fun finishFlight() {
+        busy = false
+        chatWaiting = false
+        chatQueue.endFlight()
+        currentCall = null
+        replyOpen = false
+        val next = chatQueue.startNext()
+        if (next == null) {
+            updateComposerState()
+            return
+        }
+        val entry = if (queuedBubbles.isEmpty()) null else queuedBubbles.removeFirst()
+        entry?.let { (bubble, display) -> bubble.text = display }
+        busy = true
+        updateComposerState()
+        askBrain(next, attempt = 0)
+    }
+
+    /** Send button + header mascot follow the flight state:
+     *  the button morphs Send → Stop while busy (composer and
+     *  attach stay live), and the mascot carries the state —
+     *  WAITING while BrainPacing holds the call, WORKING while
+     *  a reply is actually being produced, IDLE at rest. */
+    private fun updateComposerState() {
+        if (busy) {
+            sendButton.setImageResource(R.drawable.ic_stop)
+            sendButton.contentDescription = "Stop"
+            input.hint = "Type another message — the send key queues it"
+        } else {
+            sendButton.setImageResource(R.drawable.ic_send)
+            sendButton.contentDescription = "Send message"
+            input.hint = defaultHint
+        }
+        val mascot = MascotStates.forChat(busy, chatWaiting)
+        headerMascot.setImageResource(
+            resources.getIdentifier(
+                MascotStates.drawableName(mascot), "drawable", packageName
+            )
+        )
+    }
+
+    /** Delayed work Stop must be able to cancel (pacing gate,
+     *  cooldown retries). */
+    private fun schedule(delayMs: Long, block: () -> Unit) {
+        lateinit var r: Runnable
+        r = Runnable {
+            pendingActions.remove(r)
+            block()
+        }
+        pendingActions.add(r)
+        mainHandler.postDelayed(r, delayMs)
+    }
+
+    /** Main-thread work from a network callback, dropped if
+     *  Stop (or a newer flight) has superseded its generation. */
+    private fun postIfCurrent(gen: Int, block: () -> Unit) {
+        mainHandler.post { if (gen == generation) block() }
     }
 
     /**
@@ -280,10 +427,11 @@ class MainActivity : AppCompatActivity() {
         )
         if (remaining > 0) {
             busy = true
-            setInputEnabled(false)
-            mainHandler.postDelayed({
+            chatWaiting = true
+            updateComposerState()
+            schedule(remaining) {
                 askBrainNow(userText, attempt, reframed, carry, continuations, historyText)
-            }, remaining)
+            }
             return
         }
         askBrainNow(userText, attempt, reframed, carry, continuations, historyText)
@@ -304,8 +452,15 @@ class MainActivity : AppCompatActivity() {
     private fun askBrainNow(userText: String, attempt: Int, reframed: Boolean,
                             carry: String, continuations: Int, historyText: String) {
         busy = true
-        setInputEnabled(false)
-        if (carry.isEmpty()) appendLine("Lille", "…thinking")
+        chatWaiting = false
+        updateComposerState()
+        val gen = generation
+        currentCarry = carry
+        currentPartial = ""
+        if (carry.isEmpty()) {
+            appendLine("Lille", "…thinking")
+            replyOpen = true
+        }
 
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
@@ -325,18 +480,19 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         lastBrainCallAtMs = System.currentTimeMillis()
-        client.newCall(request).enqueue(object : Callback {
+        val call = client.newCall(request)
+        currentCall = call
+        call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                mainHandler.post {
+                postIfCurrent(gen) {
                     if (carry.isNotEmpty() && continuations < MAX_CONTINUATIONS) {
                         // Dropped before/while streaming with a partial
                         // answer preserved: auto-continue, don't lose it.
                         replaceCurrentReply(carry + "\n\n(Connection dropped — continuing automatically…)")
                         askBrain(userText, attempt, reframed, carry, continuations + 1, historyText)
                     } else {
-                        busy = false
-                        setInputEnabled(true)
                         replaceCurrentReply("Couldn't reach the free brain — check your connection and try again. Nothing was sent anywhere else.")
+                        finishFlight()
                     }
                 }
             }
@@ -368,6 +524,9 @@ class MainActivity : AppCompatActivity() {
                                         chunk += JSONObject(payload).getJSONArray("choices")
                                             .getJSONObject(0).getJSONObject("delta")
                                             .optString("content", "")
+                                        // Mirror the partial so Stop can
+                                        // keep it, honestly marked.
+                                        currentPartial = chunk
                                     } catch (e: Exception) {
                                         // keep-alive / non-delta line: ignore
                                     }
@@ -382,6 +541,7 @@ class MainActivity : AppCompatActivity() {
                                     } catch (e: Exception) {
                                         ""
                                     }
+                                    currentPartial = chunk
                                     break
                                 }
                             }
@@ -395,7 +555,7 @@ class MainActivity : AppCompatActivity() {
                     response.close()
                 }
                 val full = stitch(carry, chunk)
-                mainHandler.post {
+                postIfCurrent(gen) {
                     if (code == 200) {
                         // First success ends any rate-limit streak.
                         consecutiveRateLimits =
@@ -415,8 +575,6 @@ class MainActivity : AppCompatActivity() {
                                      carry = "", continuations = 0, historyText = historyText)
                         }
                         code == 200 && full.isNotEmpty() -> {
-                            busy = false
-                            setInputEnabled(true)
                             history.add(JSONObject().put("role", "user").put("content", historyText))
                             history.add(JSONObject().put("role", "assistant").put("content", full))
                             replaceCurrentReply(
@@ -426,6 +584,7 @@ class MainActivity : AppCompatActivity() {
                                     else -> full
                                 }
                             )
+                            finishFlight()
                         }
                         (code == 402 || code == 429) -> {
                             // Busy route, not a failure: escalate the
@@ -441,6 +600,13 @@ class MainActivity : AppCompatActivity() {
                                 consecutiveRateLimits, code
                             )
                             cooldownUntilMs = System.currentTimeMillis() + waitMs
+                            // Honest waiting (Direction 8): the
+                            // status lives IN the conversation, the
+                            // mascot shows WAITING, the retry time
+                            // is named, and the message stays
+                            // queued — never a full-screen error.
+                            chatWaiting = true
+                            updateComposerState()
                             replaceCurrentReply(
                                 "The free brain is busy right now — its anonymous " +
                                     "tier rate-limits. Your message is queued and " +
@@ -448,18 +614,17 @@ class MainActivity : AppCompatActivity() {
                                     "${BrainPacing.describeWait(waitMs)}. No need " +
                                     "to re-send; nothing is sent anywhere else."
                             )
-                            mainHandler.postDelayed({
+                            schedule(waitMs) {
                                 // Auto-continue the SAME task after cooldown;
                                 // askBrain re-enters with busy still true.
                                 askBrain(userText, attempt + 1, reframed, "", 0, historyText)
-                            }, waitMs)
+                            }
                         }
                         else -> {
-                            busy = false
-                            setInputEnabled(true)
                             replaceCurrentReply(
                                 "The free brain returned an error (HTTP $code). It's a best-effort free service — try again shortly."
                             )
+                            finishFlight()
                         }
                     }
                 }
@@ -533,11 +698,6 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- UI helpers ----------
 
-    private fun setInputEnabled(enabled: Boolean) {
-        sendButton.isEnabled = enabled
-        attachButton.isEnabled = enabled
-    }
-
     /** Replace the current (last) Lille reply — the "…thinking"
      *  bubble, or a preserved partial answer — with the given
      *  text. Falls back to a fresh bubble if none is live. */
@@ -557,7 +717,7 @@ class MainActivity : AppCompatActivity() {
      *  the orange for contrast. Same call contract as the old
      *  plain-text transcript — every display path in this
      *  activity goes through here or replaceCurrentReply. */
-    private fun appendLine(who: String, text: String) {
+    private fun appendLine(who: String, text: String): TextView {
         val bubble = TextView(this)
         bubble.text = text
         bubble.textSize = 15f
@@ -583,6 +743,7 @@ class MainActivity : AppCompatActivity() {
         bubble.layoutParams = params
         transcript.addView(bubble)
         scrollToBottom()
+        return bubble
     }
 
     private fun dp(value: Int): Int =

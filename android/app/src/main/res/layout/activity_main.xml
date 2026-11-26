@@ -7,7 +7,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0B0B0B"
+    android:background="#000000"
     android:orientation="vertical"
     android:padding="16dp">
 
@@ -19,9 +19,10 @@
         android:gravity="center_vertical"
         android:paddingBottom="8dp">
         <ImageView
+            android:id="@+id/headerMascot"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@drawable/lille_mascot"
+            android:src="@drawable/mascot_idle"
             android:contentDescription="@string/app_name"
             android:scaleType="centerCrop" />
         <TextView
@@ -114,6 +115,7 @@
             android:layout_weight="1"
             android:background="@drawable/bg_composer"
             android:hint="@string/message_hint"
+            android:imeOptions="actionSend"
             android:inputType="textMultiLine"
             android:maxLines="4"
             android:paddingStart="16dp"

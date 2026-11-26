@@ -2,6 +2,8 @@ package org.freeagent.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
+import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -236,8 +238,20 @@ class TasksActivity : AppCompatActivity() {
             .forEach { built.add(Row.TaskRow(it)) }
         val reports = proactive.reports().reversed().take(20)
         if (reports.isNotEmpty()) {
+            // Direction 4: the debrief is ordered Needs you →
+            // Failed → Finished, as distinct sections.
             built.add(Row.Header("— While you were away —"))
-            reports.forEach { built.add(Row.ReportRow(it)) }
+            for (rank in DebriefOrder.NEEDS_YOU..DebriefOrder.FINISHED) {
+                val group = reports.filter {
+                    DebriefOrder.rank(it.optString("status")) == rank
+                }
+                if (group.isNotEmpty()) {
+                    built.add(
+                        Row.Header("— ${DebriefOrder.sectionTitle(rank)} —")
+                    )
+                    group.forEach { built.add(Row.ReportRow(it)) }
+                }
+            }
         }
         val cmts = proactive.commitments().reversed()
         if (cmts.isNotEmpty()) {
@@ -258,9 +272,35 @@ class TasksActivity : AppCompatActivity() {
                     "◔ [${row.cmt.optString("state")}] ${row.cmt.optString("title").take(55)}"
             }
         }
-        listView.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        listView.adapter = RowAdapter(labels)
         showDetail()
     }
+
+    /** Rows carry the mascot state icon (Direction 1): a task
+     *  row shows Lille in the state the task is in — working,
+     *  waiting, done, stuck — drawn as a compound drawable on
+     *  the row's text. Static swaps only. */
+    private inner class RowAdapter(labels: List<String>) :
+        ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = super.getView(position, convertView, parent) as TextView
+            val res = when (val row = rows.getOrNull(position)) {
+                is Row.TaskRow -> mascotRes(
+                    MascotStates.forTaskState(row.task.optString("state"))
+                )
+                is Row.ParkedRow -> mascotRes(MascotStates.Mascot.STUCK)
+                else -> 0
+            }
+            view.setCompoundDrawablesWithIntrinsicBounds(res, 0, 0, 0)
+            view.compoundDrawablePadding = 20
+            return view
+        }
+    }
+
+    private fun mascotRes(mascot: MascotStates.Mascot): Int =
+        resources.getIdentifier(
+            MascotStates.drawableName(mascot), "drawable", packageName
+        )
 
     private fun taskLabel(task: JSONObject): String {
         val title = task.optString("title")
@@ -295,8 +335,52 @@ class TasksActivity : AppCompatActivity() {
                 "resume after the app closes, the network drops, or the phone reboots."
         } else {
             buildString {
-                append("State: ${task.optString("state")}\n")
+                val state = task.optString("state")
+                append("State: $state\n")
                 append("Steps done: ${task.optInt("steps")}\n")
+                // Mission log (Direction 2): how long it has
+                // been at it, what it is doing now in plain
+                // words, and the checklist of steps its own
+                // checkpointed trace proves are done. No fake
+                // percentages, no invented pending steps.
+                val createdAt = task.optLong("createdAt")
+                    .takeIf { it > 0 } ?: task.optLong("updatedAt")
+                val endMs = if (TaskStates.isTerminal(state)) {
+                    task.optLong("updatedAt")
+                } else {
+                    System.currentTimeMillis()
+                }
+                val elapsed = MissionLog.elapsedLabel(createdAt, endMs)
+                if (elapsed.isNotEmpty()) {
+                    append(
+                        if (TaskStates.isTerminal(state)) "Took: $elapsed\n"
+                        else "Elapsed: $elapsed\n"
+                    )
+                }
+                val action = MissionLog.currentAction(
+                    state, task.optString("note")
+                )
+                if (action.isNotEmpty()) append("Now: $action\n")
+                val tools = mutableListOf<String>()
+                val msgs = task.optJSONArray("messages")
+                if (msgs != null) {
+                    for (i in 0 until msgs.length()) {
+                        val c = msgs.getJSONObject(i).optString("content")
+                        if (c.startsWith("Tool result (")) {
+                            tools.add(
+                                c.removePrefix("Tool result (")
+                                    .substringBefore(")")
+                            )
+                        }
+                    }
+                }
+                val checklist = MissionLog.checklist(
+                    tools, state == TaskStates.RUNNING, task.optInt("steps")
+                )
+                if (checklist.isNotEmpty()) {
+                    append("Mission log:\n")
+                    checklist.forEach { append("  $it\n") }
+                }
                 val lane = task.optString("lane")
                 if (lane.isNotEmpty()) append("Lane: $lane\n")
                 append("Task: ${taskLabel(task)}\n")
@@ -311,8 +395,6 @@ class TasksActivity : AppCompatActivity() {
                 }
                 val summary = task.optString("summary")
                 if (summary.isNotEmpty()) append("Summary: $summary\n")
-                val note = task.optString("note")
-                if (note.isNotEmpty()) append("Note: $note\n")
                 val retry = task.optLong("nextRetryAt")
                 if (retry > System.currentTimeMillis()) {
                     append("Waiting — resumes automatically when the route/network returns.\n")

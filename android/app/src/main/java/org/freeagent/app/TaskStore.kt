@@ -48,6 +48,7 @@ class TaskStore(context: Context) {
             .put("summary", "")
             .put("note", "")
             .put("nextRetryAt", 0L)
+            .put("createdAt", System.currentTimeMillis())
             .put("updatedAt", System.currentTimeMillis())
         val tasks = all()
         tasks.add(task)
