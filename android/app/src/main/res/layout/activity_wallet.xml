@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lille's wallet (v0.12, WALLET.md): HER agentic wallet —
+     the companion wallet from the Lille-in-Fluid spec, living
+     in Lille. Separate from the user's Fluid wallet by
+     construction; everything on this screen happens inside
+     Lille, no app-switching anywhere. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wallet_title"
+            android:textColor="#F5EFE7"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <!-- No wallet yet: what this is, and the create button. -->
+        <LinearLayout
+            android:id="@+id/walletCreateBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="10dp"
+                android:text="@string/wallet_explain"
+                android:textColor="#B9B0A2"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/walletCreateButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/wallet_create" />
+        </LinearLayout>
+
+        <!-- Wallet exists: address, balances, send, sweep, caps. -->
+        <LinearLayout
+            android:id="@+id/walletMainBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="10dp"
+                android:text="@string/wallet_address_label"
+                android:textColor="#8A8378"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/walletAddress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_pairing_code"
+                android:padding="10dp"
+                android:textColor="#F5EFE7"
+                android:textIsSelectable="true"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/walletCopyAddressButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/wallet_copy_address" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="6dp"
+                android:text="@string/wallet_fund_hint"
+                android:textColor="#8A8378"
+                android:textSize="13sp" />
+
+            <Spinner
+                android:id="@+id/walletChainSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp" />
+
+            <TextView
+                android:id="@+id/walletBalances"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="8dp"
+                android:textColor="#F5EFE7"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/walletRefreshButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/wallet_refresh" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="18dp"
+                android:text="@string/wallet_send_title"
+                android:textColor="#F5EFE7"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/walletSendAmount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/wallet_send_amount_hint"
+                android:inputType="numberDecimal"
+                android:textColor="#F5EFE7"
+                android:textColorHint="#8A8378" />
+
+            <CheckBox
+                android:id="@+id/walletSendUsd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/wallet_send_usd"
+                android:textColor="#B9B0A2" />
+
+            <Spinner
+                android:id="@+id/walletSendAsset"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+
+            <EditText
+                android:id="@+id/walletSendRecipient"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/wallet_send_recipient_hint"
+                android:textColor="#F5EFE7"
+                android:textColorHint="#8A8378" />
+
+            <Button
+                android:id="@+id/walletSendButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/wallet_send_prepare" />
+
+            <Button
+                android:id="@+id/walletSweepButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/wallet_sweep" />
+
+            <TextView
+                android:id="@+id/walletStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="10dp"
+                android:textColor="#F5EFE7"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="20dp"
+                android:text="@string/wallet_caps_title"
+                android:textColor="#F5EFE7"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="@string/wallet_caps_explain"
+                android:textColor="#B9B0A2"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/walletCapPerTx"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/wallet_cap_pertx_hint"
+                android:inputType="numberDecimal"
+                android:textColor="#F5EFE7"
+                android:textColorHint="#8A8378" />
+
+            <CheckBox
+                android:id="@+id/walletCapPerTxOff"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/wallet_cap_off"
+                android:textColor="#B9B0A2" />
+
+            <EditText
+                android:id="@+id/walletCapDaily"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/wallet_cap_daily_hint"
+                android:inputType="numberDecimal"
+                android:textColor="#F5EFE7"
+                android:textColorHint="#8A8378" />
+
+            <CheckBox
+                android:id="@+id/walletCapDailyOff"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/wallet_cap_off"
+                android:textColor="#B9B0A2" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="@string/wallet_cap_off_warning"
+                android:textColor="#8A8378"
+                android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/walletAutonomousSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="12dp"
+                android:text="@string/wallet_autonomous"
+                android:textColor="#F5EFE7"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/walletSaveCapsButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/wallet_save_caps" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="20dp"
+                android:text="@string/wallet_activity_title"
+                android:textColor="#F5EFE7"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/walletActivity"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="6dp"
+                android:paddingBottom="24dp"
+                android:textColor="#B9B0A2"
+                android:textSize="13sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

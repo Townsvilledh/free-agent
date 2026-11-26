@@ -27,6 +27,21 @@
         android:textSize="14sp" />
 
     <Button
+        android:id="@+id/settingsWalletButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/wallet_open" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="4dp"
+        android:paddingBottom="16dp"
+        android:text="@string/wallet_settings_hint"
+        android:textColor="#8A8378"
+        android:textSize="13sp" />
+
+    <Button
         android:id="@+id/settingsBackupButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

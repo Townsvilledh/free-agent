@@ -145,6 +145,26 @@ class LoginActivity : AppCompatActivity() {
             )
             Toast.makeText(this, "Code copied — paste it in Fluid.", Toast.LENGTH_SHORT).show()
         }
+        findViewById<Button>(R.id.openFluidSheetButton).setOnClickListener {
+            // "Sign where you stand" (v0.12): Fluid opens
+            // INSIDE Lille — no app-switching. The pairing
+            // code rides the clipboard, because Fluid has no
+            // wc: deep link today (its WalletConnect panel is
+            // paste-only — checked against Fluid's source,
+            // 2026-11-26). The approval still reaches the
+            // session listener below: this screen stays alive
+            // under the sheet.
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText("Lille WalletConnect code", pairingCode.text.toString())
+            )
+            Toast.makeText(
+                this,
+                "Code copied — in Fluid: More → WalletConnect → paste → Approve.",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(this, FluidSheetActivity::class.java))
+        }
         findViewById<Button>(R.id.cancelPairingButton).setOnClickListener {
             busy = false
             FluidLogin.cancelPendingPairing()

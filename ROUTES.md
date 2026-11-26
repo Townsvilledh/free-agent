@@ -45,19 +45,47 @@ the wait, and a plain all-routes-down message after its retries.
 
 ## Capability chains
 
-### 1. Text / brain — IMPLEMENTED (Python router; app uses route 1)
+### 1. Text / brain — IMPLEMENTED (Python router; the app uses routes 1–2 since v0.12)
 | # | Route | Key | Known public limits | Status |
 |---|---|---|---|---|
-| 1 | Pollinations (keyless) | none | ~1 concurrent, ~45s between requests per IP; 402 + Retry-After beyond; best-effort | **live** |
-| 2 | AgentRouter | own key (optional) | Premium models in daily batch quotas (402 when a batch is gone); DeepSeek-class effectively unlimited | stub — enabled only with the user's own key |
-| 3 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | stub — own key only |
-| 4 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | stub |
-| 5 | OpenRouter `:free` | own key (optional) | ~50 requests/day on free models without credit purchase | stub |
-| 6 | Cloudflare Workers AI | own token (optional) | Free tier ~10,000 neurons/day | stub |
+| 1 | Pollinations (keyless) | none | ~1 concurrent, ~45s between requests per IP; **hard cap 100 replies/day per IP** (402 FREE_LIMIT, resets 00:00 UTC — live re-confirmed 2026-11-26); on shared/carrier IPs the cap is shared with strangers; best-effort | **live** |
+| 2 | AI Horde (keyless) | none (public anonymous key) | Queue-based community compute: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, **no tool calls** (router skips it on the complete() path) | **live (v0.12)** — fallback of last resort, chat only |
+| 3 | AgentRouter | own key (optional) | Premium models in daily batch quotas (402 when a batch is gone); DeepSeek-class effectively unlimited | stub — enabled only with the user's own key |
+| 4 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | stub — own key only |
+| 5 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | stub |
+| 6 | OpenRouter `:free` | own key (optional) | ~50 requests/day on free models without credit purchase | stub |
+| 7 | Cloudflare Workers AI | own token (optional) | Free tier ~10,000 neurons/day | stub |
 | — | Local Ollama | none | Your hardware | trusted **private** path only — deliberately not a public-traffic fallback |
 
-Cooldowns in code: Pollinations 45s (or its Retry-After), AgentRouter
-1800s (daily-batch rhythm), Groq 60s, others 60s default.
+Cooldowns in code: Pollinations 45s (or its Retry-After), AI Horde
+300s, AgentRouter 1800s (daily-batch rhythm), Groq 60s, others 60s
+default.
+
+**Route verification log — v0.12 brain-resilience pass (real calls
+from the build VM, 2026-11-26 ~12:33–12:47 UTC).** Every candidate
+was called for real; only the ones that answered keyless are
+wired, and the failures are recorded, not hidden:
+
+| Candidate | Verdict | Evidence |
+|---|---|---|
+| Pollinations | **ANSWERS — route 1 (re-confirmed)** | POST answered 402 FREE_LIMIT: "Free limit reached: 100 replies a day per IP. It resets at 00:00 UTC" — the shared egress IP was already over the daily cap. The route exists and is keyless (proven since v0.2); the 402 IS the per-IP limit Ethuram's phone hit. |
+| AI Horde (stablehorde.net) | **ANSWERS KEYLESS — wired as route 2** | Anonymous key `0000000000` accepted. A job submitted with a live worker model completed on the second poll (~40 s) with the requested text. Slow, queue-based, community models — fallback of last resort, labelled as such in the app ("using the slow community route"). |
+| api.airforce | **REFUSED keyless — not wired** | Free-tier models exist in its catalog, but a keyless chat call returned 401 "Missing Authorization"; a paid model returned 402 "paid_model_required". Free still needs a (free) account key → not keyless → excluded by the no-keys doctrine. |
+| llm7.io (api.llm7.io) | **REFUSED keyless — not wired** | Catalog contains zero free-tier models (all pro/turbo); a keyless chat probe returned 401 "Missing API key". Not keyless → excluded. |
+
+**Chat failure discipline (v0.12, app + core):** brain-call
+failures are classified (device-offline / timeout-network /
+402-429 honouring Retry-After / 5xx / permanent). Retryable
+classes never dead-end: the sent message stays in the chat, an
+honest status line names the real cause, the chain falls through
+to the next route, and when every route is busy the call retries
+with escalating waits (BrainPacing arithmetic) until the route
+recovers. "Check your connection" copy is only used when the
+device is actually offline (connectivity state is checked
+first); a per-IP rate limit says the free route is busy and that
+on mobile networks the limit is shared with others on the same
+carrier IP. The task engine already had this discipline
+(waiting_route, never fake-failed); v0.12 brings chat up to it.
 
 ### 2. Image generation — endpoint live, chain has an HONEST GAP
 | # | Route | Key | Known public limits | Status |

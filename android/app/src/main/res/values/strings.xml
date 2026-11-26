@@ -35,6 +35,39 @@
     <string name="fluid_get">New to Fluid? Get Fluid and create your name</string>
     <string name="disconnect_fluid">Disconnect Fluid name</string>
 
+    <!-- v0.12: embedded Fluid sheet (sign where you stand) -->
+    <string name="fluid_open_sheet">Open Fluid inside Lille</string>
+    <string name="fluid_sheet_hint_text">Or open Fluid right here, inside Lille — the code is copied for you; in Fluid tap More → WalletConnect, paste, approve. First time on this embedded browser? Fluid may ask you to create or import your wallet here once — it stays on this phone. Lille never sees what you type inside Fluid.</string>
+    <string name="fluid_sheet_title">Fluid — inside Lille</string>
+    <string name="fluid_sheet_close">Done</string>
+    <string name="fluid_sheet_hint">Your Fluid wallet, inside Lille. Lille never sees what you type here — this window is a plain container, and Fluid\'s keys stay Fluid\'s.</string>
+
+    <!-- v0.12: Lille's agentic wallet -->
+    <string name="wallet_open">Lille\'s wallet</string>
+    <string name="wallet_settings_hint">Her own agentic wallet — separate from your Fluid wallet. She spends only from it, within caps you set, and only with your approval unless you switch autonomy on.</string>
+    <string name="wallet_title">Lille\'s wallet</string>
+    <string name="wallet_explain">This is Lille\'s own wallet — the agentic wallet from her design: her own keys, generated on this phone and kept in her encrypted vault, completely separate from your Fluid wallet. Fund it only with what she may spend. She can never touch your Fluid wallet; the most she can ever hold is what you send here.</string>
+    <string name="wallet_create">Create Lille\'s wallet</string>
+    <string name="wallet_address_label">Her address — send funds here to fund her:</string>
+    <string name="wallet_copy_address">Copy her address</string>
+    <string name="wallet_fund_hint">Funding is the one step that happens wherever your money already is: send any amount to her address from Fluid or anywhere else. Everything after that — balances, sends, approvals — happens here, inside Lille.</string>
+    <string name="wallet_refresh">Refresh balances</string>
+    <string name="wallet_send_title">Send from her wallet</string>
+    <string name="wallet_send_amount_hint">Amount (e.g. 2.5)</string>
+    <string name="wallet_send_usd">Amount is in US dollars ($)</string>
+    <string name="wallet_send_recipient_hint">To: 0x… address or @fluidname</string>
+    <string name="wallet_send_prepare">Prepare send</string>
+    <string name="wallet_sweep">Return funds to my Fluid wallet</string>
+    <string name="wallet_caps_title">Her spending caps — your dial</string>
+    <string name="wallet_caps_explain">Defaults are $5 per transaction and $20 per day. Raise them to anything, or switch a cap off — whatever you set is enforced by her signer itself, not by her good behaviour. Prepare-and-ask stays the rule until you switch autonomy on below.</string>
+    <string name="wallet_cap_pertx_hint">Per-transaction cap ($)</string>
+    <string name="wallet_cap_daily_hint">Daily cap ($, rolling 24 hours)</string>
+    <string name="wallet_cap_off">No limit</string>
+    <string name="wallet_cap_off_warning">Warning: with a cap off, that limit is gone — her wallet\'s balance is the only limit left on that axis.</string>
+    <string name="wallet_autonomous">Let Lille spend within these caps without asking each time</string>
+    <string name="wallet_save_caps">Save caps &amp; autonomy</string>
+    <string name="wallet_activity_title">Her wallet activity</string>
+
     <!-- v0.11: multiple chats -->
     <string name="chats">Chats</string>
     <string name="chats_title">Your chats</string>

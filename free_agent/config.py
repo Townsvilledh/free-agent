@@ -24,6 +24,11 @@ class ProviderCfg:
     # Retry-After, when the transport reports one) and moves on.
     # The route is automatically re-probed after the cooldown.
     cooldown_seconds: int = 60
+    # Transport kind (v0.12): "openai" = OpenAI-compatible chat
+    # completions (the default for every route above). "horde" =
+    # AI Horde's raw-completion queue API — no chat format and NO
+    # tool calls, so the router skips it on the complete() path.
+    kind: str = "openai"
     def key(self):
         if self.keyless or not self.api_key_env:
             return ""
@@ -54,6 +59,18 @@ class Config:
             ProviderCfg("keyless-pollinations", "https://text.pollinations.ai/openai", "",
                         ["openai"], trusted_for_private=False, chat_path="", keyless=True,
                         cooldown_seconds=45),
+            # FALLBACK OF LAST RESORT (v0.12, live-verified keyless
+            # 2026-11-26 — ROUTES.md): AI Horde, the community
+            # compute pool. The anonymous key "0000000000" is the
+            # service's own public no-account key. Queue-based and
+            # SLOW (tens of seconds to minutes), raw-completion API
+            # only — no chat format, no tool calls, community
+            # models of varying quality. It exists so a busy
+            # Pollinations never dead-ends a chat. Public endpoint
+            # => NOT trusted for private content.
+            ProviderCfg("ai-horde", "https://stablehorde.net/api/v2", "",
+                        ["any"], trusted_for_private=False, keyless=True,
+                        cooldown_seconds=300, kind="horde"),
             # OPTIONAL personal keys (user's own, vault-only, never shipped
             # in the app and never collected by us). Enabled only when the
             # user has actually supplied their own key.

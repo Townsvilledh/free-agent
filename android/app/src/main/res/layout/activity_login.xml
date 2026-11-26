@@ -124,6 +124,21 @@
                 android:layout_marginTop="8dp"
                 android:text="@string/fluid_copy_code" />
 
+            <Button
+                android:id="@+id/openFluidSheetButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/fluid_open_sheet" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/fluid_sheet_hint_text"
+                android:textColor="#8A8378"
+                android:textSize="13sp" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

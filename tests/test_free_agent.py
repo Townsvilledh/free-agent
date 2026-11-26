@@ -343,5 +343,65 @@ class TestVault(unittest.TestCase):
             self.assertNotIn(b"test-value", open(path, "rb").read())  # encrypted at rest
             self.assertEqual(oct(os.stat(path).st_mode)[-3:], "600")
 
+class TestHordeRoute(unittest.TestCase):
+    """v0.12: AI Horde is the keyless fallback of last resort
+    for CHAT (live-verified 2026-11-26), and is never used on
+    the tool-call path — it cannot honour the protocol."""
+
+    def _cfg(self):
+        poll = ProviderCfg("keyless-pollinations",
+                           "https://text.pollinations.ai/openai", "",
+                           ["openai"], chat_path="", keyless=True)
+        horde = ProviderCfg("ai-horde", "https://stablehorde.net/api/v2",
+                            "", ["any"], keyless=True, kind="horde")
+        return cfg_with([poll, horde])
+
+    def test_chat_falls_through_to_horde_when_pollinations_busy(self):
+        seen = []
+        def transport(p, messages):
+            seen.append(("chat", p.name))
+            return (402, "", None)
+        def horde_transport(p, messages):
+            seen.append(("horde", p.name))
+            return (200, "from the community pool", None)
+        r = Router(self._cfg(), transport=transport)
+        r.horde_transport = horde_transport
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["provider"], "ai-horde")
+        self.assertEqual(out["text"], "from the community pool")
+        self.assertEqual(seen, [("chat", "keyless-pollinations"),
+                                ("horde", "ai-horde")])
+
+    def test_complete_never_routes_through_horde(self):
+        def raw(p, messages, tools=None):
+            return (402, None, None)
+        def horde_transport(p, messages):
+            raise AssertionError("horde must not serve tool calls")
+        r = Router(self._cfg(), transport=lambda p, m: (402, "", None))
+        r.raw_transport = raw
+        r.horde_transport = horde_transport
+        out = r.complete([{"role": "user", "content": "do a task"}],
+                         tools=[{"type": "function",
+                                  "function": {"name": "x"}}])
+        # Pollinations is merely cooling down, so the honest
+        # ending is the queued result — reached WITHOUT ever
+        # touching the Horde transport.
+        self.assertTrue(out.get("queued"))
+        events = [(e.provider, e.outcome) for e in r.audit]
+        self.assertIn(("ai-horde", "skipped-no-toolcalls"), events)
+
+    def test_default_config_has_horde_second_and_keyless(self):
+        import unittest.mock as mock
+        with mock.patch.dict(os.environ, {}, clear=True):
+            cfg = Config.from_env()
+        names = [p.name for p in cfg.providers]
+        self.assertEqual(names[0], "keyless-pollinations")
+        self.assertEqual(names[1], "ai-horde")
+        horde = cfg.providers[1]
+        self.assertTrue(horde.enabled)
+        self.assertTrue(horde.keyless)
+        self.assertEqual(horde.kind, "horde")
+        self.assertFalse(horde.trusted_for_private)
+
 if __name__ == "__main__":
     unittest.main()

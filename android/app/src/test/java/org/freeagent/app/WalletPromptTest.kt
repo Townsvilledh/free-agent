@@ -1,0 +1,130 @@
+package org.freeagent.app
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * WalletPrompt (v0.12): the ONLY road from chat words to a
+ * prepared transaction. Supported phrasings parse exactly;
+ * everything send-shaped but loose is a question, never a
+ * guess; everything else is ordinary chat for the brain.
+ */
+class WalletPromptTest {
+
+    private fun parsed(text: String): WalletPrompt.SendIntent {
+        val r = WalletPrompt.parse(text)
+        assertTrue("expected Parsed for '$text', got $r", r is WalletPrompt.Result.Parsed)
+        return (r as WalletPrompt.Result.Parsed).intent
+    }
+
+    @Test
+    fun tokenFormToAddress() {
+        val i = parsed("send 2 USDC to 0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf")
+        assertEquals("2", i.amountText)
+        assertEquals(null, i.usdAmountText)
+        assertEquals("USDC", i.asset)
+        assertEquals(false, i.targetIsName)
+        assertEquals("ethereum", i.chainKey)
+    }
+
+    @Test
+    fun tokenFormToNameOnBase() {
+        val i = parsed("send 0.5 eth to @ethuram on base")
+        assertEquals("0.5", i.amountText)
+        assertEquals("ETH", i.asset)
+        assertEquals(true, i.targetIsName)
+        assertEquals("@ethuram", i.targetRaw)
+        assertEquals("base", i.chainKey)
+    }
+
+    @Test
+    fun payAliasAndPleaseAndPeriod() {
+        // Leading "Please" is not part of the grammar — the
+        // message starts with "please", not send/pay, so it
+        // is ordinary chat. (Strictness is the feature.)
+        assertTrue(WalletPrompt.parse("Please pay 10 USDT to bob") is WalletPrompt.Result.NotWallet)
+        val j = parsed("pay 10 USDT to bob please.")
+        assertEquals("10", j.amountText)
+        assertEquals("USDT", j.asset)
+        assertEquals(true, j.targetIsName)
+        assertEquals("ethereum", j.chainKey) // default chain
+    }
+
+    @Test
+    fun usdForms() {
+        val a = parsed("send \$3 of ETH to @ethuram")
+        assertEquals("3", a.usdAmountText)
+        assertEquals(null, a.amountText)
+        assertEquals("ETH", a.asset)
+        val b = parsed("send 3 dollars of WETH to @ethuram on base")
+        assertEquals("3", b.usdAmountText)
+        assertEquals("WETH", b.asset)
+        assertEquals("base", b.chainKey)
+    }
+
+    @Test
+    fun mainnetAlias() {
+        val i = parsed("send 1 USDC to @a on mainnet")
+        assertEquals("ethereum", i.chainKey)
+    }
+
+    @Test
+    fun ambiguousCasesAsk() {
+        // No amount.
+        assertTrue(
+            WalletPrompt.parse("send USDC to @ethuram") is WalletPrompt.Result.Ambiguous
+        )
+        // Unsupported asset.
+        assertTrue(
+            WalletPrompt.parse("send 2 DOGE to @ethuram") is WalletPrompt.Result.Ambiguous
+        )
+        // Unsupported chain.
+        assertTrue(
+            WalletPrompt.parse("send 2 USDC to @ethuram on solana")
+                is WalletPrompt.Result.Ambiguous
+        )
+        // Zero amount.
+        assertTrue(
+            WalletPrompt.parse("send 0 USDC to @ethuram") is WalletPrompt.Result.Ambiguous
+        )
+        // Too many decimals for the asset.
+        assertTrue(
+            WalletPrompt.parse("send 0.0000001 USDC to @ethuram")
+                is WalletPrompt.Result.Ambiguous
+        )
+        // Comma decimal — ambiguous in the real world, so here too.
+        assertTrue(
+            WalletPrompt.parse("send 2,5 USDC to @ethuram") is WalletPrompt.Result.Ambiguous
+        )
+        // Unreadable target.
+        assertTrue(
+            WalletPrompt.parse("send 2 USDC to ???") is WalletPrompt.Result.Ambiguous
+        )
+        // Extra words after the target break the exact form.
+        assertTrue(
+            WalletPrompt.parse("send 2 USDC to @ethuram for rent")
+                is WalletPrompt.Result.Ambiguous
+        )
+    }
+
+    @Test
+    fun ordinaryChatIsNotWallet() {
+        assertEquals(
+            WalletPrompt.Result.NotWallet,
+            WalletPrompt.parse("hi")
+        )
+        assertEquals(
+            WalletPrompt.Result.NotWallet,
+            WalletPrompt.parse("what is the price of ETH?")
+        )
+        assertEquals(
+            WalletPrompt.Result.NotWallet,
+            WalletPrompt.parse("please send me the report when it's ready")
+        )
+        assertEquals(
+            WalletPrompt.Result.NotWallet,
+            WalletPrompt.parse("how do I send crypto to a friend?")
+        )
+    }
+}

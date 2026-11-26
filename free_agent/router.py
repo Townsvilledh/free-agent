@@ -77,6 +77,9 @@ class Router:
         else:
             self.stream_transport = None
         self.raw_transport = self._http_raw_transport     # injectable in tests
+        self.horde_transport = self._http_horde_transport  # injectable in tests
+        self.horde_poll_seconds = 15                      # tests may shrink
+        self.horde_max_polls = 24                         # ~6 min of queue
         self.audit = audit if audit is not None else []   # list[RouteEvent]
         self.clock = clock or time.time                   # injectable for tests
         self.cooldowns = {}                               # provider -> unlock ts
@@ -209,9 +212,81 @@ class Router:
             return status, text, retry_after
 
     def _dispatch(self, provider, messages):
+        if getattr(provider, "kind", "openai") == "horde":
+            return self.horde_transport(provider, messages)
         if self.stream_transport is not None:
             return self._call_streamed(provider, messages)
         return self._call(provider, messages)
+
+    # ---------- AI Horde transport (v0.12) ----------
+    def _http_horde_transport(self, provider, messages):
+        """AI Horde keyless text generation — the fallback of
+        last resort (live-verified 2026-11-26, ROUTES.md).
+
+        Horde is a raw-completion queue API, not a chat API:
+        the conversation is flattened into one prompt, the job
+        is submitted with the service's public anonymous key
+        ("0000000000"), and the status endpoint is polled until
+        a community worker answers. Returns the same
+        (status, text, retry_after) triple as every transport.
+        Slow by nature — that is the honest price of a second
+        genuinely keyless route."""
+        lines = []
+        for m in messages:
+            role = m.get("role", "user")
+            label = {"system": "System", "user": "User",
+                     "assistant": "Lille"}.get(role, "User")
+            lines.append(f"{label}: {m.get('content', '')}")
+        prompt = "\n".join(lines) + "\nLille:"
+        base = provider.base_url.rstrip("/")
+        headers = {
+            "Content-Type": "application/json",
+            "apikey": "0000000000",
+            "Client-Agent": "lille-core:0.12.0:free-agent",
+        }
+        body = json.dumps({
+            "prompt": prompt,
+            "params": {"max_length": 512, "temperature": 0.7,
+                       "stop_sequence": ["\nUser:"]},
+            "models": [],
+            "slow_workers": True,
+        }).encode()
+        req = urllib.request.Request(
+            base + "/generate/text/async", data=body, method="POST")
+        for k, v in headers.items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                job_id = json.loads(r.read().decode()).get("id", "")
+        except urllib.error.HTTPError as e:
+            ra = e.headers.get("Retry-After") if e.headers else None
+            try:
+                ra = float(ra) if ra is not None else None
+            except (TypeError, ValueError):
+                ra = None
+            return e.code, "", ra
+        except Exception:
+            return 0, "", None
+        if not job_id:
+            return 0, "", None
+        for _ in range(self.horde_max_polls):
+            time.sleep(self.horde_poll_seconds)
+            req = urllib.request.Request(
+                base + f"/generate/text/status/{job_id}", method="GET")
+            for k, v in headers.items():
+                req.add_header(k, v)
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    data = json.loads(r.read().decode())
+            except Exception:
+                continue  # a dropped poll is not a dead job
+            if data.get("faulted"):
+                return 0, "", None
+            if data.get("done"):
+                gens = data.get("generations") or []
+                text = (gens[0].get("text") or "").strip() if gens else ""
+                return (200, text, None) if text else (0, "", None)
+        return 0, "", None
 
     # ---------- raw completion (v0.3: tool-call loop) ----------
     def _http_raw_transport(self, provider, messages, tools=None):
@@ -254,6 +329,12 @@ class Router:
         tried, unlock_times, saw_trusted = [], [], False
         for p in self.config.providers:
             if not p.enabled or not p.models:
+                continue
+            if getattr(p, "kind", "openai") == "horde":
+                # Horde is raw-completion only: it cannot honour
+                # the tool-call protocol, so the loop path never
+                # routes through it (v0.12).
+                self.audit.append(RouteEvent(p.name, category, "skipped-no-toolcalls"))
                 continue
             if private and not p.trusted_for_private and not override_privacy:
                 self.audit.append(RouteEvent(p.name, category, "skipped-privacy"))

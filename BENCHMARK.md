@@ -228,7 +228,11 @@ rather than loop tasks and are not counted. All at $0.
 Proficiency is claimed per job class, proven by a real task, or not
 claimed at all. Proven so far: chat, repo work, spec-driven builds,
 demo video, proactivity/sweeps, browser basics. Registered but **not
-yet proven**: **trading** — rules in TRADING.md (real data only,
+yet proven**: **wallet control** — her agentic wallet shipped in
+v0.12 (WALLET.md) with the money path pinned by JVM tests (parser,
+caps in the signer, stub-signer gating); it becomes *proven* only
+when a real send completes end-to-end on the owner's phone and is
+verified by state. Also **trading** — rules in TRADING.md (real data only,
 simulation labelled PAPER and never self-graded, per-asset approval,
 caps at signing, outcomes from state), written 2026-11-26 from the
 autopsy of Ethuram's first agent (LESSONS.md). Its first proof will

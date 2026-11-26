@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The embedded Fluid sheet (v0.12, "sign where you stand"):
+     Fluid's own web app, loaded inside Lille so a login
+     approval never means switching apps. The WebView is a
+     plain container — Lille installs no script bridge and
+     never reads keystrokes or page content inside Fluid. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/fluid_sheet_title"
+            android:textColor="#F5EFE7"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/fluidSheetClose"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/fluid_sheet_close" />
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:text="@string/fluid_sheet_hint"
+        android:textColor="#8A8378"
+        android:textSize="13sp" />
+
+    <WebView
+        android:id="@+id/fluidSheetWeb"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

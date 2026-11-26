@@ -73,6 +73,22 @@ class DeviceVault(context: Context) {
         }
     }
 
+    /** Store a caller-generated secret under `key` (v0.12).
+     *  Exists for exactly one caller class: the agent wallet's
+     *  key custody (AgentWallet), which generates Lille's own
+     *  EVM private key on-device and keeps it here — the same
+     *  store, the same discipline. The value is never returned
+     *  by this call, never shown to the model, never logged.
+     *  Returns true on success. */
+    fun putSecret(key: String, value: String): Boolean {
+        if (!validKeyName(key)) return false
+        return try {
+            secrets().edit().putString(key, value).commit()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     /** Driver-only: resolve a key name to its value at the moment
      *  of typing. Never called by the model layer, never logged. */
     fun getSecret(key: String): String? {

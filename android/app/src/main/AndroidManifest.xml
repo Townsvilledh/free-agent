@@ -46,6 +46,19 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <!-- v0.12: Lille's agentic wallet (WALLET.md) -->
+        <activity
+            android:name=".WalletActivity"
+            android:exported="false" />
+
+        <!-- v0.12: the embedded Fluid sheet — Fluid's own web
+             app inside Lille for login approvals ("sign where
+             you stand"). A plain WebView container; Lille
+             never reads its content. -->
+        <activity
+            android:name=".FluidSheetActivity"
+            android:exported="false" />
+
         <!-- v0.11: autonomous backup — setup, unlock, restore
              (BACKUP.md) -->
         <activity

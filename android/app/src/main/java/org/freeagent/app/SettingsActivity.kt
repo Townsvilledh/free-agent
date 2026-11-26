@@ -35,6 +35,9 @@ class SettingsActivity : AppCompatActivity() {
             "Lille ${BuildConfig.VERSION_NAME} — free and open source. " +
                 "No account, no API key, no telemetry."
 
+        findViewById<Button>(R.id.settingsWalletButton).setOnClickListener {
+            startActivity(Intent(this, WalletActivity::class.java))
+        }
         findViewById<Button>(R.id.settingsBackupButton).setOnClickListener {
             startActivity(Intent(this, BackupActivity::class.java))
         }

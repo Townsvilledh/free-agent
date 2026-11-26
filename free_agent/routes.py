@@ -21,6 +21,11 @@ it is up. Private work with no trusted route queues/blocks honestly.
 ROUTE_TABLES = {
     "text": [
         ("keyless-pollinations", "live", "none"),
+        # v0.12: second genuinely-keyless route, live-verified
+        # 2026-11-26. Slow community queue — fallback of last
+        # resort for CHAT only (no tool-call support; the router
+        # skips it on the complete() path).
+        ("ai-horde", "live", "none"),
         ("agentrouter", "stub", "own-key"),
         ("groq", "stub", "own-key"),
         ("gemini-free", "stub", "own-key"),
@@ -64,7 +69,8 @@ ROUTE_TABLES = {
 
 # Known PUBLIC rate limits (see ROUTES.md; limits change — verify).
 RATE_LIMIT_NOTES = {
-    "keyless-pollinations": "Anonymous: ~1 concurrent request, ~45s between requests per IP; 402 + Retry-After beyond that. Best-effort.",
+    "keyless-pollinations": "Anonymous: ~1 concurrent request, ~45s between requests per IP, and a hard cap of 100 replies/day per IP (402 FREE_LIMIT, resets 00:00 UTC — re-confirmed live 2026-11-26). On shared/carrier IPs the cap is shared with strangers. Best-effort.",
+    "ai-horde": "Anonymous key 0000000000 (the service's own public key). Queue-based: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, no tool calls. Live-verified keyless 2026-11-26.",
     "agentrouter": "Premium models released in daily batch quotas (402 when a batch is exhausted); DeepSeek-class routes effectively unlimited.",
     "groq": "Per-model free caps, e.g. Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day.",
     "gemini-free": "Free-tier per-model request/day caps shown in AI Studio; change frequently.",

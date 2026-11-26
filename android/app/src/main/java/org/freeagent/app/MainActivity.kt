@@ -1,7 +1,10 @@
 package org.freeagent.app
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -30,6 +33,7 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -117,6 +121,11 @@ class MainActivity : AppCompatActivity() {
          *  so a re-render can re-attach the bubble exactly. */
         var statusText: String? = null
         val pendingActions = mutableListOf<Runnable>()
+        /** v0.12 brain-chain retry streak (BrainFailure):
+         *  consecutive full-chain failures for the in-flight
+         *  message, driving the escalating waits. Reset on
+         *  any delivered answer. */
+        var brainStreak = 0
     }
 
     private lateinit var transcript: LinearLayout
@@ -464,6 +473,25 @@ class MainActivity : AppCompatActivity() {
         input.text.clear()
         clearAttachment()
 
+        // v0.12 — WALLET PROMPTS (WALLET.md): money moves
+        // only through the deterministic parser, never
+        // through the brain. An exact supported phrasing is
+        // prepared from live chain state and gated by the
+        // signer; a send-shaped message that doesn't parse
+        // exactly gets a question back, not a guess. Anything
+        // else falls through to the brain as ordinary chat.
+        when (val w = WalletPrompt.parse(raw)) {
+            is WalletPrompt.Result.Parsed -> {
+                handleWalletPrompt(chatId, w.intent)
+                return
+            }
+            is WalletPrompt.Result.Ambiguous -> {
+                appendAssistantMessage(chatId, w.question)
+                return
+            }
+            WalletPrompt.Result.NotWallet -> Unit
+        }
+
         val flight = flightFor(chatId)
         if (!flight.seeded) {
             // Seed the brain history from the store: every
@@ -488,6 +516,116 @@ class MainActivity : AppCompatActivity() {
         }
         updateComposerState()
     }
+
+    /** A Lille message outside the brain flow (wallet
+     *  replies, parser questions): shown in the rendered chat
+     *  and stored like any other assistant message. */
+    private fun appendAssistantMessage(chatId: String, text: String) {
+        if (chatId == renderedChatId && uiAlive) appendLine("Lille", text)
+        chatStore.appendMessage(chatId, "assistant", text)
+        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
+        BackupManager.requestBackup(this)
+    }
+
+    private val walletEngine by lazy { WalletEngine(this) }
+
+    /** A parsed send prompt (v0.12): prepare from live state,
+     *  then the gate decides — autonomous-within-caps sends
+     *  and reports; anything needing approval shows the
+     *  approval sheet HERE, in the chat the user is looking
+     *  at ("sign where you stand"); if this chat isn't on
+     *  screen, nothing is signed and the message says how to
+     *  approve. */
+    private fun handleWalletPrompt(
+        chatId: String,
+        intent: WalletPrompt.SendIntent
+    ) {
+        val wallet = AgentWallet(this)
+        if (!wallet.hasWallet()) {
+            appendAssistantMessage(
+                chatId,
+                "I don't have my own wallet yet, so there's nothing for " +
+                    "me to send from. Create it in Settings → Lille's " +
+                    "wallet, fund it with what I may spend, then ask me " +
+                    "again in exactly that phrasing. Nothing was sent."
+            )
+            return
+        }
+        appendAssistantMessage(chatId, "Preparing that send from my own wallet…")
+        walletEngine.prepareFromPrompt(intent) { outcome ->
+            when (outcome) {
+                is WalletEngine.PrepareOutcome.Failed ->
+                    appendAssistantMessage(chatId, outcome.message)
+                is WalletEngine.PrepareOutcome.Ready -> {
+                    val prepared = outcome.prepared
+                    walletEngine.execute(
+                        prepared, userApproved = false, rawAmountConfirmed = false
+                    ) { exec ->
+                        when (exec) {
+                            WalletEngine.ExecOutcome.NeedsApproval -> {
+                                if (chatId == renderedChatId && uiAlive &&
+                                    !isFinishing
+                                ) {
+                                    WalletApprovalUi.show(
+                                        this, prepared,
+                                        wallet.address() ?: "",
+                                        onApprove = { rawConfirmed ->
+                                            appendAssistantMessage(
+                                                chatId,
+                                                "Approved — signing and sending " +
+                                                    "from my wallet…"
+                                            )
+                                            walletEngine.execute(
+                                                prepared,
+                                                userApproved = true,
+                                                rawAmountConfirmed = rawConfirmed
+                                            ) { done ->
+                                                appendAssistantMessage(
+                                                    chatId, walletExecText(done)
+                                                )
+                                            }
+                                        },
+                                        onCancel = {
+                                            appendAssistantMessage(
+                                                chatId,
+                                                "Cancelled — nothing was sent."
+                                            )
+                                        }
+                                    )
+                                } else {
+                                    appendAssistantMessage(
+                                        chatId,
+                                        "I've prepared it: " +
+                                            "${prepared.amountDisplay} " +
+                                            "${prepared.tokenSymbol} to " +
+                                            "${prepared.toLabel} on " +
+                                            (WalletGate.chainByKey(prepared.chainKey)?.label
+                                                ?: prepared.chainKey) +
+                                            ". Approving only happens on the " +
+                                            "approval sheet while you're looking " +
+                                            "at this chat — ask me again here " +
+                                            "and I'll show it. Nothing was sent."
+                                    )
+                                }
+                            }
+                            else -> appendAssistantMessage(
+                                chatId, walletExecText(exec)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun walletExecText(outcome: WalletEngine.ExecOutcome): String =
+        when (outcome) {
+            is WalletEngine.ExecOutcome.Sent -> outcome.message
+            is WalletEngine.ExecOutcome.Refused -> outcome.reason
+            is WalletEngine.ExecOutcome.Failed -> outcome.message
+            WalletEngine.ExecOutcome.NeedsApproval ->
+                "That still needs your approval on the sheet — nothing was sent."
+        }
 
     /** Stop the rendered chat's in-flight reply (the send
      *  button's other face). The partial answer stays in the
@@ -691,11 +829,28 @@ class MainActivity : AppCompatActivity() {
                         replaceCurrentReply(chatId, carry + "\n\n(Connection dropped — continuing automatically…)")
                         askBrain(chatId, userText, attempt, reframed, carry, continuations + 1, historyText)
                     } else {
-                        val shown = "Couldn't reach the free brain — check your connection and try again. Nothing was sent anywhere else."
-                        replaceCurrentReply(chatId, shown)
-                        chatStore.appendMessage(chatId, "assistant", shown)
-                        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
-                        finishFlight(chatId)
+                        // v0.12 brain resilience: a network
+                        // failure is classified, never
+                        // dead-ended here — the chain falls
+                        // through to the next route, or waits
+                        // and retries on its own (BrainFailure).
+                        // The old terminal "check your
+                        // connection" copy is GONE: offline is
+                        // only claimed when the device really is.
+                        brainRouteFailed(
+                            chatId, userText, attempt, reframed, historyText,
+                            BrainFailure.Route.POLLINATIONS,
+                            BrainFailure.classify(
+                                null,
+                                if (e is SocketTimeoutException) {
+                                    BrainFailure.IoKind.TIMEOUT
+                                } else {
+                                    BrainFailure.IoKind.OTHER
+                                },
+                                deviceOnline()
+                            ),
+                            null
+                        )
                     }
                 }
             }
@@ -778,6 +933,7 @@ class MainActivity : AppCompatActivity() {
                                      carry = "", continuations = 0, historyText = historyText)
                         }
                         code == 200 && full.isNotEmpty() -> {
+                            flight.brainStreak = 0
                             val shown = when {
                                 reframed && isRefusalReply(full) -> full + REFUSAL_STILL
                                 reframed -> "$REFUSAL_NOTE\n\n$full"
@@ -792,51 +948,308 @@ class MainActivity : AppCompatActivity() {
                             finishFlight(chatId)
                         }
                         (code == 402 || code == 429) -> {
-                            // Busy route, not a failure: escalate the
-                            // cooldown (Retry-After wins when larger),
-                            // keep the SAME message queued, and fire
-                            // again when the route allows. No cap on
-                            // attempts — she thinks a little longer,
-                            // she never hits an error wall for this.
-                            val waitMs = BrainPacing.cooldownMs(
-                                retryAfter, consecutiveRateLimits
+                            // Busy route (v0.12): the chain
+                            // falls through to the next route
+                            // first; only when every route is
+                            // busy does it wait and retry with
+                            // escalating waits — BrainFailure
+                            // owns the discipline now.
+                            brainRouteFailed(
+                                chatId, userText, attempt, reframed, historyText,
+                                BrainFailure.Route.POLLINATIONS,
+                                BrainFailure.Class.RATE_LIMITED, retryAfter
                             )
-                            consecutiveRateLimits = BrainPacing.nextCounter(
-                                consecutiveRateLimits, code
+                        }
+                        code == 200 -> {
+                            // A 200 with no usable text is a
+                            // sick route, not an answer.
+                            brainRouteFailed(
+                                chatId, userText, attempt, reframed, historyText,
+                                BrainFailure.Route.POLLINATIONS,
+                                BrainFailure.Class.NETWORK, null
                             )
-                            cooldownUntilMs = System.currentTimeMillis() + waitMs
-                            // Honest waiting (Direction 8): the
-                            // status lives IN the conversation, the
-                            // mascot shows WAITING, the retry time
-                            // is named, and the message stays
-                            // queued — never a full-screen error.
-                            flight.waiting = true
-                            if (chatId == activeChatId) updateComposerState()
-                            replaceCurrentReply(
-                                chatId,
-                                "The free brain is busy right now — its anonymous " +
-                                    "tier rate-limits. Your message is queued and " +
-                                    "Lille continues automatically in about " +
-                                    "${BrainPacing.describeWait(waitMs)}. No need " +
-                                    "to re-send; nothing is sent anywhere else."
+                        }
+                        code in 500..599 -> {
+                            brainRouteFailed(
+                                chatId, userText, attempt, reframed, historyText,
+                                BrainFailure.Route.POLLINATIONS,
+                                BrainFailure.Class.SERVER, retryAfter
                             )
-                            schedule(flight, waitMs) {
-                                // Auto-continue the SAME task after cooldown;
-                                // askBrain re-enters with the flight still busy.
-                                askBrain(chatId, userText, attempt + 1, reframed, "", 0, historyText)
-                            }
                         }
                         else -> {
-                            val shown = "The free brain returned an error (HTTP $code). It's a best-effort free service — try again shortly."
-                            replaceCurrentReply(chatId, shown)
-                            chatStore.appendMessage(chatId, "assistant", shown)
-                            if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
-                            finishFlight(chatId)
+                            brainRouteFailed(
+                                chatId, userText, attempt, reframed, historyText,
+                                BrainFailure.Route.POLLINATIONS,
+                                BrainFailure.classify(code, null, deviceOnline()),
+                                retryAfter
+                            )
                         }
                     }
                 }
             }
         })
+    }
+
+    // ---------- v0.12 brain chain (BrainFailure discipline) ----------
+
+    /** The device's REAL connectivity state — the only
+     *  authority allowed to produce "you're offline" copy. */
+    private fun deviceOnline(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager ?: return true
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /** One brain route failed. Fall through to the next
+     *  route while one remains; when the chain is exhausted,
+     *  either end terminally (permanent failure everywhere)
+     *  or hold the flight in its waiting state and retry the
+     *  whole chain after an escalating wait. The user's
+     *  message is never erased and never terminally failed
+     *  for a retryable cause. */
+    private fun brainRouteFailed(
+        chatId: String,
+        userText: String,
+        attempt: Int,
+        reframed: Boolean,
+        historyText: String,
+        route: BrainFailure.Route,
+        failure: BrainFailure.Class,
+        retryAfterSec: Long?
+    ) {
+        val flight = flightFor(chatId)
+        val next = BrainFailure.nextRoute(route)
+        if (next != null) {
+            replaceCurrentReply(
+                chatId, BrainFailure.statusLine(failure, next.label, "")
+            )
+            when (next) {
+                BrainFailure.Route.HORDE ->
+                    tryHorde(chatId, userText, historyText)
+                BrainFailure.Route.POLLINATIONS ->
+                    askBrain(chatId, userText, attempt, reframed, "", 0, historyText)
+            }
+            return
+        }
+        if (BrainFailure.attemptEndsTerminally(failure)) {
+            val shown = "The free brain routes refused that request's shape — " +
+                "it can't be retried as-is. Your message stays above; " +
+                "rephrase it and I'll try again."
+            replaceCurrentReply(chatId, shown)
+            chatStore.appendMessage(chatId, "assistant", shown)
+            if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
+            finishFlight(chatId)
+            return
+        }
+        val waitMs = BrainFailure.waitMs(failure, retryAfterSec, flight.brainStreak)
+        flight.brainStreak++
+        flight.waiting = true
+        if (chatId == activeChatId) updateComposerState()
+        replaceCurrentReply(
+            chatId,
+            BrainFailure.statusLine(
+                failure, null, BrainPacing.describeWait(waitMs)
+            )
+        )
+        schedule(flight, waitMs) {
+            askBrain(chatId, userText, attempt + 1, reframed, "", 0, historyText)
+        }
+    }
+
+    /** Route 2 — AI Horde, the slow community route
+     *  (live-verified keyless 2026-11-26; ROUTES.md).
+     *  Raw-completion API: the conversation is flattened
+     *  into one prompt, the job is submitted with the
+     *  anonymous key, and the status endpoint is polled.
+     *  No refusal/continuation machinery — those belong to
+     *  the primary route's chat format. */
+    private fun tryHorde(chatId: String, userText: String, historyText: String) {
+        val flight = flightFor(chatId)
+        val gen = flight.generation
+        val prompt = buildString {
+            append(SYSTEM_PROMPT).append("\n\n")
+            for (m in flight.history.takeLast(MAX_HISTORY)) {
+                append(
+                    if (m.optString("role") == "user") "User: " else "Lille: "
+                )
+                append(m.optString("content")).append("\n")
+            }
+            append("User: ").append(userText).append("\nLille:")
+        }
+        val params = JSONObject()
+            .put("max_length", 512)
+            .put("temperature", 0.7)
+            .put("stop_sequence", JSONArray().put("\nUser:"))
+        val bodyJson = JSONObject()
+            .put("prompt", prompt)
+            .put("params", params)
+            .put("models", JSONArray())
+            .put("slow_workers", true)
+        val request = Request.Builder()
+            .url("https://stablehorde.net/api/v2/generate/text/async")
+            .header("apikey", "0000000000")
+            .header("Client-Agent", "lille-android:0.12.0:free-agent")
+            .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        lastBrainCallAtMs = System.currentTimeMillis()
+        val call = client.newCall(request)
+        flight.call = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                postIfCurrent(flight, gen) {
+                    brainRouteFailed(
+                        chatId, userText, 0, false, historyText,
+                        BrainFailure.Route.HORDE,
+                        BrainFailure.classify(
+                            null,
+                            if (e is SocketTimeoutException) {
+                                BrainFailure.IoKind.TIMEOUT
+                            } else {
+                                BrainFailure.IoKind.OTHER
+                            },
+                            deviceOnline()
+                        ),
+                        null
+                    )
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val code = response.code
+                val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                val text = try {
+                    response.body?.string()
+                } catch (e: Exception) {
+                    null
+                }
+                response.close()
+                val jobId = try {
+                    text?.let { JSONObject(it).optString("id", "") } ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+                postIfCurrent(flight, gen) {
+                    if (code in 200..299 && jobId.isNotEmpty()) {
+                        pollHorde(chatId, userText, historyText, jobId, 0)
+                    } else {
+                        brainRouteFailed(
+                            chatId, userText, 0, false, historyText,
+                            BrainFailure.Route.HORDE,
+                            BrainFailure.classify(code, null, deviceOnline()),
+                            retryAfter
+                        )
+                    }
+                }
+            }
+        })
+    }
+
+    /** Poll a Horde job every ~15 s, up to ~6 minutes of
+     *  queue. A dropped poll is retried, not treated as a
+     *  dead job; a faulted job or an expired wait hands back
+     *  to the chain discipline. */
+    private fun pollHorde(
+        chatId: String,
+        userText: String,
+        historyText: String,
+        jobId: String,
+        polls: Int
+    ) {
+        val flight = flightFor(chatId)
+        val gen = flight.generation
+        if (polls >= 24) {
+            brainRouteFailed(
+                chatId, userText, 0, false, historyText,
+                BrainFailure.Route.HORDE, BrainFailure.Class.NETWORK, null
+            )
+            return
+        }
+        schedule(flight, 15_000) {
+            val request = Request.Builder()
+                .url("https://stablehorde.net/api/v2/generate/text/status/$jobId")
+                .header("apikey", "0000000000")
+                .header("Client-Agent", "lille-android:0.12.0:free-agent")
+                .build()
+            val call = client.newCall(request)
+            flight.call = call
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    postIfCurrent(flight, gen) {
+                        pollHorde(chatId, userText, historyText, jobId, polls + 1)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val text = try {
+                        response.body?.string()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    response.close()
+                    var done = false
+                    var faulted = false
+                    var answer = ""
+                    try {
+                        val json = JSONObject(text ?: "")
+                        done = json.optBoolean("done", false)
+                        faulted = json.optBoolean("faulted", false)
+                        val gens = json.optJSONArray("generations")
+                        if (gens != null && gens.length() > 0) {
+                            answer = gens.getJSONObject(0).optString("text", "")
+                        }
+                    } catch (e: Exception) {
+                        // Unparseable status: keep polling.
+                    }
+                    postIfCurrent(flight, gen) {
+                        when {
+                            faulted -> brainRouteFailed(
+                                chatId, userText, 0, false, historyText,
+                                BrainFailure.Route.HORDE,
+                                BrainFailure.Class.NETWORK, null
+                            )
+                            done && answer.isNotBlank() ->
+                                deliverHordeAnswer(chatId, historyText, answer)
+                            done -> brainRouteFailed(
+                                chatId, userText, 0, false, historyText,
+                                BrainFailure.Route.HORDE,
+                                BrainFailure.Class.NETWORK, null
+                            )
+                            else -> pollHorde(
+                                chatId, userText, historyText, jobId, polls + 1
+                            )
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    /** A Horde answer lands through the same store/history
+     *  path as a primary-route answer, with the route named
+     *  — the user always knows which brain answered. */
+    private fun deliverHordeAnswer(
+        chatId: String,
+        historyText: String,
+        rawAnswer: String
+    ) {
+        val flight = flightFor(chatId)
+        flight.brainStreak = 0
+        val shown = rawAnswer.trim() +
+            "\n\n(Answered by the slow community route — the main free " +
+            "route is busy. Community models can be rougher than usual.)"
+        flight.history.add(
+            JSONObject().put("role", "user").put("content", historyText)
+        )
+        flight.history.add(
+            JSONObject().put("role", "assistant").put("content", shown)
+        )
+        chatStore.appendMessage(chatId, "assistant", shown)
+        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
+        replaceCurrentReply(chatId, shown)
+        BackupManager.requestBackup(this)
+        finishFlight(chatId)
     }
 
     // ---------- smart recovery helpers (mirror free_agent/recovery.py) ----------
