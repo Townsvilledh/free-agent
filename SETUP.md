@@ -45,17 +45,25 @@ busy route means she thinks a little longer, not an error.
 ## 3. OPTIONAL: your own free keys (skip this — the app works without it)
 Only if YOU want higher limits or stronger models, with YOUR OWN free
 accounts (nobody will ever ask you for these — see KEYLESS.md):
-- Groq: groq.com → sign up (no card) → Console → API Keys → create.
+- Groq: console.groq.com → sign up (no card) → API Keys → create.
+- Google Gemini: aistudio.google.com → sign in → Get API key.
+- Cerebras: cloud.cerebras.ai → sign up (no card) → API Keys → create.
+- OpenRouter: openrouter.ai → sign in → Keys → create (free models).
 - AgentRouter: agentrouter.org → sign in → Console → Tokens → create.
   (Premium models come in daily batches; the daily login check-in
   refills free credit.)
-Honest status: the in-app key vault UI is **planned, not yet
-shipped** — today personal keys activate only in the Python core
-(env vars, below). When the app UI lands, keys will be stored
-with Android Keystore encryption (EncryptedSharedPreferences),
-never leave the phone except to their own provider, and be
-excluded from backups. Until then, the app is keyless-only —
-which is the point: it works fully without any key.
+- Or any OpenAI-compatible endpoint of your own (base URL + key).
+
+In the app (v0.12.1): **Settings → Your API keys (optional)** — one
+block per provider with Save / Test / Remove. Keys are stored with
+Android Keystore encryption (EncryptedSharedPreferences), never
+leave the phone except to their own provider, are never shown or
+logged, and ride your encrypted backup inside the vault (ciphertext
+only — BACKUP.md). A saved key simply adds that provider as a brain
+route behind the keyless ones; remove it and the route is gone. In
+the Python core the same providers activate from environment
+variables only (below). Either way the point stands: Lille works
+fully without any key.
 **Never** put Gmail tokens, passwords, or session cookies in GitHub
 Secrets for this project — the Actions jobs need no secrets at all in
 the keyless design.

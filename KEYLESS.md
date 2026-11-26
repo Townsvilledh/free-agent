@@ -59,10 +59,13 @@ A user may *optionally* add **their own** free keys — e.g. their own
 AgentRouter token or Groq key — for higher limits or stronger models:
 
 - Entered by the user themselves, **in the app**, into the
-  Keystore-encrypted vault (Android) / Fernet vault (Python core).
+  Keystore-encrypted vault (Android) / supplied as environment
+  variables (Python core).
 - **Never collected by us, never asked for in chat, never transmitted
-  anywhere except to that key's own provider, never logged, never
-  backed up off-device.**
+  anywhere except to that key's own provider, never logged, and
+  never in any backup plaintext** — in the app they ride the user's
+  own encrypted backup *inside the vault* (BACKUP.md), as
+  ciphertext only, under a key the user controls.
 - The app must remain fully functional with the vault empty. Keys are
   an upgrade, never a requirement.
 
@@ -70,14 +73,30 @@ AgentRouter token or Groq key — for higher limits or stronger models:
 
 Keyless-first does not mean keyless-only. Under the **fallback law**
 (ROUTES.md), every capability has an ordered route chain — for text:
-keyless Pollinations → your own AgentRouter → your own Groq →
-Gemini free → OpenRouter `:free` → Cloudflare Workers AI. Routes
-cool down on `402/429/503` instead of being hammered, recover
-automatically, and if *all* routes are cooling down the agent queues
-the task and says so plainly with the earliest retry time. Keyless
-is simply the default first route — the one that needs nothing from
-anybody. Privacy routing still overrides the whole chain: no route
-in it receives private content, however available it is.
+keyless Pollinations → keyless AI Horde → your own Groq → your own
+Gemini → your own Cerebras → your own OpenRouter → your own
+AgentRouter → your own custom endpoint. Routes cool down on
+`402/429/503` instead of being hammered, recover automatically, and
+if *all* routes are cooling down the agent queues the task and says
+so plainly with the earliest retry time. Keyless is simply the
+default first route — the one that needs nothing from anybody.
+Privacy routing still overrides the whole chain: no route in it
+receives private content, however available it is.
+
+## v0.12.1 — the own-keys door, shipped (2026-11-26)
+
+What the section above always promised is now built in the app:
+Settings → **"Your API keys (optional)"** — Groq, Google Gemini,
+Cerebras, OpenRouter, AgentRouter, plus one custom
+OpenAI-compatible endpoint (base URL + key, optional model).
+Each has Save / Remove / **Test** (one minimal call; only the
+outcome and a model count are reported — the key is never echoed).
+Saved keys join the brain chain behind the keyless routes, in
+chat and in the task engine, under the same per-route health
+machinery; a provider with no key saved is simply absent — no
+nagging, no error. The Python core walks the same chain with
+keys read from environment variables only. Defaults and the
+verification evidence for each model choice are in ROUTES.md.
 
 ## v0.2.1 — smart fixes (2026-11-24)
 

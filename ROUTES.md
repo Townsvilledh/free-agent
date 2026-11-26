@@ -45,21 +45,72 @@ the wait, and a plain all-routes-down message after its retries.
 
 ## Capability chains
 
-### 1. Text / brain — IMPLEMENTED (Python router; the app uses routes 1–2 since v0.12)
+### 1. Text / brain — IMPLEMENTED (Python router + the app; keyless routes 1–2 since v0.12, the own-key door since v0.12.1)
 | # | Route | Key | Known public limits | Status |
 |---|---|---|---|---|
 | 1 | Pollinations (keyless) | none | ~1 concurrent, ~45s between requests per IP; **hard cap 100 replies/day per IP** (402 FREE_LIMIT, resets 00:00 UTC — live re-confirmed 2026-11-26); on shared/carrier IPs the cap is shared with strangers; best-effort | **live** |
 | 2 | AI Horde (keyless) | none (public anonymous key) | Queue-based community compute: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, **no native tool calls** (since the 2026-11-26 loop-path fix it also serves complete() via the loop's fenced-JSON text protocol, catalogue rendered as text) | **live (v0.12)** — fallback of last resort: chat, and the tool-call path via the text protocol |
-| 3 | AgentRouter | own key (optional) | Premium models in daily batch quotas (402 when a batch is gone); DeepSeek-class effectively unlimited | stub — enabled only with the user's own key |
-| 4 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | stub — own key only |
-| 5 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | stub |
-| 6 | OpenRouter `:free` | own key (optional) | ~50 requests/day on free models without credit purchase | stub |
-| 7 | Cloudflare Workers AI | own token (optional) | Free tier ~10,000 neurons/day | stub |
+| 3 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | **live (v0.12.1)** — own key only; default model `llama-3.3-70b-versatile` |
+| 4 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | **live (v0.12.1)** — own key only; default model `gemini-flash-latest` |
+| 5 | Cerebras | own key (optional) | Free tier ~1M tokens/day, ~30 req/min (provider docs) | **live (v0.12.1)** — own key only; default model `llama-3.3-70b` |
+| 6 | OpenRouter `:free` | own key (optional) | ~50 requests/day on free models without credit purchase | **live (v0.12.1)** — own key only; default model `openrouter/free` |
+| 7 | AgentRouter | own key (optional) | Premium models in daily batch quotas (402 when a batch is gone); DeepSeek-class effectively unlimited | **live (v0.12.1)** — own key only; default model `claude-opus-4-8` |
+| 8 | Custom OpenAI-compatible endpoint | own key (optional) | The user's own server: their limits, their trust decision | **live (v0.12.1)** — own key + base URL only; user's model name or `default` |
+| 9 | Cloudflare Workers AI | own token (optional) | Free tier ~10,000 neurons/day | stub — core config only, no models wired |
 | — | Local Ollama | none | Your hardware | trusted **private** path only — deliberately not a public-traffic fallback |
 
 Cooldowns in code: Pollinations 45s (or its Retry-After), AI Horde
 300s, AgentRouter 1800s (daily-batch rhythm), Groq 60s, others 60s
-default.
+default. In the app, every route in the walked chain — keyless
+and own-key alike — also sits under the per-route health
+demotion (BrainFailure: escalating rests, automatic recovery).
+
+**Own-key routes — v0.12.1 (the "your own keys" door).** The
+table above the hunt is the KEYLESS record and stays that way:
+the hunt's verdicts are about what answers with no key at all.
+This section is a different door, opened by Ethuram's
+2026-11-26 direction — a user's OWN free-tier keys as extra
+fallbacks behind the keyless pair:
+
+- **Order:** keyless first (Pollinations, AI Horde, health
+  behaviour unchanged), then Groq → Gemini → Cerebras →
+  OpenRouter → AgentRouter → custom. Identical in the app
+  (chat + task brain) and the Python core.
+- **Where keys live:** in the app, the Keystore-wrapped
+  DeviceVault, entered in Settings → "Your API keys" — never
+  plaintext, never in chat/task context, never logged; they
+  ride the v0.11 encrypted backup inside the vault like her
+  other secrets (BackupManager seals `vault.exportSecrets()`),
+  never in any backup plaintext. In the core, environment
+  variables only (`GROQ_API_KEY`, `GEMINI_API_KEY`,
+  `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`,
+  `AGENTROUTER_API_KEY`, `CUSTOM_LLM_BASE_URL` +
+  `CUSTOM_LLM_API_KEY` + optional `CUSTOM_LLM_MODEL`).
+- **Absent = absent:** a route with no key saved is simply
+  not in the chain — no UI nagging, no error, no placeholder.
+- **Settings Test:** one minimal call (GET /models) per
+  provider, reporting only success/failure + the model
+  count when listed — the key is never echoed anywhere.
+- **Default models, and how each was chosen (2026-11-26):**
+  Groq `llama-3.3-70b-versatile` and Cerebras
+  `llama-3.3-70b` are the providers' documented free-tier
+  production models (provider docs; their /models lists are
+  key-gated, so no keyless check exists). Gemini
+  `gemini-flash-latest` is Google's documented alias for the
+  current Flash model (the core's long-standing default).
+  OpenRouter `openrouter/free` — OpenRouter's own free-model
+  auto-router — was **verified keylessly**: GET
+  https://openrouter.ai/api/v1/models answered 200 with 475
+  models on 2026-11-26, `openrouter/free` among them; the
+  individual `:free` roster rotates, the router id does not.
+  AgentRouter `claude-opus-4-8` is the core config's
+  documented first model (its /models list is key-gated —
+  401 keyless, checked 2026-11-26).
+- **Doctrine copy stays exact:** the app works fully with
+  zero keys; no key is shipped, collected, or shared; these
+  are the user's own keys, optional, vault-held. Own-key
+  routes are external providers — privacy routing is
+  unchanged, and private content never goes to them.
 
 **The exhaustive keyless-brain hunt — v0.12 (real completion calls
 from the build VM, 2026-11-26, three rounds, ~45 candidates).**

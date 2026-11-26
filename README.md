@@ -48,8 +48,8 @@ like the money — that rule is the design, not a bug.
 | Layer | Choice | Cost |
 |---|---|---|
 | Brain (default) | **Keyless public API** — Pollinations (`POST https://text.pollinations.ai/openai`) | $0 — **no key, no signup, nothing collected (see KEYLESS.md)** |
-| Brain (optional upgrade) | Your OWN AgentRouter free-credit key (`https://agentrouter.org/v1`) and/or Groq free-tier key — added by you, in the app's vault only | $0 within free limits; never required, never shipped, never shared |
-| Brain (more fallbacks) | Gemini free, OpenRouter `:free`, Cloudflare Workers AI (config stubs) | $0 within free limits |
+| Brain (optional upgrade) | Your OWN free keys — Groq, Google Gemini, Cerebras, OpenRouter, AgentRouter, or a custom OpenAI-compatible endpoint — added by you in Settings → Your API keys, in the app's vault only (v0.12.1) | $0 within free limits; never required, never shipped, never shared |
+| Brain (more fallbacks) | Cloudflare Workers AI (core config stub) | $0 within free limits |
 | Brain (private content) | Trusted path only (local model where available) — never community relays by default | $0 |
 | App | Native Android (Kotlin) in `android/` — chat, approvals, Keystore vault | $0 |
 | APK build | GitHub Actions on the public repo (`.github/workflows/build-apk.yml`) | $0 |
@@ -145,7 +145,7 @@ including everything NOT built — is [PARITY.md](PARITY.md).
 | Repo work (clone / read / edit / test / diff / commit / push) | **Built in core (v0.5)** — deterministic git wrappers, never a raw shell: github-only clone, auto-detected `run_tests`, secret-scan commit block (pattern name reported, value never), push gated to spec-authorised branches only |
 | Spec-following (spec pack in → shipped-with-proof report out) | **Built in core (v0.5)** — `--spec spec.md [--repo …]`; criteria graded deterministically from trace + git evidence; report is SHIPPED / BLOCKED / NEEDS ETHURAM with the `Cost: $0 — keyless routes only` line on every report (BENCHMARK.md bar 1). Core + runner-lane for now; not in the app yet |
 | Video production (demo/explainer videos) | **Built in core (v0.6)** — code-driven only, NO generative video models: scripted Chromium capture of live web apps (`capture_walkthrough`), PIL cards/captions (`render_card`), free-TTS fallback chain (`narrate`: edge-tts → Google Translate TTS → local flite/espeak, honest failure), ffmpeg assembly + ffprobe-verified finish (`assemble_video`/`verify_video`). Core + runner-lane for now; not in the app yet (VIDEO.md, `live-tests/2026-11-25-v06-proof.md`) |
-| Optional personal free keys (own AgentRouter/Groq) | Built (core config) — enabled only when the user adds their own key to the vault |
+| Optional personal free keys (own Groq/Gemini/Cerebras/OpenRouter/AgentRouter/custom) | **Built (v0.12.1)** — Settings → Your API keys in the app (Save/Test/Remove per provider, Keystore vault, routes join the brain chain behind the keyless pair); core reads the same providers from env vars only |
 
 ## Get the app (APK)
 Push to the public repo → **Actions → build-apk** builds the debug APK for
