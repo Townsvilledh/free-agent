@@ -17,7 +17,7 @@
  {
   "action": "type",
   "selector": "#createName",
-  "text": "lille_login_f2"
+  "text": "lille_login_f3"
  },
  {
   "action": "type",
@@ -94,7 +94,7 @@
  {
   "action": "type",
   "selector": "#wcUri",
-  "text": "wc:fded8de37a338135c37b0dbde24c569667237e5011f169f5b348e5c0f4c72d56@2?expiryTimestamp=1795702254&relay-protocol=irn&symKey=d595d4879b90342c0b23baeda25d0c9b27172d18c27fd859c082f4d193c87306"
+  "text": "wc:9ad47b19b367b8b67b0156cce735d2cbf509b53d74f1cf8c8c2dd3c5a361d2e0@2?expiryTimestamp=1795702955&relay-protocol=irn&symKey=e629a18b4de42081fd2caedde91a18b6f5d0460dc9bb7836e7bd5d876a9b7f7d"
  },
  {
   "action": "screenshot",
