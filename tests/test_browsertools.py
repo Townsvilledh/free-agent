@@ -533,6 +533,11 @@ class WallEvidenceTests(unittest.TestCase):
         spec_text = open(os.path.join(
             os.path.dirname(__file__), "..", "specs",
             "2026-11-25-lille-x-account.md")).read()
+        # v0.9: the shipped spec declares the DEVICE lane (it now
+        # runs in the app, from Ethuram's phone). This test is
+        # about the HOST lane's finish guard, so it forces the
+        # host lane — the guard it exercises is lane-independent.
+        spec_text = spec_text.replace("Lane\n- device", "Lane\n- host")
         model = Scripted([
             native("finish", {"summary": "Encountered a CAPTCHA "
                               "wall during X signup",

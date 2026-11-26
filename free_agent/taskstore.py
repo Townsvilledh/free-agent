@@ -10,24 +10,52 @@ call; a NEW process resumes from the checkpoint and step numbering
 CONTINUES — completed steps are never repeated.
 
 States: queued, running, waiting_network, waiting_route, paused,
-failed, completed, cancelled.
+failed, completed, cancelled, parked_at_wall.
 
 Classification rule (honest failures still fail): transport/network
 errors and all-routes-cooling are WAITING states with a next-retry
 time — never "failed". Real failures (model errors, double-malformed
 tool calls, privacy blocks) are failed. A task that exhausts its
 step budget is paused, not failed: resume it with a bigger budget.
+
+parked_at_wall (v0.9, WALLS.md build-next #3): a browser task whose
+run OBSERVED a human-only wall (a CHALLENGE tool result in the
+trace — evidence only, never the model's narration; W8) parks
+instead of completing or failing. The record carries the wall
+(domain, kind, detail) in `wall`; the task resumes with resume()
+once the human step is taken. On the device lane the wall is
+reachable in Lille's own session (the app hands the parked
+WebView to Ethuram); on the host lane parking is state + report
+only, exactly as v0.8 graded it.
 """
-import json, os, time
+import json, os, re, time
 
 from . import sandbox
 from .loop import (TaskLoop, TaskResult, WaitingNetworkError,
                    WaitingRouteError, TaskPausedSignal)
 
 STATES = ("queued", "running", "waiting_network", "waiting_route",
-          "paused", "failed", "completed", "cancelled")
+          "paused", "failed", "completed", "cancelled",
+          "parked_at_wall")
 TERMINAL = ("failed", "completed", "cancelled")
-RESUMABLE = ("queued", "running", "waiting_network", "waiting_route", "paused")
+RESUMABLE = ("queued", "running", "waiting_network", "waiting_route",
+             "paused", "parked_at_wall")
+
+_CHALLENGE_RE = re.compile(
+    r"^CHALLENGE kind=(\S+) detail=(.*?) — ", re.S)
+
+
+def observed_wall(result):
+    """The wall a finished run actually met, from its trace: the
+    LAST step whose result was a CHALLENGE observation. Returns
+    {"kind", "detail"} or None. Narration never counts (W8)."""
+    wall = None
+    for s in (getattr(result, "steps", None) or []):
+        rs = getattr(s, "result_summary", "") or ""
+        m = _CHALLENGE_RE.match(rs)
+        if m:
+            wall = {"kind": m.group(1), "detail": m.group(2)[:200]}
+    return wall
 
 
 def _now():
@@ -53,7 +81,7 @@ class TaskStore:
             "id": task_id, "text": task_text, "state": "queued",
             "created_at": _now(), "updated_at": _now(),
             "next_retry_at": None, "summary": None, "error": None,
-            "checkpoint": None,
+            "checkpoint": None, "wall": None,
         }
         self.save(rec)
         return rec
@@ -159,7 +187,17 @@ class TaskEngine:
             rec["state"] = "cancelled" if str(sig) == "cancel" else "paused"
             self.store.save(rec)
             return rec
-        if result.status == "done":
+        wall = observed_wall(result)
+        if wall is not None:
+            # A human-only wall was OBSERVED in the trace: park,
+            # whatever the model's finish claimed. The task is
+            # neither done nor failed — it waits for the one
+            # human step, then resume() continues it.
+            rec["state"] = "parked_at_wall"
+            rec["wall"] = wall
+            rec["summary"] = result.summary
+            rec["error"] = None
+        elif result.status == "done":
             rec["state"] = "completed"
             rec["summary"] = result.summary
             rec["error"] = None

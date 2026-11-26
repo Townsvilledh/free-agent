@@ -84,9 +84,17 @@ before it is claimed — no rung is described as done from intention:
    including Lille's OWN X account, whose creation her own spec
    run is executing at Ethuram's direction — the run stands at
    NEEDS ETHURAM at X's Arkose wall, everything pre-staged
-   (XLANE.md, live-tests/2026-11-25-v08-proof.md). The browser lives on the host
-   running her core/runner, NOT on the phone; there is no on-device
-   browser yet. Live proofs: live-tests/2026-11-25-v08-proof.md.
+   (XLANE.md, live-tests/2026-11-25-v08-proof.md). **v0.9 adds
+   the second lane:** the same tool contract over a WebView in
+   the app on the user's phone (real device fingerprint +
+   network), lane selection (host | device | auto; device-first
+   for fingerprint-sensitive domains), a Keystore-wrapped
+   on-device vault, and PARKED_AT_WALL — a first-class task
+   state that hands a human-only wall to the user inside her
+   session and auto-resumes on handback. The X retry ships as
+   a ready in-app task. The device lane is built and
+   unit-proven; its live proof is pending the user's run —
+   it is not claimed live-proven (live-tests/2026-11-26-v09-proof.md).
 9. Scheduling / proactivity — **built (v0.7).**
    The Proactivity Law as machinery (PROACTIVITY.md), with its
    sibling the Thoroughness Law (`free_agent/sweep.py`: multi-
@@ -121,6 +129,18 @@ WorkManager foreground workers, boot recovery, honest
 (`lille-task.yml`) is built and dispatched for real — see
 `live-tests/2026-11-24-v04-proof.md` for what is proven and what
 only Ethuram's A12 can prove (on-device background behaviour).
+
+**v0.9 update (2026-11-26):** rung 8 (browser control) gained
+its device lane — the on-device WebView driver in the app under
+the same tool contract and Sentinel gates, lane selection in
+`free_agent/lanes.py`, and PARKED_AT_WALL as a first-class task
+state in both engines (core taskstore + Android TaskStates)
+with the "Lille needs you" handoff. Ethuram chose this route
+explicitly over creating the X account himself: the X retry
+runs from his phone, by her loop, with his one tap reserved
+for any human check. Live proof of the device lane is pending
+his run and is labelled as such everywhere it is mentioned
+(live-tests/2026-11-26-v09-proof.md).
 
 The ladder is the honest distance between "chat that routes well"
 and the North Star. Every release names the rung it stands on.

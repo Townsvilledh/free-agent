@@ -56,4 +56,40 @@ class TaskStatesTest {
         assertTrue(TaskStates.canTransition(TaskStates.FAILED, TaskStates.QUEUED))
         assertFalse(TaskStates.canTransition(TaskStates.FAILED, TaskStates.COMPLETED))
     }
+
+    @Test
+    fun parkedAtWallLifecycle() {
+        // A running browser task parks at an observed wall...
+        assertTrue(TaskStates.canTransition(
+            TaskStates.RUNNING, TaskStates.PARKED_AT_WALL))
+        // ...the human handback resumes it (park -> resume)...
+        assertTrue(TaskStates.canTransition(
+            TaskStates.PARKED_AT_WALL, TaskStates.RUNNING))
+        // ...and from running it can complete (park -> resume -> complete).
+        assertTrue(TaskStates.canTransition(
+            TaskStates.RUNNING, TaskStates.COMPLETED))
+        // ...or the user gives up on it (park -> cancel).
+        assertTrue(TaskStates.canTransition(
+            TaskStates.PARKED_AT_WALL, TaskStates.CANCELLED))
+        // A parked task cannot skip the human step: no direct
+        // completion, no parking from queued, no un-parking to queued.
+        assertFalse(TaskStates.canTransition(
+            TaskStates.PARKED_AT_WALL, TaskStates.COMPLETED))
+        assertFalse(TaskStates.canTransition(
+            TaskStates.QUEUED, TaskStates.PARKED_AT_WALL))
+        assertFalse(TaskStates.canTransition(
+            TaskStates.PARKED_AT_WALL, TaskStates.QUEUED))
+    }
+
+    @Test
+    fun parkedIsNeitherTerminalNorAutoResumable() {
+        // Parked waits on a HUMAN: not terminal, and deliberately
+        // NOT in the boot/WorkManager recovery set — only the
+        // handback resumes it.
+        assertFalse(TaskStates.isTerminal(TaskStates.PARKED_AT_WALL))
+        assertFalse(TaskStates.isResumable(TaskStates.PARKED_AT_WALL))
+        assertFalse(TaskStates.isWaiting(TaskStates.PARKED_AT_WALL))
+        assertTrue(TaskStates.isParked(TaskStates.PARKED_AT_WALL))
+        assertTrue(TaskStates.ALL.contains(TaskStates.PARKED_AT_WALL))
+    }
 }

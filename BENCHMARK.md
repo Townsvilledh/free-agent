@@ -246,8 +246,18 @@ rather than loop tasks and are not counted. All at $0.
    her perception is structural only, and a determined 20B
    driver still loses threads a frontier driver would hold.
    The gap is narrowed to polish and judgement; the control
-   itself is proven. *Closes further at:* an on-device browser
-   rung and vision grounding, each proven live before claimed.
+   itself is proven. **v0.9 update:** the on-device browser
+   rung is now BUILT — the same tool contract over a WebView in
+   the app (real device fingerprint/network), lane selection
+   (device-first for fingerprint-sensitive domains), and
+   PARKED_AT_WALL handoff so a human-only wall is reachable in
+   her session — but it is **not yet live-proven**: its first
+   live exercise is Ethuram's run of the packaged X-account
+   task, and no part of the gap is claimed closed by it until
+   that run's graded report exists
+   (live-tests/2026-11-26-v09-proof.md). *Closes further at:*
+   that live proof, and vision grounding, each proven live
+   before claimed.
 3. **Task size / long-horizon builds.** Manus completes 80-minute
    multi-file app builds. Lille's proven envelope today is small
    repo tasks (single-digit files, ≤25-step spec runs). *Closes

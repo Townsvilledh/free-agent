@@ -1,5 +1,6 @@
 package org.freeagent.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -11,12 +12,24 @@ import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 
 /**
- * Tasks screen (v0.4; proactivity added v0.7): durable background
- * tasks. Create a task, run it, then close the app / lock the
- * phone / lose the network — the task checkpoints after every step
- * and resumes by itself (OFFLINE.md). Code-execution tasks are
- * marked needs_runner and exported as specs for the GitHub Actions
- * lane, never faked.
+ * Tasks screen (v0.4; proactivity added v0.7; device browser lane
+ * v0.9): durable background tasks. Create a task, run it, then
+ * close the app / lock the phone / lose the network — the task
+ * checkpoints after every step and resumes by itself
+ * (OFFLINE.md). Code-execution tasks are marked needs_runner and
+ * exported as specs for the GitHub Actions lane, never faked.
+ *
+ * v0.9 surfaces:
+ * - "Lille needs you" — tasks PARKED_AT_WALL at a human-only
+ *   wall in her on-device browser. Tapping one (or the "Open
+ *   Lille's browser" button) opens her parked session
+ *   full-screen in BrowserActivity: Ethuram takes the ONE named
+ *   step there and hands back; she resumes alone.
+ * - "Lille: create my X account" — the packaged acceptance task
+ *   (XAccountTask), one tap to create + start on the device lane.
+ * - Report / Share — the graded spec report for a task
+ *   (XAccountTask.reportFor for packaged tasks), readable here
+ *   and shareable out of the app.
  *
  * Below the tasks, the same list carries the Proactivity Law's
  * surfaces (PROACTIVITY.md): "While you were away" — reports the
@@ -29,6 +42,7 @@ class TasksActivity : AppCompatActivity() {
     private sealed class Row {
         data class Header(val text: String) : Row()
         data class TaskRow(val task: JSONObject) : Row()
+        data class ParkedRow(val task: JSONObject) : Row()
         data class ReportRow(val report: JSONObject) : Row()
         data class CommitmentRow(val cmt: JSONObject) : Row()
     }
@@ -96,10 +110,56 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.refreshTasksButton).setOnClickListener { refresh() }
+        findViewById<Button>(R.id.createXTaskButton).setOnClickListener {
+            val existing = store.all().firstOrNull {
+                it.optString("title") == XAccountTask.TITLE &&
+                    !TaskStates.isTerminal(it.optString("state"))
+            }
+            if (existing != null) {
+                selectedId = existing.optString("id")
+                Toast.makeText(this,
+                    "Her X-account task is already on the list — tap RUN if it is queued.",
+                    Toast.LENGTH_LONG).show()
+            } else {
+                val task = XAccountTask.create(this)
+                selectedId = task.optString("id")
+                TaskWorker.enqueue(this, selectedId!!)
+                Toast.makeText(this,
+                    "Lille is on it — she is creating her X account in her own " +
+                        "browser on this phone. If X asks for a human check, a " +
+                        "'Lille needs you' card will appear here.",
+                    Toast.LENGTH_LONG).show()
+            }
+            refresh()
+        }
+        findViewById<Button>(R.id.openBrowserButton).setOnClickListener {
+            val id = selectedId ?: return@setOnClickListener
+            startActivity(
+                Intent(this, BrowserActivity::class.java)
+                    .putExtra(BrowserActivity.EXTRA_TASK_ID, id)
+            )
+        }
+        findViewById<Button>(R.id.reportTaskButton).setOnClickListener {
+            val id = selectedId ?: return@setOnClickListener
+            val task = store.get(id) ?: return@setOnClickListener
+            detail.text = reportFor(task)
+        }
+        findViewById<Button>(R.id.shareTaskButton).setOnClickListener {
+            val id = selectedId ?: return@setOnClickListener
+            val task = store.get(id) ?: return@setOnClickListener
+            val send = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, reportFor(task))
+            startActivity(Intent.createChooser(send, "Share Lille's report"))
+        }
 
         listView.setOnItemClickListener { _, _, position, _ ->
             when (val row = rows.getOrNull(position)) {
                 is Row.TaskRow -> {
+                    selectedId = row.task.optString("id")
+                    showDetail()
+                }
+                is Row.ParkedRow -> {
                     selectedId = row.task.optString("id")
                     showDetail()
                 }
@@ -132,7 +192,15 @@ class TasksActivity : AppCompatActivity() {
     private fun refresh() {
         tasks = store.all().reversed()
         val built = mutableListOf<Row>()
-        tasks.forEach { built.add(Row.TaskRow(it)) }
+        val parked = tasks.filter {
+            TaskStates.isParked(it.optString("state"))
+        }
+        if (parked.isNotEmpty()) {
+            built.add(Row.Header("— Lille needs you —"))
+            parked.forEach { built.add(Row.ParkedRow(it)) }
+        }
+        tasks.filterNot { TaskStates.isParked(it.optString("state")) }
+            .forEach { built.add(Row.TaskRow(it)) }
         val reports = proactive.reports().reversed().take(20)
         if (reports.isNotEmpty()) {
             built.add(Row.Header("— While you were away —"))
@@ -148,7 +216,9 @@ class TasksActivity : AppCompatActivity() {
             when (row) {
                 is Row.Header -> row.text
                 is Row.TaskRow ->
-                    "[${row.task.optString("state")}] ${row.task.optString("text").take(60)}"
+                    "[${row.task.optString("state")}] ${taskLabel(row.task)}"
+                is Row.ParkedRow ->
+                    "⚠ LILLE NEEDS YOU — ${taskLabel(row.task)}"
                 is Row.ReportRow ->
                     "✉ [${row.report.optString("status")}] ${row.report.optString("title").take(55)}"
                 is Row.CommitmentRow ->
@@ -157,6 +227,31 @@ class TasksActivity : AppCompatActivity() {
         }
         listView.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
         showDetail()
+    }
+
+    private fun taskLabel(task: JSONObject): String {
+        val title = task.optString("title")
+        return (title.ifEmpty { task.optString("text") }).take(60)
+    }
+
+    /** The graded report for a task: the spec report for
+     *  packaged tasks (criteria + recorded evidence), a plain
+     *  state report for the rest. */
+    private fun reportFor(task: JSONObject): String {
+        if (task.has("criteria")) return XAccountTask.reportFor(task)
+        return buildString {
+            append("LILLE — TASK REPORT\n")
+            append("State: ${task.optString("state")}\n")
+            val lane = task.optString("lane")
+            if (lane.isNotEmpty()) append("Lane: $lane\n")
+            append("Task: ${task.optString("text")}\n")
+            val summary = task.optString("summary")
+            if (summary.isNotEmpty()) append("Summary: $summary\n")
+            val note = task.optString("note")
+            if (note.isNotEmpty()) append("Note: $note\n")
+            append("Steps done: ${task.optInt("steps")}\n")
+            append("Cost: $0 — keyless routes only")
+        }
     }
 
     private fun showDetail() {
@@ -169,7 +264,18 @@ class TasksActivity : AppCompatActivity() {
             buildString {
                 append("State: ${task.optString("state")}\n")
                 append("Steps done: ${task.optInt("steps")}\n")
-                append("Task: ${task.optString("text")}\n")
+                val lane = task.optString("lane")
+                if (lane.isNotEmpty()) append("Lane: $lane\n")
+                append("Task: ${taskLabel(task)}\n")
+                if (TaskStates.isParked(task.optString("state"))) {
+                    append("\n⚠ LILLE NEEDS YOU — one step:\n")
+                    append("${task.optString("wallStep")}\n")
+                    append("Wall: ${task.optString("wallKind")} on " +
+                        "${task.optString("wallDomain")} — " +
+                        "${task.optString("wallDetail")}\n")
+                    append("Tap 'Open Lille's browser' to take the step in " +
+                        "her session.\n")
+                }
                 val summary = task.optString("summary")
                 if (summary.isNotEmpty()) append("Summary: $summary\n")
                 val note = task.optString("note")

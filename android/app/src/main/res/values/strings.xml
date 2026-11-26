@@ -15,4 +15,10 @@
     <string name="resume_task">Resume</string>
     <string name="cancel_task">Cancel</string>
     <string name="refresh">Refresh</string>
+    <string name="create_x_task">Lille: create my X account</string>
+    <string name="open_browser">Open Lille\'s browser</string>
+    <string name="report">Report</string>
+    <string name="share">Share</string>
+    <string name="hand_back">Done — hand back to Lille</string>
+    <string name="close_browser">Close (stay parked)</string>
 </resources>

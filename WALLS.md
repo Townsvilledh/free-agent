@@ -37,19 +37,26 @@ Priority = how often the wall blocks real work.
   Ethuram's own phone Chrome passed the Luma check silently
   (2026-11-25, this chat) — the wall reads the *browser/network*,
   not the human.
-- **Lille solution — TO BUILD (the big one): on-device browser lane.**
-  Lille's host is Ethuram's real phone: a real device browser/WebView
-  with real history, cookies, carrier/residential network and a
-  genuine device fingerprint — the exact signals Turnstile passes.
-  Her browser roadmap must therefore be two-lane: (1) host Chromium
-  (v0.8, built) for sites that accept it; (2) an **on-device lane**
-  (app-driven WebView / Chrome on the A12, human-paced, her existing
-  structural perception + Sentinel gates on top) for
-  fingerprint-walled sites. Pre-flight: probe the wall class first
-  (see W2's diagnosis rule) and pick the lane *before* burning
-  attempts. Fallback if even the device lane is challenged:
-  HUMAN-HANDOFF (W-protocol below) — form filled, session parked,
-  one tap named.
+- **Lille solution — BUILT (v0.9, pending live proof): on-device
+  browser lane.** Lille's host is Ethuram's real phone: a real
+  device browser/WebView with real history, cookies,
+  carrier/residential network and a genuine device fingerprint —
+  the exact signals Turnstile passes. Her browser is now two-lane:
+  (1) host Chromium (v0.8) for sites that accept it; (2) the
+  **on-device lane** (v0.9 — app-driven WebView on the phone,
+  human-paced, the same structural perception + Sentinel gates,
+  the same tool contract) for fingerprint-walled sites. Lane
+  selection is code (`free_agent/lanes.py`): a spec/task names
+  host | device | auto; auto goes device-first for the class-A
+  domains, and the choice + reason is recorded. Fallback if even
+  the device lane is challenged: HUMAN-HANDOFF (W-protocol
+  below) — now a first-class state, PARKED_AT_WALL (build-next
+  #3): session parked in her WebView, "Lille needs you" card,
+  one tap named, auto-resume on handback. **Pending live proof:**
+  the lane's first live exercise is Ethuram's run of the
+  packaged X task — until that graded report exists, this wall
+  is mitigated in machinery, not yet in the field
+  (live-tests/2026-11-26-v09-proof.md).
 
 ### W2. Google sign-in 2-Step / number-match loop — class B+F
 - **Evidence:** Devvit/Reddit signup, 2026-11-25 — three successive
@@ -95,13 +102,18 @@ Priority = how often the wall blocks real work.
   browser lane with `x_session_status` / `x_read_feed` / `x_search` /
   `x_post`, challenge detection that stops and reports, vault-typed
   secrets, sweep X surface backed by her session when one exists
-  (XLANE.md). **TO BUILD:** the on-device lane (W1) as the stronger
-  X lane — X trusts a real device session more than a host browser;
-  and route-ladder discipline for signup dependencies (multiple
-  email providers, W13). **HUMAN-HANDOFF:** Arkose/CAPTCHA on her
-  own signup if every email/entry route reaches one. The 402 API
-  door stays shut by the $0 law — not a wall to fix, a price to
-  refuse; the browser lane is the free door.
+  (XLANE.md). **BUILT (v0.9, pending live proof):** the on-device
+  lane (W1) as the stronger X lane — the v0.8 spec now declares
+  `Lane: device` and ships in the app as the ready one-tap task
+  "Lille: create my X account"; her password is generated
+  on-device into the Keystore-wrapped vault; an Arkose there
+  parks as PARKED_AT_WALL in a session Ethuram can actually
+  reach. Route-ladder discipline for signup dependencies
+  (multiple email providers, W13) is in the packaged task text.
+  **HUMAN-HANDOFF:** Arkose/CAPTCHA on her own signup if every
+  email/entry route reaches one — now the designed park, not a
+  dead end. The 402 API door stays shut by the $0 law — not a
+  wall to fix, a price to refuse; the browser lane is the free door.
 
 ### W4. Sign-in walls in front of shared content — class B
 - **Evidence:** Tactiq transcript share, 2026-11-25 — share link
@@ -422,17 +434,25 @@ recorded as it is, never relabelled.
 
 ## Build next — for v0.9, in order
 
-1. **On-device browser lane** — app-driven WebView/Chrome on the
-   A12 (real fingerprint, real network, her perception + Sentinel
-   gates on top); lane-picker chooses host vs device per wall
-   class. Kills W1, strengthens W3/W24, unlocks TikTok.
+1. **On-device browser lane — BUILT (v0.9, pending live proof)** —
+   app-driven WebView on the A12 (real fingerprint, real network,
+   her perception + Sentinel gates on top, same tool contract);
+   lane-picker (`free_agent/lanes.py`) chooses host vs device per
+   wall class and records the choice + reason. Kills W1,
+   strengthens W3/W24, unlocks TikTok. Live proof awaits
+   Ethuram's run of the packaged X task
+   (live-tests/2026-11-26-v09-proof.md).
 2. **Pre-flight wall diagnosis + attempt budgets in the loop** —
    the diagnose-before-retry skill as code: classify the wall,
    two same-shape failures max, then switch driver/route or hand
    off. Kills W2 loops, disciplines W3/W13/W24.
-3. **Parked-session handoff as a first-class task state** —
-   PARKED_AT_WALL with screenshot, the one named step, and
-   auto-resume on completion. Formalises the protocol above.
+3. **Parked-session handoff as a first-class task state — BUILT
+   (v0.9, pending live proof)** — PARKED_AT_WALL in both state
+   machines (core taskstore + Android TaskStates) with wall
+   record (domain/kind/detail), screenshot, the one named step,
+   the "Lille needs you" card + notification, the parked WebView
+   handed to Ethuram full-screen, and auto-resume on handback.
+   Formalises the protocol above.
 4. **Session vault** — one persistent profile per service with a
    health check (the `x_session_status` pattern generalised);
    login happens once per service, ever. Kills W4, most of W2.

@@ -53,9 +53,10 @@ a click that navigates off-allowlist stops further actions.
 **Persistent profile.** `~/.freeagent/browser-profile` (0700,
 gitignored): sessions survive between runs. It is host-only state
 — never committed, never exported, never read into a prompt.
-**Where her browser lives:** on the host running her core/runner —
-NOT on the phone. There is no on-device browser rung yet; the
-Android app carries the version + this roadmap only.
+**Where her browser lives:** two places, one per lane — see
+"Two lanes" below. The host lane's browser lives on the host
+running her core/runner; since v0.9 there is also a device lane
+whose browser lives in the app on the phone.
 
 **Secrets.** Passwords are generated host-side into Lille's
 encrypted vault (`vault_gen_secret` returns only the key name) and
@@ -82,6 +83,96 @@ checks block *loopback* navigation outright
 feature flag disabled — browsing a local dev server on 127.0.0.1
 does not work from this driver today. Public http(s) sites are
 unaffected (the v0.6 capture stack uses the same machinery).
+
+## Two lanes (v0.9) — and lane selection
+
+The v0.8 run proved the shape of the remaining problem: her loop
+reached X's signup submit from the host browser, and X presented
+Arkose there — in a session Ethuram's finger cannot reach
+(WALLS.md W1/W3). The device lane is the answer:
+
+- **Host lane** (v0.8): the persistent-profile Chromium above.
+- **Device lane** (v0.9): a WebView inside the Lille app on
+  Ethuram's phone, driven by `BrowserSession` with perception by
+  `BrowserPerception` — the SAME tool contract
+  (browser_open/read/click/type/type_secret/upload/screenshot/
+  wait), the SAME Sentinel rules (per-task domain allowlist,
+  SECRET-field refusal twice over — last-read snapshot + live
+  probe, secrets typed only by vault key name, CHALLENGE
+  stop-and-report, human pacing), and the SAME X lane tools
+  (x_session_status / x_read_feed / x_search / x_post with the
+  same posting gates and copy rules). Structural perception
+  only: DOM via evaluateJavascript, elements with stable refs —
+  no vision. The WebView's own storage is her on-device session
+  profile: cookies and site storage persist across app restarts
+  inside the app sandbox and never leave it. Secrets live in a
+  Keystore-wrapped encrypted store (`DeviceVault`):
+  `vault_gen_secret` generates on-device and returns only the
+  key name; the value crosses from the vault into the page field
+  and nowhere else.
+- **Lane selection** (`free_agent/lanes.py`): a task/spec names
+  `host | device | auto` (specs: a `Lane` section; default auto).
+  Auto = device-first for fingerprint-sensitive domains — the
+  WALLS.md class-A list (x.com, luma.com, tiktok.com,
+  duckduckgo.com, dorahacks.io, guerrillamail.com, …) — host
+  otherwise. An explicit lane is honoured as written. The choice
+  + reason is recorded in the spec report and the device-task
+  package. A device-lane spec is NOT run by the host core: it is
+  packaged (`device_task.json`) and reported NEEDS ETHURAM with
+  the one step (start the in-app task) — the host never fakes
+  the device lane, and the app likewise exports host-lane tasks
+  instead of running them on the wrong lane.
+
+**Differences that remain (honest):** the device driver has no
+CDP network-error feed, so observations carry no NET ERRORS
+section; uploads go through the page's file chooser (a staged
+file answers it) rather than DOM file-setting; typing uses the
+native value setter + input events (or insertText for
+contenteditable) rather than CDP key events.
+
+## PARKED_AT_WALL — the handoff (v0.9, WALLS.md build-next #3)
+
+When a device-lane run stops at an OBSERVED human-only wall
+(the model's finish — or the step budget — arrives while the
+last browser observation was a CHALLENGE), the task parks in
+the first-class state `parked_at_wall` with the wall recorded:
+domain, kind, detail, a screenshot, and the ONE named step.
+The app surfaces it as a **"Lille needs you"** card (Tasks
+screen section + a notification). Tapping it opens
+`BrowserActivity`: her parked WebView session full-screen —
+the exact page, form state and all, nothing reloaded — where
+Ethuram passes the check *in her session*. **"Done — hand back
+to Lille"** moves the task back to running and she resumes
+from her checkpoint alone; "Close (stay parked)" changes
+nothing. A parked task is never auto-resumed by timers or
+reboots — only the handback resumes it. Host-lane tasks park
+the same way in the core task store (state + wall record; the
+core's spec grading reports NEEDS ETHURAM as in v0.8) minus
+the reachable WebView.
+
+## The X retry, packaged (v0.9)
+
+The v0.8 X signup spec ships in the app as a ready task —
+**"Lille: create my X account"** on the Tasks screen
+(`XAccountTask`): the same identity kit (handle preference
+list, bio, mascot avatar from the bundled asset), the same
+hard rules the host runs taught (mailbox discipline, one
+patient submit, the legal-link trap, form discipline), lane =
+device. Her X password is generated on-device into DeviceVault
+as `x_password` and typed only via browser_type_secret. One
+tap starts her; if Arkose appears she parks and the "Lille
+needs you" card is the handoff; after his tap she resumes and
+finishes alone. The acceptance criteria are unchanged and are
+graded from the task record's evidence (verified handle,
+first-post URL, feed/search evidence) in the in-app spec
+report (Report / Share on the Tasks screen).
+
+**Status, plainly: the device lane's live proof is PENDING
+ETHURAM'S RUN.** Everything provable off the phone is proven
+(unit suites, APK build, wiring — live-tests/2026-11-26-v09-proof.md);
+the lane's first live exercise is Ethuram starting that task,
+and the acceptance test's verdict comes from that run's graded
+report — not from anything claimed here.
 
 ## X lane tools
 

@@ -37,6 +37,12 @@
             android:name=".TasksActivity"
             android:exported="false" />
 
+        <!-- v0.9: PARKED_AT_WALL handoff — Lille's parked browser
+             session full-screen, for the one human step -->
+        <activity
+            android:name=".BrowserActivity"
+            android:exported="false" />
+
         <!-- v0.4: WorkManager foreground workers (tasks run with a
              persistent notification while active) -->
         <service

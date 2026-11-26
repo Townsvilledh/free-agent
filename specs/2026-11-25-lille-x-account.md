@@ -48,3 +48,6 @@ Browser domains
 
 X lane
 - account: own
+
+Lane
+- device

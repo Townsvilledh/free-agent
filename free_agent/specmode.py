@@ -54,7 +54,7 @@ Report shape (enforced by validate_report):
 """
 import os, re, time
 
-from . import gittools, sandbox
+from . import gittools, lanes, sandbox
 from .loop import TaskLoop, WaitingNetworkError, WaitingRouteError
 
 _HEADINGS = {
@@ -74,6 +74,8 @@ _HEADINGS = {
     "browser": "browser",
     "allowed domains": "browser",
     "x lane": "x_lane",
+    "lane": "lane",
+    "browser lane": "lane",
 }
 
 _WATCH_EVERY = re.compile(r"\s+every\s+(\d+(?:\.\d+)?)\s*$")
@@ -163,7 +165,7 @@ def parse_spec(text):
     criteria, deliverables, push_branches, main_authorised, watch."""
     sections = {"goal": [], "hard_rules": [], "criteria": [],
                 "deliverables": [], "push": [], "watch": [],
-                "browser": [], "x_lane": []}
+                "browser": [], "x_lane": [], "lane": []}
     current = None
     for raw in str(text).splitlines():
         h = _heading_of(raw)
@@ -211,6 +213,16 @@ def parse_spec(text):
             x_post_mode = "user"
         if "post approved" in low and ("yes" in low or "approved" in low):
             x_post_approved = True
+    # Lane (v0.9, free_agent/lanes.py): a `Lane` section naming
+    # host | device | auto. Absent = auto. The DECISION (chosen
+    # lane + reason) is made in run_spec and stored back on the
+    # spec as lane_choice/lane_reason — recorded evidence.
+    lane = lanes.DEFAULT_LANE
+    for item in sections["lane"]:
+        parsed = lanes.parse_lane(item)
+        if parsed:
+            lane = parsed
+            break
     return {
         "goal": " ".join(sections["goal"]).strip(),
         "hard_rules": sections["hard_rules"],
@@ -222,6 +234,9 @@ def parse_spec(text):
         "push_branches": push_branches,
         "main_authorised": main_authorised,
         "watch": watch,
+        "lane": lane,
+        "lane_choice": None,
+        "lane_reason": None,
     }
 
 
@@ -585,8 +600,12 @@ def build_report(spec, result, ev, evaluated):
         status = "BLOCKED"
     routes = ", ".join(ev["providers"]) or "none recorded"
     lines = [f"STATUS: {status}",
-             f"Cost: $0 — keyless routes only (routes served: {routes})",
-             "Acceptance criteria:"]
+             f"Cost: $0 — keyless routes only (routes served: {routes})"]
+    if spec.get("lane_choice"):
+        lines.append(f"Lane: requested={spec.get('lane') or 'auto'} "
+                     f"chosen={spec['lane_choice']} — "
+                     f"{spec.get('lane_reason') or ''}")
+    lines.append("Acceptance criteria:")
     for c, met, evidence in evaluated:
         lines.append(f"- [{'x' if met else ' '}] {c} — evidence: {evidence}")
     lines.append(f"Commits: {', '.join(ev['commit_hashes']) or 'none'}")
@@ -691,6 +710,13 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
     ws = workspace_root or os.environ.get(
         "FREEAGENT_WORKSPACE", os.path.expanduser("~/.freeagent/tasks"))
     task_id, task_dir = sandbox.make_task_dir(ws)
+    # Lane decision (v0.9): made once, deterministically, and
+    # recorded on the spec — it lands in spec.json, the report,
+    # and (for the device lane) the device-task package.
+    decision = lanes.choose_lane(spec.get("lane"),
+                                 spec.get("browser_domains"))
+    spec["lane_choice"] = decision["lane"]
+    spec["lane_reason"] = decision["reason"]
     blocker_phrase = personal_appearance_blocker(spec)
     if blocker_phrase:
         # Hard boundary: never run, never fake. The report names the
@@ -712,6 +738,65 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
             "make it. The single step only Ethuram can take: record "
             "that appearance himself (Lille can still prepare the "
             "script, slides and edit around his recording).")
+        report = "\n".join(lines)
+        with open(os.path.join(task_dir, "SPEC_REPORT.md"), "w") as f:
+            f.write(report + "\n")
+        return report, None, task_dir
+    if decision["lane"] == "device":
+        # The device lane runs in the Lille app on Ethuram's
+        # phone (v0.9) — the host core must not fake it with the
+        # host browser (that is precisely the lane WALLS.md says
+        # these domains refuse). Package the spec for the device
+        # and report the single step only Ethuram can take:
+        # start the packaged in-app task. The acceptance verdict
+        # comes from the on-device run's graded report, not here.
+        import json as _json
+        package = {
+            "kind": "lille-device-task",
+            "version": 1,
+            "lane": "device",
+            "lane_requested": decision["requested"],
+            "lane_reason": decision["reason"],
+            "goal": spec["goal"],
+            "hard_rules": spec["hard_rules"],
+            "criteria": spec["criteria"],
+            "deliverables": spec["deliverables"],
+            "browser_domains": spec["browser_domains"],
+            "x_post_mode": spec["x_post_mode"],
+            "x_post_approved": spec["x_post_approved"],
+            "spec_text": spec_text,
+        }
+        with open(os.path.join(task_dir, "device_task.json"), "w") as f:
+            _json.dump(package, f, indent=2)
+        try:
+            with open(os.path.join(task_dir, "spec.json"), "w") as f:
+                _json.dump(spec, f)
+        except Exception:
+            pass
+        lines = ["STATUS: NEEDS ETHURAM",
+                 "Cost: $0 — keyless routes only (routes served: "
+                 "none — packaged for the device lane, not run on "
+                 "the host)",
+                 f"Lane: requested={decision['requested']} "
+                 f"chosen=device — {decision['reason']}",
+                 "Acceptance criteria:"]
+        for c in spec["criteria"]:
+            lines.append(f"- [ ] {c} — evidence: not attempted on "
+                         "the host lane; this spec runs on the "
+                         "device lane in the Lille app, and its "
+                         "verdict comes from that run's graded "
+                         "report")
+        lines.append("Commits: none")
+        lines.append(
+            "Needs Ethuram: update the Lille app to v0.9+ and "
+            "start the packaged in-app task for this spec from "
+            "the Tasks screen (the X-account task ships ready-made "
+            "there). It runs in her on-device browser session; if "
+            "a human-only check appears it will park as "
+            "PARKED_AT_WALL with a 'Lille needs you' card — pass "
+            "the check in her session and tap 'Done — hand back "
+            "to Lille', and she finishes alone. Device package: "
+            "device_task.json in this task's directory.")
         report = "\n".join(lines)
         with open(os.path.join(task_dir, "SPEC_REPORT.md"), "w") as f:
             f.write(report + "\n")
