@@ -36,6 +36,14 @@ https://fluidwallet.dpdns.org — create a wallet and claim a
 name there first. After the first connection Lille remembers
 you; the login returns only if the session expires.
 
+**Your Lille backs itself up (v0.11, BACKUP.md).** Chats are
+plural and persistent now, and one signature at backup setup
+turns your Fluid wallet into the backup key: Lille then seals
+and writes a backup automatically — uninstall, reinstall on
+another phone, sign in, and your chats, tasks and vault come
+back. Lose the wallet and the backup is gone with it, exactly
+like the money — that rule is the design, not a bug.
+
 ## The free stack
 | Layer | Choice | Cost |
 |---|---|---|
@@ -110,11 +118,13 @@ python -m unittest discover tests -v
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.9**:
+style/face differs". Status as of **v0.11**:
 
 | Muse capability | Lille status |
 |---|---|
 | Chat with an AI brain | **Built (v0.2)** — keyless public brain wired into the app + Python core |
+| Multiple chats | **Built (v0.11)** — many conversations, persisted on-device (chat list, new/switch/delete with confirm, auto-titles); each chat keeps its own queue and reply state; a message is saved before the brain is asked, so closing the app mid-reply loses nothing |
+| Backup & restore (autonomous, cross-device) | **Built (v0.11)** — BACKUP.md: one sealed blob (chats, tasks, settings, identity, vault) encrypted with a key derived from a Fluid `personal_sign` (determinism verified at setup; passphrase mode as fallback), written automatically to a phone folder that survives uninstall; Google Drive appDataFolder sync is fully coded but **disabled-by-config** until the OAuth client is registered (BACKUP.md lists the exact console steps). No Fluid wallet = no restore, ever — by design |
 | Attachments — pictures & files picker | **Built (v0.2)** — picker + image thumbnail preview; attachment noted by name in the conversation |
 | Attachment understanding (model actually reads the image/file) | Planned — multimodal keyless models are the next step; v0.2 does **not** fake it |
 | Image generation | In progress — keyless endpoint chosen (`image.pollinations.ai`, see KEYLESS.md); in-app UI lands next |

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backup & restore (v0.11, BACKUP.md): one screen for the
+     whole lifecycle — set up the signature key, choose the
+     folder, consent to Drive, back up, restore. The status
+     line always tells the truth about where things stand. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="8dp"
+            android:text="@string/backup_title"
+            android:textColor="#F5EFE7"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="12dp"
+            android:text="@string/backup_explain"
+            android:textColor="#B9B0A2"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/backupStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_bubble_lille"
+            android:padding="12dp"
+            android:textColor="#F5EFE7"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/setupBackupButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/backup_setup" />
+
+        <Button
+            android:id="@+id/chooseFolderButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/backup_choose_folder" />
+
+        <Button
+            android:id="@+id/driveButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/backup_drive" />
+
+        <CheckBox
+            android:id="@+id/sessionsCheckBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/backup_sessions_optin"
+            android:textColor="#F5EFE7" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="8dp"
+            android:text="@string/backup_sessions_warning"
+            android:textColor="#8A8378"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/backupNowButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/backup_now" />
+
+        <Button
+            android:id="@+id/forgetKeyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/backup_forget_key" />
+
+        <!-- Passphrase panel: setup / unlock / restore in
+             passphrase mode. Hidden until a flow needs it. -->
+        <LinearLayout
+            android:id="@+id/passphrasePanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/passphraseLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#F5EFE7"
+                android:textSize="14sp" />
+            <EditText
+                android:id="@+id/passphraseInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/backup_passphrase_hint"
+                android:inputType="textPassword"
+                android:textColor="#F5EFE7"
+                android:textColorHint="#8A8378" />
+            <Button
+                android:id="@+id/passphraseGoButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/backup_passphrase_go" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="24dp"
+            android:paddingBottom="8dp"
+            android:text="@string/restore_title"
+            android:textColor="#F5EFE7"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/restoreDriveButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/restore_drive" />
+
+        <Button
+            android:id="@+id/restoreFileButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/restore_file" />
+
+        <Button
+            android:id="@+id/exportFileButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/backup_export" />
+    </LinearLayout>
+</ScrollView>

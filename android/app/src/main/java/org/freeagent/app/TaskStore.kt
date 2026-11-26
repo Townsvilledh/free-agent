@@ -59,6 +59,19 @@ class TaskStore(context: Context) {
     @Synchronized
     fun get(id: String): JSONObject? = all().firstOrNull { it.optString("id") == id }
 
+    /** Backup hooks (v0.11): the raw store document, out and
+     *  in — restore writes it back byte-for-byte. */
+    @Synchronized
+    fun rawText(): String? =
+        if (file.exists()) try { file.readText() } catch (e: Exception) { null } else null
+
+    @Synchronized
+    fun replaceRaw(text: String) {
+        val tmp = File(file.parent, file.name + ".tmp")
+        tmp.writeText(text)
+        tmp.renameTo(file)
+    }
+
     /** Transition + field updates, validated against the state machine. */
     @Synchronized
     fun update(id: String, newState: String? = null, mutate: (JSONObject) -> Unit = {}): JSONObject? {

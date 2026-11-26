@@ -25,5 +25,7 @@ class BootReceiver : BroadcastReceiver() {
         }
         // Re-arm the periodic proactive pass (v0.7) after reboot.
         ProactiveWorker.schedule(context)
+        // Re-arm the backup safety net (v0.11) after reboot.
+        BackupWorker.schedule(context)
     }
 }

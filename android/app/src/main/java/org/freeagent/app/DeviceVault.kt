@@ -93,6 +93,57 @@ class DeviceVault(context: Context) {
         }
     }
 
+    // ---- backup export / import (v0.11, BACKUP.md) ----
+    //
+    // These are the ONLY other callers allowed to read secret
+    // values besides the browser driver, and they exist for
+    // exactly one purpose: the values cross directly into the
+    // ENCRYPTED backup payload (BackupManager seals them with
+    // BackupCrypto before anything is stored or sent anywhere)
+    // or back out of one on restore. They are never called by
+    // the model layer, never logged, and the payload they feed
+    // is never written anywhere in the clear.
+
+    /** Every secret as key name → value, for the encrypted
+     *  backup payload. Empty when the vault cannot be opened. */
+    fun exportSecrets(): Map<String, String> {
+        return try {
+            val out = mutableMapOf<String, String>()
+            for ((k, v) in secrets().all) {
+                if (v is String) out[k] = v
+            }
+            out
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /** Restore secrets from a decrypted backup payload. */
+    fun importSecrets(values: Map<String, String>): Boolean {
+        return try {
+            val edit = secrets().edit()
+            for ((k, v) in values) {
+                if (validKeyName(k)) edit.putString(k, v)
+            }
+            edit.commit()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** The account-metadata array (the "accounts" string of
+     *  the non-secret store), for the backup payload. */
+    fun exportAccountsJson(): String? =
+        try { accounts().getString("accounts", null) } catch (e: Exception) { null }
+
+    fun importAccountsJson(json: String): Boolean =
+        try {
+            JSONArray(json) // must at least be a JSON array
+            accounts().edit().putString("accounts", json).commit()
+        } catch (e: Exception) {
+            false
+        }
+
     /** Account metadata only — no secret value ever lands here. */
     fun recordAccount(site: String, username: String, vaultKey: String): Boolean {
         if (!validKeyName(vaultKey)) return false

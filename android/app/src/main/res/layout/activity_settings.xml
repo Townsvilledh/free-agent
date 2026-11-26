@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings (v0.11): identity, backup, disconnect. Kept
+     deliberately short — Lille's settings are few and each
+     one says what it does. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="8dp"
+        android:text="@string/settings_title"
+        android:textColor="#F5EFE7"
+        android:textSize="22sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/settingsIdentity"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="16dp"
+        android:textColor="#B9B0A2"
+        android:textSize="14sp" />
+
+    <Button
+        android:id="@+id/settingsBackupButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/backup_open" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="4dp"
+        android:paddingBottom="16dp"
+        android:text="@string/backup_settings_hint"
+        android:textColor="#8A8378"
+        android:textSize="13sp" />
+
+    <Button
+        android:id="@+id/settingsDisconnectButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/disconnect_fluid" />
+
+    <TextView
+        android:id="@+id/settingsVersion"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="24dp"
+        android:textColor="#8A8378"
+        android:textSize="12sp" />
+</LinearLayout>

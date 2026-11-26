@@ -98,6 +98,11 @@ jobs:
           LILLE_X_KIT_BIO: ${{ secrets.LILLE_X_KIT_BIO }}
           LILLE_X_KIT_DOB: ${{ secrets.LILLE_X_KIT_DOB }}
           LILLE_X_KIT_MAILBOXES: ${{ secrets.LILLE_X_KIT_MAILBOXES }}
+          # Drive backup layer (v0.11, BACKUP.md): a REPO
+          # VARIABLE, not a secret — "true" only once the
+          # Google Cloud OAuth client for the stable signing
+          # cert exists. Absent/false -> Drive ships disabled.
+          LILLE_DRIVE_ENABLED: ${{ vars.LILLE_DRIVE_ENABLED }}
         run: gradle assembleDebug --stacktrace
 
       - name: Upload APK artifact

@@ -100,6 +100,19 @@ class ProactiveStore(context: Context) : ProactiveData {
         write(root)
     }
 
+    /** Backup hooks (v0.11): the raw store document, out and
+     *  in — restore writes it back byte-for-byte. */
+    @Synchronized
+    fun rawText(): String? =
+        if (file.exists()) try { file.readText() } catch (e: Exception) { null } else null
+
+    @Synchronized
+    fun replaceRaw(text: String) {
+        val tmp = File(file.parent, file.name + ".tmp")
+        tmp.writeText(text)
+        tmp.renameTo(file)
+    }
+
     /** Register a commitment. Check specs on-device: url:<URL> or
      *  url-contains:<URL>::<text> (the core supports more kinds). */
     @Synchronized

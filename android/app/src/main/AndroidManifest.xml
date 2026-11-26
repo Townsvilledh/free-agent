@@ -25,12 +25,32 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- v0.11: multiple chats — the conversation list.
+             Opening a chat sets it active and returns to
+             MainActivity (CLEAR_TOP + singleTop → onNewIntent
+             re-renders). -->
+        <activity
+            android:name=".ChatListActivity"
+            android:exported="false" />
+
+        <!-- v0.11: settings (identity, backup, disconnect) -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" />
+
+        <!-- v0.11: autonomous backup — setup, unlock, restore
+             (BACKUP.md) -->
+        <activity
+            android:name=".BackupActivity"
+            android:exported="false" />
 
         <!-- v0.10: Fluid login gate (LOGIN.md) — MainActivity
              redirects here whenever the gate says LOGIN -->

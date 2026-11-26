@@ -34,4 +34,32 @@
     <string name="fluid_cancel">Cancel</string>
     <string name="fluid_get">New to Fluid? Get Fluid and create your name</string>
     <string name="disconnect_fluid">Disconnect Fluid name</string>
+
+    <!-- v0.11: multiple chats -->
+    <string name="chats">Chats</string>
+    <string name="chats_title">Your chats</string>
+    <string name="new_chat">New chat</string>
+    <string name="settings">Settings</string>
+    <string name="settings_title">Settings</string>
+    <string name="delete_chat">Delete</string>
+    <string name="current_chat">Current chat</string>
+
+    <!-- v0.11: backup & restore -->
+    <string name="backup_open">Backup &amp; restore</string>
+    <string name="backup_settings_hint">Automatic, encrypted backup of your chats, tasks and Lille\'s vault — locked by your Fluid wallet, restorable on a new phone.</string>
+    <string name="backup_title">Backup &amp; restore</string>
+    <string name="backup_explain">Your backup is a locked file only your Fluid wallet can open. Lille seals your chats, tasks and her vault into it automatically — to a folder on this phone, and (if you consent) to your own Google Drive. Google stores the lock-box, never the key. No Fluid wallet, no restore — ever: the key is your wallet\'s signature, and nobody else can produce it.</string>
+    <string name="backup_setup">Set up automatic backup</string>
+    <string name="backup_choose_folder">Choose backup folder</string>
+    <string name="backup_drive">Google Drive sync</string>
+    <string name="backup_sessions_optin">Include my browser logins in the backup</string>
+    <string name="backup_sessions_warning">A browser login (like your X session) inside a backup is a logged-in account in a file — sealed with the same encryption, but only turn this on if you want those sessions to survive a phone switch.</string>
+    <string name="backup_now">Back up now</string>
+    <string name="backup_forget_key">Forget backup key on this phone</string>
+    <string name="backup_passphrase_hint">Backup passphrase (8+ characters)</string>
+    <string name="backup_passphrase_go">Continue</string>
+    <string name="restore_title">Restore</string>
+    <string name="restore_drive">Restore from Google Drive</string>
+    <string name="restore_file">Restore from a backup file</string>
+    <string name="backup_export">Export a backup file</string>
 </resources>

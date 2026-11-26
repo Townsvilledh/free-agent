@@ -52,6 +52,14 @@ object FluidLogin {
     @Volatile
     var listener: Listener? = null
 
+    /** In-flight personal_sign requests (v0.11 backup key),
+     *  keyed by the request id the SDK assigns. The session's
+     *  ONLY method is personal_sign, and backup is its only
+     *  caller — responses are routed here, never to the UI
+     *  listener. Callbacks receive (signature, error). */
+    private val signCallbacks =
+        java.util.concurrent.ConcurrentHashMap<Long, (String?, String?) -> Unit>()
+
     @Volatile
     private var initialised = false
 
@@ -78,7 +86,21 @@ object FluidLogin {
             listener?.onSessionDeleted()
         }
 
-        override fun onSessionRequestResponse(response: Sign.Model.SessionRequestResponse) {}
+        override fun onSessionRequestResponse(response: Sign.Model.SessionRequestResponse) {
+            // v0.11: route personal_sign results (the backup
+            // key flow) to their waiting callers by request id.
+            // sign 2.21.0 shape (verified against the SDK
+            // sources): SessionRequestResponse is a data class
+            // wrapping a sealed JsonRpcResponse.
+            when (val result = response.result) {
+                is Sign.Model.SessionRequestResponse.JsonRpcResult ->
+                    signCallbacks.remove(result.id)?.invoke(result.result, null)
+                is Sign.Model.SessionRequestResponse.JsonRpcError ->
+                    signCallbacks.remove(result.id)?.invoke(
+                        null, result.message.ifEmpty { "Signing was refused." }
+                    )
+            }
+        }
 
         // sign 2.21.0's DappDelegate has no proposal-expiry
         // callback: an expired pairing simply never approves,
@@ -177,6 +199,75 @@ object FluidLogin {
             )
         } catch (e: Exception) {
             onError(e.message ?: "Could not create a pairing code.")
+        }
+    }
+
+    /** The topic of the live session that carries [address]
+     *  (the verified identity's account), or null. */
+    fun activeSessionTopicFor(address: String): String? {
+        if (!initialised) return null
+        return try {
+            SignClient.getListOfActiveSessions().firstOrNull { session ->
+                val accounts = session.namespaces.values.flatMap { it.accounts }
+                FluidGate.sessionMatchesIdentity(accounts, address)
+            }?.topic
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Ask the connected Fluid wallet to personal_sign
+     * [message] (v0.11, BACKUP.md): the backup key flow. The
+     * message goes hex-encoded, the WalletConnect convention
+     * for personal_sign; params are [message, address]. The
+     * wallet shows its own approval sheet — the signature is
+     * the user's to give or refuse, every time. The result is
+     * delivered to [onResult] exactly once (signature or
+     * error); the signature is never stored by this layer.
+     */
+    fun requestPersonalSign(
+        message: String,
+        address: String,
+        onResult: (signature: String?, error: String?) -> Unit
+    ) {
+        if (!initialised) {
+            onResult(null, initError ?: "WalletConnect is not ready yet.")
+            return
+        }
+        val topic = activeSessionTopicFor(address)
+        if (topic == null) {
+            onResult(null, "No live Fluid session — reconnect your Fluid name first.")
+            return
+        }
+        val hexMessage = "0x" + message.toByteArray(Charsets.UTF_8)
+            .joinToString("") { "%02x".format(it) }
+        val params = org.json.JSONArray()
+            .put(hexMessage)
+            .put(address)
+            .toString()
+        try {
+            SignClient.request(
+                Sign.Params.Request(
+                    sessionTopic = topic,
+                    method = FluidGate.METHOD_PERSONAL_SIGN,
+                    params = params,
+                    chainId = FluidGate.CHAIN_ID
+                ),
+                // Explicit parameter type picks the overload
+                // whose onSuccess receives the SentRequest.
+                onSuccess = { sent: Sign.Model.SentRequest ->
+                    signCallbacks[sent.requestId] = onResult
+                },
+                onError = { error ->
+                    onResult(
+                        null,
+                        error.throwable.message ?: "Could not send the signing request."
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            onResult(null, e.message ?: "Could not send the signing request.")
         }
     }
 

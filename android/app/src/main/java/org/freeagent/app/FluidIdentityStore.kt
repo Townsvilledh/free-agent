@@ -48,6 +48,11 @@ class FluidIdentityStore(context: Context) {
         prefs.edit().clear().apply()
     }
 
+    /** Backup snapshot (v0.11): every entry of this prefs
+     *  file as a plain map, for BackupPayload's typed encoding.
+     *  Public registry data only — no secret ever lands here. */
+    fun snapshotPrefs(): Map<String, Any?> = prefs.all.toMap()
+
     fun savePending(pending: Pending) {
         prefs.edit()
             .putString("pending_username", pending.username)
