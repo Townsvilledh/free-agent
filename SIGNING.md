@@ -48,7 +48,13 @@ updates.
 Signing certificate SHA-256 fingerprint of the v0.9.2 APK (extracted
 from the built artifact itself):
 
-    PENDING — filled in from the shipped artifact in the v0.9.2 ship record.
+    8C:8E:07:6C:CC:29:88:8C:28:F2:A3:7C:EA:76:6E:3B:7F:94:FF:BF:DD:16:0C:93:86:54:44:23:AF:DA:FF:E9
+
+(v0.9.2 APK: 17,520,889 bytes, sha256
+`2e782ac13e7049e4d26b548bd9f4d4fb460c6c81ce240d8e775521e99dbf92e1`,
+Actions run 45791125499. The fingerprint was extracted from the
+built artifact's APK Signature Scheme v2 block and matches the
+dedicated keystore's certificate exactly.)
 
 Every future release's APK must show this same fingerprint; the
 ship record for each release should state that it was checked. If a
