@@ -158,6 +158,10 @@ object FluidLogin {
                         ?: "Could not create a pairing code."
                 )
             }
+            if (pairing == null) {
+                onError("Could not create a pairing code.")
+                return
+            }
             SignClient.connect(
                 Sign.Params.Connect(
                     namespaces = namespaces,
