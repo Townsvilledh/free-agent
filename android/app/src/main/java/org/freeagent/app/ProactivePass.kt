@@ -154,6 +154,15 @@ class ProactivePass(
             if (state != TaskStates.COMPLETED && state != TaskStates.FAILED) {
                 continue
             }
+            if (ChatTaskLink.isChatTask(task)) {
+                // v0.13: a chat-born task's report channel is
+                // its chat (ChatTaskReporter, at the worker's
+                // settle). Settling it here too would report
+                // the same finish twice — retire the pickup
+                // silently instead.
+                settled.add(taskId)
+                continue
+            }
             val done = state == TaskStates.COMPLETED
             val body = buildString {
                 append("Task $taskId finished while you were away.\n")

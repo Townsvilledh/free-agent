@@ -75,6 +75,16 @@ import java.util.concurrent.TimeUnit
  * preview. Full multimodal understanding of attachments is a documented
  * next step — the app does NOT pretend the model saw the file.
  *
+ * v0.13 — CHAT→TASK: the chat is the command surface. A job
+ * given in chat is detected by the pure JobDetect component
+ * (deterministic signals first, one clarifying question when
+ * genuinely ambiguous, the model's own question resolving
+ * through the same path), taken on as a durable task in the
+ * shared TaskStore, and its graded state reports land back
+ * in this thread (ChatTaskLink / ChatTaskReporter). The
+ * Tasks screen is a window into the same tasks, never a
+ * second workplace.
+ *
  * Keys: NONE are needed. A user's OWN optional free keys
  * (Groq, Gemini, Cerebras, OpenRouter, AgentRouter, or a
  * custom endpoint) can be added in Settings → "Your API
@@ -101,7 +111,11 @@ class MainActivity : AppCompatActivity() {
             "completed anything you did not actually do through a tool " +
             "in a task. When the user gives you a job in chat, say you " +
             "are starting it and what happens next, in the present " +
-            "tense — never narrate a finished result."
+            "tense — never narrate a finished result. If the user is " +
+            "giving you a job to do in the world — not a question to " +
+            "answer — and no task has been started for it, ask exactly " +
+            "this and nothing more about doing it: " +
+            "\"Want me to take that on as a task?\""
         private const val MAX_HISTORY = 20
         // v0.2.1 smart recovery: stream continuations + one refusal reframe.
         private const val MAX_CONTINUATIONS = 3
@@ -553,6 +567,10 @@ class MainActivity : AppCompatActivity() {
         val raw = input.text.toString().trim()
         if (raw.isEmpty() && pendingAttachment == null) return
         val chatId = activeChatId
+        // Fluency intake (v0.13): captured now — the picker
+        // state is cleared below, but whether this message
+        // carried a file is part of what it means.
+        val hadAttachment = pendingAttachment != null
 
         var outgoing = raw
         val display = pendingAttachment?.let { (_, name, mime) ->
@@ -589,6 +607,40 @@ class MainActivity : AppCompatActivity() {
             WalletPrompt.Result.NotWallet -> Unit
         }
 
+        // v0.13 — CHAT→TASK (the chat is the command surface):
+        // a job given here is taken on as a durable task by
+        // Lille herself — the user never has to visit the
+        // Tasks screen to make her work. Detection is the
+        // pure JobDetect (deterministic first; the model's
+        // own clarifying question resolves through the same
+        // pending-instruction path). A detected job creates
+        // the task, acknowledges it in this chat in the
+        // present tense — truthfully, because the record now
+        // exists — and the engine's graded reports land back
+        // in this thread (ChatTaskReporter). An ambiguous ask
+        // gets ONE short question, never a guess.
+        when (val jd = JobDetect.classify(
+            raw, ChatData.messages(chatStore.root(), chatId),
+            hasAttachment = hadAttachment
+        )) {
+            is JobDetect.Outcome.StartTask -> {
+                // A fresh detection starts THIS message (its
+                // full stored form, attachment note included);
+                // a resolved "yes" starts the earlier ask the
+                // question was about, recovered from the thread.
+                startChatTask(
+                    chatId,
+                    if (jd.instruction == raw) outgoing else jd.instruction
+                )
+                return
+            }
+            is JobDetect.Outcome.AskQuestion -> {
+                appendAssistantMessage(chatId, JobDetect.QUESTION)
+                return
+            }
+            JobDetect.Outcome.NotJob -> Unit
+        }
+
         val flight = flightFor(chatId)
         if (!flight.seeded) {
             // Seed the brain history from the store: every
@@ -622,6 +674,37 @@ class MainActivity : AppCompatActivity() {
         chatStore.appendMessage(chatId, "assistant", text)
         if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
         BackupManager.requestBackup(this)
+    }
+
+    /** Take a chat-given job on as a durable task (v0.13):
+     *  create the record in the SAME store the Tasks screen
+     *  reads (one task list, two windows), link it to this
+     *  chat, stamp the started state as already reported —
+     *  the acknowledgement below IS that report — and hand
+     *  it to the existing engine via TaskWorker. Nothing
+     *  about the engine changes: checkpoints, waiting
+     *  states, BrainPacing and the verified finish all apply
+     *  exactly as for a task created on the Tasks screen. */
+    private fun startChatTask(chatId: String, instruction: String) {
+        val taskStore = TaskStore(this)
+        // The task carries what the user sent, in full, plus
+        // the standing fluency direction: gather missing
+        // pieces herself during execution (ChatTaskLink).
+        val task = taskStore.create(
+            instruction + "\n\n" + ChatTaskLink.INTAKE_NOTE
+        )
+        val taskId = task.optString("id")
+        taskStore.update(taskId) {
+            it.put(ChatTaskLink.ORIGIN_FIELD, chatId)
+            it.put(ChatTaskLink.REPORTED_FIELD, TaskStates.RUNNING)
+        }
+        TaskWorker.enqueue(this, taskId)
+        appendAssistantMessage(
+            chatId,
+            "Starting that now — I've taken it on as a task, and " +
+                "I'll report back here as it lands. You can watch " +
+                "it any time in the Tasks screen."
+        )
     }
 
     private val walletEngine by lazy { WalletEngine(this) }
