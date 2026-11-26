@@ -36,10 +36,17 @@ class WalletActivity : AppCompatActivity() {
     private lateinit var wallet: AgentWallet
     private lateinit var store: WalletStore
     private lateinit var engine: WalletEngine
+    private lateinit var btcEngine: BtcEngine
+    private lateinit var solEngine: SolEngine
 
     private lateinit var createBox: View
     private lateinit var mainBox: View
     private lateinit var addressView: TextView
+    private lateinit var btcAddressView: TextView
+    private lateinit var solAddressView: TextView
+    private lateinit var createBtcButton: Button
+    private lateinit var createSolButton: Button
+    private lateinit var sweepButton: Button
     private lateinit var balancesView: TextView
     private lateinit var statusView: TextView
     private lateinit var activityView: TextView
@@ -60,10 +67,17 @@ class WalletActivity : AppCompatActivity() {
         wallet = AgentWallet(this)
         store = WalletStore(this)
         engine = WalletEngine(this)
+        btcEngine = BtcEngine(this)
+        solEngine = SolEngine(this)
 
         createBox = findViewById(R.id.walletCreateBox)
         mainBox = findViewById(R.id.walletMainBox)
         addressView = findViewById(R.id.walletAddress)
+        btcAddressView = findViewById(R.id.walletBtcAddress)
+        solAddressView = findViewById(R.id.walletSolAddress)
+        createBtcButton = findViewById(R.id.walletCreateBtcButton)
+        createSolButton = findViewById(R.id.walletCreateSolButton)
+        sweepButton = findViewById(R.id.walletSweepButton)
         balancesView = findViewById(R.id.walletBalances)
         statusView = findViewById(R.id.walletStatus)
         activityView = findViewById(R.id.walletActivity)
@@ -78,20 +92,40 @@ class WalletActivity : AppCompatActivity() {
         capDailyOff = findViewById(R.id.walletCapDailyOff)
         autonomousSwitch = findViewById(R.id.walletAutonomousSwitch)
 
+        // The network list: the seven EVM chains, then the
+        // two other families. Selection position decides the
+        // family (see selectedFamily()).
         chainSpinner.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
-            WalletGate.CHAINS.map { it.label }
+            WalletGate.CHAINS.map { it.label } + listOf("Bitcoin", "Solana")
         )
-        // The asset list belongs to the selected chain:
-        // switching chains swaps the assets (BNB is not an
-        // Ethereum asset) and reloads that chain's balances.
+        // The asset list belongs to the selected network:
+        // switching swaps the assets (BNB is not an Ethereum
+        // asset; BTC lives only on Bitcoin) and reloads that
+        // network's balances. The sweep button exists only
+        // on EVM chains — the sweep destination on record is
+        // the user's Fluid EVM address (WALLET.md).
         chainSpinner.onItemSelectedListener =
             object : android.widget.AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(
                     parent: android.widget.AdapterView<*>?,
                     view: View?, position: Int, id: Long
                 ) {
-                    setAssetAdapter(WalletGate.CHAINS[position])
+                    setAssetAdapter(
+                        tokensForSelection(position).map { it.symbol }
+                    )
+                    sweepButton.visibility =
+                        if (position < WalletGate.CHAINS.size) View.VISIBLE
+                        else View.GONE
+                    recipientInput.setHint(
+                        when (familyForSelection(position)) {
+                            WalletGate.FAMILY_BITCOIN ->
+                                R.string.wallet_send_recipient_hint_btc
+                            WalletGate.FAMILY_SOLANA ->
+                                R.string.wallet_send_recipient_hint_sol
+                            else -> R.string.wallet_send_recipient_hint
+                        }
+                    )
                     if (wallet.hasWallet()) refreshBalances()
                 }
 
@@ -99,29 +133,60 @@ class WalletActivity : AppCompatActivity() {
                     parent: android.widget.AdapterView<*>?
                 ) = Unit
             }
-        setAssetAdapter(WalletGate.ETHEREUM)
+        setAssetAdapter(WalletGate.ETHEREUM.tokens.map { it.symbol })
 
         findViewById<Button>(R.id.walletCreateButton).setOnClickListener {
-            val address = wallet.createWallet()
-            if (address == null) {
+            // One tap creates all three keysets — "her
+            // wallet" is every family.
+            if (!wallet.createAllWallets()) {
                 Toast.makeText(
                     this, "Her wallet couldn't be created — the vault refused.",
                     Toast.LENGTH_LONG
                 ).show()
             } else {
                 store.recordActivity(
-                    "CREATED", "Lille's wallet created: $address"
+                    "CREATED",
+                    "Lille's wallet created: ${wallet.address()} · " +
+                        "Bitcoin: ${wallet.btcAddress()} · " +
+                        "Solana: ${wallet.solAddress()}"
                 )
                 render()
             }
         }
         findViewById<Button>(R.id.walletCopyAddressButton).setOnClickListener {
-            val clipboard =
-                getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(
-                ClipData.newPlainText("Lille's wallet address", addressView.text.toString())
-            )
-            Toast.makeText(this, "Her address copied.", Toast.LENGTH_SHORT).show()
+            copyAddress(addressView.text.toString())
+        }
+        findViewById<Button>(R.id.walletCopyBtcButton).setOnClickListener {
+            wallet.btcAddress()?.let { copyAddress(it) }
+        }
+        findViewById<Button>(R.id.walletCopySolButton).setOnClickListener {
+            wallet.solAddress()?.let { copyAddress(it) }
+        }
+        createBtcButton.setOnClickListener {
+            if (wallet.createBtcWallet() == null) {
+                Toast.makeText(
+                    this, "Her Bitcoin wallet couldn't be created — the vault refused.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                store.recordActivity(
+                    "CREATED", "Lille's Bitcoin wallet created: ${wallet.btcAddress()}"
+                )
+                render()
+            }
+        }
+        createSolButton.setOnClickListener {
+            if (wallet.createSolWallet() == null) {
+                Toast.makeText(
+                    this, "Her Solana wallet couldn't be created — the vault refused.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                store.recordActivity(
+                    "CREATED", "Lille's Solana wallet created: ${wallet.solAddress()}"
+                )
+                render()
+            }
         }
         findViewById<Button>(R.id.walletRefreshButton).setOnClickListener {
             refreshBalances()
@@ -143,11 +208,48 @@ class WalletActivity : AppCompatActivity() {
             0, WalletGate.CHAINS.size - 1
         )]
 
-    private fun setAssetAdapter(chain: WalletGate.Chain) {
+    /** The family a spinner position selects: the EVM
+     *  chains first, then Bitcoin, then Solana. */
+    private fun familyForSelection(position: Int): String = when {
+        position < WalletGate.CHAINS.size -> WalletGate.FAMILY_EVM
+        position == WalletGate.CHAINS.size -> WalletGate.FAMILY_BITCOIN
+        else -> WalletGate.FAMILY_SOLANA
+    }
+
+    private fun selectedFamily(): String =
+        familyForSelection(chainSpinner.selectedItemPosition)
+
+    private fun tokensForSelection(position: Int): List<WalletGate.Token> =
+        when (familyForSelection(position)) {
+            WalletGate.FAMILY_BITCOIN -> WalletGate.BITCOIN_TOKENS
+            WalletGate.FAMILY_SOLANA -> WalletGate.SOLANA_TOKENS
+            else -> WalletGate.CHAINS[
+                position.coerceIn(0, WalletGate.CHAINS.size - 1)
+            ].tokens
+        }
+
+    private fun setAssetAdapter(symbols: List<String>) {
         assetSpinner.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
-            chain.tokens.map { it.symbol }
+            symbols
         )
+    }
+
+    private fun copyAddress(address: String) {
+        val clipboard =
+            getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(
+            ClipData.newPlainText("Lille's wallet address", address)
+        )
+        Toast.makeText(this, "Her address copied.", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Her address on a family — the approval sheet's
+     *  "from" line and the sweep's source. */
+    private fun fromAddressFor(family: String): String = when (family) {
+        WalletGate.FAMILY_BITCOIN -> wallet.btcAddress() ?: ""
+        WalletGate.FAMILY_SOLANA -> wallet.solAddress() ?: ""
+        else -> wallet.address() ?: ""
     }
 
     private fun render() {
@@ -156,6 +258,17 @@ class WalletActivity : AppCompatActivity() {
         mainBox.visibility = if (has) View.VISIBLE else View.GONE
         if (!has) return
         addressView.text = wallet.address()
+        // Per-family rows: an existing keyset shows its
+        // address; a missing one (a wallet created before
+        // the family existed) shows its set-up button.
+        btcAddressView.text =
+            wallet.btcAddress() ?: getString(R.string.wallet_not_set_up)
+        solAddressView.text =
+            wallet.solAddress() ?: getString(R.string.wallet_not_set_up)
+        createBtcButton.visibility =
+            if (wallet.hasBtcWallet()) View.GONE else View.VISIBLE
+        createSolButton.visibility =
+            if (wallet.hasSolWallet()) View.GONE else View.VISIBLE
         val caps = store.capState()
         capPerTxOff.isChecked = WalletGate.isUnlimited(caps.perTxCapCents)
         capDailyOff.isChecked = WalletGate.isUnlimited(caps.dailyCapCents)
@@ -186,21 +299,35 @@ class WalletActivity : AppCompatActivity() {
     }
 
     private fun refreshBalances() {
-        val chain = selectedChain()
-        balancesView.text = "Loading balances on ${chain.label}…"
-        engine.loadBalances(chain) { balances ->
-            if (isFinishing || isDestroyed) return@loadBalances
-            balancesView.text = balances.joinToString("\n") { b ->
-                if (b.raw == null) {
-                    "${b.token.symbol}: couldn't load" +
-                        " — that's a failed read, not a zero."
-                } else {
-                    "${b.token.symbol}: " +
-                        Evm.formatUnits(b.raw, b.token.decimals) +
-                        (b.source?.let { " (via ${hostOf(it)})" } ?: "")
+        val renderBalances: (List<WalletEngine.AssetBalance>) -> Unit = { balances ->
+            if (!isFinishing && !isDestroyed) {
+                balancesView.text = balances.joinToString("\n") { b ->
+                    if (b.raw == null) {
+                        "${b.token.symbol}: couldn't load" +
+                            " — that's a failed read, not a zero."
+                    } else {
+                        "${b.token.symbol}: " +
+                            Evm.formatUnits(b.raw, b.token.decimals) +
+                            (b.source?.let { " (via ${hostOf(it)})" } ?: "")
+                    }
                 }
+                renderActivity()
             }
-            renderActivity()
+        }
+        when (selectedFamily()) {
+            WalletGate.FAMILY_BITCOIN -> {
+                balancesView.text = "Loading balances on Bitcoin…"
+                btcEngine.loadBalances(renderBalances)
+            }
+            WalletGate.FAMILY_SOLANA -> {
+                balancesView.text = "Loading balances on Solana…"
+                solEngine.loadBalances(renderBalances)
+            }
+            else -> {
+                val chain = selectedChain()
+                balancesView.text = "Loading balances on ${chain.label}…"
+                engine.loadBalances(chain, renderBalances)
+            }
         }
     }
 
@@ -216,36 +343,64 @@ class WalletActivity : AppCompatActivity() {
             statusView.text = "Type an amount and who it's for first."
             return
         }
-        val chain = selectedChain()
         val asset = assetSpinner.selectedItem.toString()
+        val amountText = if (usdCheck.isChecked) null else amount
+        val usdAmountText = if (usdCheck.isChecked) amount else null
         statusView.text = "Preparing…"
-        engine.prepareFromForm(
-            chainKey = chain.key,
-            asset = asset,
-            amountText = if (usdCheck.isChecked) null else amount,
-            usdAmountText = if (usdCheck.isChecked) amount else null,
-            targetRaw = recipient
-        ) { outcome ->
-            if (isFinishing || isDestroyed) return@prepareFromForm
-            when (outcome) {
-                is WalletEngine.PrepareOutcome.Failed ->
-                    statusView.text = outcome.message
-                is WalletEngine.PrepareOutcome.Ready ->
-                    offerApproval(outcome.prepared)
+        val onOutcome: (WalletEngine.PrepareOutcome) -> Unit = { outcome ->
+            if (!isFinishing && !isDestroyed) {
+                when (outcome) {
+                    is WalletEngine.PrepareOutcome.Failed ->
+                        statusView.text = outcome.message
+                    is WalletEngine.PrepareOutcome.Ready ->
+                        offerApproval(outcome.prepared)
+                }
+                renderActivity()
             }
-            renderActivity()
+        }
+        when (selectedFamily()) {
+            WalletGate.FAMILY_BITCOIN ->
+                btcEngine.prepareFromForm(asset, amountText, usdAmountText, recipient, onOutcome)
+            WalletGate.FAMILY_SOLANA ->
+                solEngine.prepareFromForm(asset, amountText, usdAmountText, recipient, onOutcome)
+            else ->
+                engine.prepareFromForm(
+                    chainKey = selectedChain().key,
+                    asset = asset,
+                    amountText = amountText,
+                    usdAmountText = usdAmountText,
+                    targetRaw = recipient,
+                    done = onOutcome
+                )
+        }
+    }
+
+    /** The gated signer of a prepared spend's own family. */
+    private fun executeOn(
+        prepared: WalletGate.PreparedTx,
+        userApproved: Boolean,
+        rawAmountConfirmed: Boolean,
+        done: (WalletEngine.ExecOutcome) -> Unit
+    ) {
+        when (prepared.family) {
+            WalletGate.FAMILY_BITCOIN ->
+                btcEngine.execute(prepared, userApproved, rawAmountConfirmed, done)
+            WalletGate.FAMILY_SOLANA ->
+                solEngine.execute(prepared, userApproved, rawAmountConfirmed, done)
+            else ->
+                engine.execute(prepared, userApproved, rawAmountConfirmed, done)
         }
     }
 
     /** Prepare-and-ask: the gate first (autonomous mode may
      *  allow outright), the sheet whenever it asks. */
     private fun offerApproval(prepared: WalletGate.PreparedTx) {
-        engine.execute(prepared, userApproved = false, rawAmountConfirmed = false) { outcome ->
-            if (isFinishing || isDestroyed) return@execute
+        executeOn(prepared, userApproved = false, rawAmountConfirmed = false) { outcome ->
+            if (isFinishing || isDestroyed) return@executeOn
             when (outcome) {
                 WalletEngine.ExecOutcome.NeedsApproval -> {
                     WalletApprovalUi.show(
-                        this, prepared, wallet.address() ?: "",
+                        this, prepared, fromAddressFor(prepared.family),
                         onApprove = { rawConfirmed ->
                             runExecute(prepared, rawConfirmed)
                         },
@@ -262,10 +417,10 @@ class WalletActivity : AppCompatActivity() {
 
     private fun runExecute(prepared: WalletGate.PreparedTx, rawConfirmed: Boolean) {
         statusView.text = "Signing and sending…"
-        engine.execute(
+        executeOn(
             prepared, userApproved = true, rawAmountConfirmed = rawConfirmed
         ) { outcome ->
-            if (isFinishing || isDestroyed) return@execute
+            if (isFinishing || isDestroyed) return@executeOn
             reportExec(outcome)
             renderActivity()
             refreshBalances()

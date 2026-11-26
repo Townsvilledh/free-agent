@@ -1,4 +1,4 @@
-# WALLET.md — Lille's agentic wallet (v0.12; chains widened v0.12.4)
+# WALLET.md — Lille's agentic wallet (v0.12; chains widened v0.12.4; Bitcoin + Solana families added on the consolidation branch, 2026-11-26)
 
 *What her wallet is, how money moves through it, and what she can
 never do — in plain words. Design decisions trace to the
@@ -23,19 +23,27 @@ identity.
 
 ## Where the key lives
 
-Her EVM keypair is generated on the phone (SecureRandom) the
+Her keypairs are generated on the phone (SecureRandom) the
 moment the user taps **Create Lille's wallet** — an explicit
-user action, never automatic. The private key exists in exactly
-one place: an entry in her Keystore-wrapped encrypted vault
-(`DeviceVault`), the same vault that holds her other secrets.
-It is never written to chat, task records, logs, or the backup
-plaintext; the backup carries it only inside the sealed,
-encrypted payload (the v0.11 backup seals `vault.exportSecrets()`
-— verified in code, `BackupManager` — and restores through
-`importSecrets`). The only code that ever reads the key is the
-signing path in `WalletEngine`, at the moment of signing, and
-the key bytes are zeroed immediately after. Creating a wallet
-twice never replaces the key — the existing address comes back.
+user action, never automatic. The wallet is **one wallet with
+three keysets** — EVM, Bitcoin, Solana — created together by
+that one tap (a wallet created before the Bitcoin/Solana
+families existed gains each missing keyset from its own set-up
+button on the Wallet screen, never silently). Each private key
+exists in exactly one place: an entry in her Keystore-wrapped
+encrypted vault (`DeviceVault`) under its own key name
+(`lille.wallet.evm.v1`, `lille.wallet.btc.v1`,
+`lille.wallet.sol.v1`), the same vault that holds her other
+secrets. They are never written to chat, task records, logs, or
+the backup plaintext; the backup carries them only inside the
+sealed, encrypted payload (the v0.11 backup seals
+`vault.exportSecrets()` — verified in code, `BackupManager` —
+and restores through `importSecrets`, so all three keysets ride
+the backup and restore together). The only code that ever reads
+a key is its family's signing path (`WalletEngine`,
+`BtcEngine`, `SolEngine`), at the moment of signing, and the
+key bytes are zeroed immediately after. Creating a wallet twice
+never replaces a key — the existing address comes back.
 
 ## No app-switching anywhere in her wallet's life
 
@@ -58,22 +66,32 @@ the model's free text:
    `send|pay $<amount> of <ASSET> to <target> [on <chain>]`, and
    `send|pay <amount> dollars of <ASSET> to <target> [on
    <chain>]`, with ASSET ∈ {ETH, USDC, USDT, WETH, BNB, POL,
-   AVAX, WAVAX} (checked against the chosen chain — an asset
-   she holds on one chain is not spendable on another), target
-   a 0x address or a Fluid name (`@name` or bare), chain ∈
-   {ethereum, mainnet, base, arbitrum, polygon, bsc, bnb,
-   avalanche, avax, optimism} (default Ethereum). A send-shaped
-   message that doesn't match exactly gets a question back —
-   never a guess. The Wallet screen's send form feeds the same
-   pipeline, and its asset list follows the selected chain.
-2. **Prepare.** `WalletEngine` resolves the recipient (Fluid
+   AVAX, WAVAX, BTC, SOL} (checked against the chosen network —
+   an asset she holds on one chain is not spendable on another),
+   target a 0x address, a Bitcoin address (bc1…, 1…, 3…), a
+   Solana address (base58), or a Fluid name (`@name` or bare),
+   chain ∈ {ethereum, mainnet, base, arbitrum, polygon, bsc,
+   bnb, avalanche, avax, optimism, bitcoin, btc, solana}. The
+   family is decided in order by the network words, the asset
+   (BTC is Bitcoin's, SOL is Solana's), the target's shape (so
+   "send 5 USDC to <solana address>" is a Solana send with no
+   network words), and only then defaults to EVM. Fluid names
+   resolve to EVM addresses ONLY — the registry holds nothing
+   else — so a name target on Bitcoin or Solana is a question
+   that says exactly that. A send-shaped message that doesn't
+   match exactly gets a question back — never a guess. The
+   Wallet screen's send form feeds the same pipeline, and its
+   asset list follows the selected network.
+2. **Prepare.** The family's engine (`WalletEngine`,
+   `BtcEngine`, `SolEngine`) resolves the recipient (Fluid
    names through the published names registry, primary +
-   fallback fetch), reads live balances, nonce and fees from
-   public RPCs (≥2 routes per chain, serving source named), and
-   prices the send in USD through the price chain (CoinGecko →
-   Coinbase → Kraken). If the value can't be priced, the send is
-   labelled UNPRICED and can only proceed with the user's
-   explicit raw-amount confirmation on the approval sheet.
+   fallback fetch — EVM sends only), reads live balances and
+   fees from public routes (≥2 per network, serving source
+   named), and prices the send in USD through the shared price
+   chain (CoinGecko → Coinbase → Kraken, now covering BTC and
+   SOL). If the value can't be priced, the send is labelled
+   UNPRICED and can only proceed with the user's explicit
+   raw-amount confirmation on the approval sheet.
 3. **Gate.** Before any key is touched, `WalletGate.decide()`
    runs — deterministic code, not the model. It checks, in
    order: valid recipient and amount; sufficient balance for
@@ -129,6 +147,66 @@ asset is **POL** (the gas token since the 2024 upgrade —
 MATIC is the retired name). Prices come through the same
 price chain (CoinGecko → Coinbase → Kraken), extended to the
 new natives.
+
+## Bitcoin and Solana (families 2 and 3)
+
+Her wallet is Fluid-shaped: the same caps, the same gate, the
+same prepare-and-ask, on the two non-EVM families. The gate is
+family-blind by construction — `WalletGate.decide()` never asks
+which family a prepared transaction came from, so no family can
+grow a weaker gate (pinned by `WalletFamilyGateTest`, including
+the stub-signer proof for BTC and SOL: no Allow, no signature).
+
+**Bitcoin** (`Btc.kt`, `BtcEngine.kt`). Her receive address is
+native segwit (P2WPKH) — one address type, no ambiguity. She
+can pay P2PKH, P2SH, P2WPKH, and P2WSH mainnet addresses;
+**taproot (bc1p…) is refused, plainly** — its bech32m encoding
+is not implemented, and refusing beats misparsing. Routes are
+Esplora-shaped (mempool.space, blockstream.info): her balance
+IS her UTXO set — the same read displays and prepares, so the
+number on screen is the number a send is planned against.
+Sends follow Bitcoin's real rules: largest-first UTXO
+selection with the fee recomputed as inputs accrete, change
+back to her own address, change below the 546-sat dust limit
+folded into the fee rather than created, fees priced per route
+in sat/vB (the UTXO-serving route first), signing by BIP-143
+with RFC-6979 determinism. RIPEMD-160 is implemented in-tree
+(Android doesn't provide it) and the whole stack is pinned by
+published vectors (the RIPEMD-160 suite, BIP-173, the key-1
+address chain) plus a byte-for-byte cross-check against an
+independent BIP-143 implementation (sighash, signed
+transaction, txid).
+
+**Solana** (`Sol.kt`, `SolEngine.kt`). Her address is the
+base58 of her ed25519 public key; Ed25519 is implemented
+in-tree from RFC 8032 (the A12's Android generation can't be
+relied on to expose it) with the curve constants computed, not
+typed, and pinned by the RFC's §7.1 vectors (independently
+confirmed against OpenSSL). Assets: SOL, USDC, USDT (SPL, by
+mint). Balances read over public RPC routes (the official
+mainnet endpoint, publicnode, drpc): an SPL balance reads
+through the owner's associated token account, and a missing
+ATA is a TRUE zero — the chain states it, via getAccountInfo —
+never a failed read dressed as one. A send whose recipient has
+no token account yet carries a create-ATA instruction in the
+same transaction, and its rent (read live, with the network's
+standard 2,039,280-lamport figure as fallback) is named on the
+approval sheet as its own line. Fees are priced for the built
+message (getFeeForMessage; the fixed 5,000-lamport signature
+fee as fallback). A prepared send pins its blockhash: if the
+network has moved past it by broadcast time, the send fails
+honestly ("prepare it again") rather than being silently
+rebuilt into a transaction the user never saw — the same
+discipline as the EVM engine's prepared nonce. PDA/ATA
+derivation and a full signed transfer are cross-checked
+byte-for-byte against an independent implementation.
+
+**No sweep on Bitcoin or Solana.** The sweep-back destination
+on record is the user's Fluid EVM address, and a Bitcoin or
+Solana send to an EVM address is meaningless. Rather than
+invent a destination, these families have no sweep until a
+same-family destination exists; the Wallet screen shows the
+sweep button on EVM chains only.
 
 ## Caps are the user's dial, not a cage
 
@@ -224,9 +302,10 @@ Fluid's keys stay Fluid's.
 - Task-engine wallet tools: her background tasks cannot spend
   yet — wallet sends run from chat prompts and the Wallet
   screen only.
-- Non-EVM chains: her wallet is EVM-only — the seven chains
-  above. Bitcoin, Solana and the other Fluid families are NOT
-  BUILT in her wallet; PARITY.md carries them as named rows,
-  not as fine print.
+- Taproot (bc1p…) sends, and sweep-back on the Bitcoin and
+  Solana families (see above for why).
+- The other Fluid families (TON, Stellar, XRP, Cosmos, …) are
+  NOT BUILT in her wallet; PARITY.md carries them as named
+  rows, not as fine print.
 - Main-wallet transaction approvals from inside Lille: NOT
   BUILT — see the first-class row in PARITY.md.

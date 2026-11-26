@@ -29,7 +29,10 @@ object WalletGate {
 
     data class Token(
         val symbol: String,
-        /** Contract address; null for the chain's native asset. */
+        /** Contract address; null for the chain's native asset.
+         *  On Solana tokens this field carries the SPL mint
+         *  address (a mint is a token's identifying address
+         *  there); the Solana engine reads it as the mint. */
         val contract: String?,
         val decimals: Int,
         /** CoinGecko id for the price chain. */
@@ -205,8 +208,58 @@ object WalletGate {
     fun token(chain: Chain, symbol: String): Token? =
         chain.tokens.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) }
 
+    // ---------------- wallet families ----------------
+    //
+    // The companion wallet is ONE wallet with three keysets:
+    // the EVM keyset above, a Bitcoin keyset, and a Solana
+    // keyset (AgentWallet holds all three under the same
+    // vault discipline — Ethuram's ruling: her wallet must
+    // be Fluid-shaped). The gate — caps, the daily total,
+    // the approval rule — is family-blind on purpose: a
+    // prepared spend from any family passes the same
+    // decide() below, so no family can grow a weaker gate.
+
+    const val FAMILY_EVM = "evm"
+    const val FAMILY_BITCOIN = "bitcoin"
+    const val FAMILY_SOLANA = "solana"
+
+    /** Bitcoin's one asset: BTC itself, 8 decimals. */
+    val BITCOIN_TOKENS: List<Token> = listOf(
+        Token("BTC", null, 8, "bitcoin")
+    )
+
+    /** Solana's assets: native SOL (9 decimals) and the two
+     *  dollar stables as SPL tokens (6 decimals each),
+     *  identified by mint (carried in the contract field). */
+    val SOLANA_TOKENS: List<Token> = listOf(
+        Token("SOL", null, 9, "solana"),
+        Token("USDC", Sol.USDC_MINT, 6, "usd-coin"),
+        Token("USDT", Sol.USDT_MINT, 6, "tether")
+    )
+
+    /** A family's token by symbol (EVM resolves per chain
+     *  via [token]; this covers the two non-EVM families). */
+    fun familyToken(family: String, symbol: String): Token? =
+        when (family) {
+            FAMILY_BITCOIN -> BITCOIN_TOKENS
+            FAMILY_SOLANA -> SOLANA_TOKENS
+            else -> null
+        }?.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) }
+
+    /** The display name of a network: an EVM chain's label,
+     *  or the family networks'. Prepared transactions carry
+     *  "bitcoin"/"solana" as their chain key. */
+    fun networkLabel(chainKey: String): String =
+        chainByKey(chainKey)?.label ?: when (chainKey) {
+            FAMILY_BITCOIN -> "Bitcoin"
+            FAMILY_SOLANA -> "Solana"
+            else -> chainKey
+        }
+
     val SUPPORTED_SYMBOLS: Set<String> =
-        CHAINS.flatMap { c -> c.tokens.map { it.symbol } }.toSet()
+        (CHAINS.flatMap { c -> c.tokens.map { it.symbol } } +
+            BITCOIN_TOKENS.map { it.symbol } +
+            SOLANA_TOKENS.map { it.symbol }).toSet()
 
     // ---------------- caps ----------------
 
@@ -316,7 +369,21 @@ object WalletGate {
         val gasPrice: BigInteger? = null,
         /** True for a sweep-back to the user's own Fluid
          *  address — still prepare-and-ask, always. */
-        val isSweep: Boolean = false
+        val isSweep: Boolean = false,
+        /** The wallet family this spend belongs to
+         *  (FAMILY_EVM for everything the EVM engine builds).
+         *  For the other families the EVM-only fields above
+         *  (gasLimit, nonce, fee-per-gas) are zero and unused;
+         *  [maxFeeWei] carries the family's worst-case fee in
+         *  its native base unit (sats / lamports) so the
+         *  sheet and the value maths keep one shape. */
+        val family: String = FAMILY_EVM,
+        /** Bitcoin only: the UTXO plan the signer rebuilds
+         *  exactly (inputs, change, fee). */
+        val btcPlan: Btc.SpendPlan? = null,
+        /** Solana only: the spend plan the signer rebuilds
+         *  exactly (kind, ATAs, blockhash, fee, rent). */
+        val solPlan: Sol.SpendPlan? = null
     )
 
     // ---------------- the gate ----------------
@@ -442,7 +509,7 @@ object WalletGate {
         if (p.recipientLabel != "address") {
             sb.append(" (@${p.recipientLabel}, from the Fluid names registry)")
         }
-        sb.append("\non ${chainByKey(p.chainKey)?.label ?: p.chainKey}.")
+        sb.append("\non ${networkLabel(p.chainKey)}.")
         if (p.usdCents != null) {
             sb.append("\n\nValue: about ${formatUsd(p.usdCents)}")
             if (p.priceSource != null) sb.append(" (priced by ${p.priceSource})")
@@ -454,12 +521,36 @@ object WalletGate {
                     "confirm the raw amount above yourself."
             )
         }
-        val nativeSymbol = chainByKey(p.chainKey)?.tokens?.firstOrNull()?.symbol ?: "ETH"
-        sb.append(
-            "\nNetwork fee: up to ${Evm.formatUnits(p.maxFeeWei, 18)} $nativeSymbol" +
-                (p.maxFeeUsdCents?.let { " (about ${formatUsd(it)})" } ?: "") +
-                ", paid from her wallet."
-        )
+        val feeUsd = p.maxFeeUsdCents?.let { " (about ${formatUsd(it)})" } ?: ""
+        when (p.family) {
+            FAMILY_BITCOIN -> sb.append(
+                "\nNetwork fee: ${Evm.formatUnits(p.maxFeeWei, 8)} BTC" +
+                    feeUsd + ", paid from her wallet."
+            )
+            FAMILY_SOLANA -> {
+                sb.append(
+                    "\nNetwork fee: ${Evm.formatUnits(p.maxFeeWei, 9)} SOL" +
+                        feeUsd + ", paid from her wallet."
+                )
+                val rent = p.solPlan?.rentLamports ?: 0L
+                if (rent > 0) {
+                    sb.append(
+                        "\nPlus one-time rent of " +
+                            "${Evm.formatUnits(BigInteger.valueOf(rent), 9)} SOL " +
+                            "to open the recipient's ${p.tokenSymbol} account — " +
+                            "the deposit the network holds for that account."
+                    )
+                }
+            }
+            else -> {
+                val nativeSymbol =
+                    chainByKey(p.chainKey)?.tokens?.firstOrNull()?.symbol ?: "ETH"
+                sb.append(
+                    "\nNetwork fee: up to ${Evm.formatUnits(p.maxFeeWei, 18)} " +
+                        "$nativeSymbol" + feeUsd + ", paid from her wallet."
+                )
+            }
+        }
         sb.append("\n\nThis spends from LILLE'S wallet only — your Fluid wallet is never touched.")
         return sb.toString()
     }
