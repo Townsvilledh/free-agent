@@ -354,7 +354,21 @@ class TaskLoop:
                 args = fn.get("arguments")
                 if isinstance(args, str) and len(args) > 60:
                     fn["arguments"] = "{}"
-        for m in reversed(messages):
+        # Truncate the newest long OBSERVATION — never the task
+        # itself. The first user message IS the job (for spec runs
+        # it carries the whole copy-exact work plan); cutting it to
+        # 2400 chars silently amputates the plan mid-run — the
+        # model then improvises calls with empty arguments because
+        # the instructions literally left its view (root cause of
+        # the 2026-11-26 login-walkthrough attempts 2-3 failures:
+        # call 1 fit under the cap and ran perfectly; from call 2
+        # the added history crossed it and the plan was cut).
+        first_user = next((i for i, m in enumerate(messages)
+                           if m.get("role") == "user"), None)
+        for j in range(len(messages) - 1, -1, -1):
+            if j == first_user:
+                continue
+            m = messages[j]
             if m.get("role") in ("tool", "user") \
                     and isinstance(m.get("content"), str) \
                     and len(m["content"]) > 2400:

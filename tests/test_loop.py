@@ -151,6 +151,32 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(call["args"]["lines"], ["one", "two"])
         self.assertEqual(call["args"]["count"], 2)
 
+    def test_aggressive_compaction_never_truncates_the_task(self):
+        # Regression (2026-11-26): _compact_aggressive truncated
+        # the newest long user message — which IS the task text
+        # carrying the spec's copy-exact plan. From the first
+        # over-cap call onward the model improvised tool calls
+        # with empty arguments; two spec runs died of it.
+        from free_agent.loop import TaskLoop as TL
+        task = "PLAN " + "x" * 5000
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": task},
+            {"role": "assistant", "content": "working " * 40},
+            {"role": "tool", "content": "observation " + "y" * 3000},
+        ]
+        TL._compact_aggressive(msgs)
+        self.assertEqual(msgs[1]["content"], task)
+        self.assertLess(len(msgs[3]["content"]), 3100)
+        # And when ONLY the task is long, nothing is truncated.
+        msgs2 = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": task},
+            {"role": "assistant", "content": "ok"},
+        ]
+        TL._compact_aggressive(msgs2)
+        self.assertEqual(msgs2[1]["content"], task)
+
     def test_sandbox_run_python_captures_and_times_out(self):
         d = os.path.join(self.root, "t")
         os.makedirs(d)
