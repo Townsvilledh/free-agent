@@ -21,9 +21,12 @@ import java.security.SecureRandom
  *   a KEY NAME. It returns only success/failure — the value is
  *   never returned to the caller, never shown to the model,
  *   never written to a task record, trace, or log.
- * - getSecret() is called ONLY by the browser driver at the
- *   moment of typing (browser_type_secret). The value crosses
- *   from here into the WebView field and nowhere else.
+ * - getSecret() has a closed caller list (see its doc): the
+ *   browser driver at the moment of typing, the own-key brain
+ *   glue + Settings test (into an Authorization header), and
+ *   the backup export (into ciphertext). The value crosses
+ *   from here into exactly one of those sinks and nowhere
+ *   else.
  * - recordAccount() stores account METADATA (site, username,
  *   vault key name) in a separate, non-secret store — the same
  *   shape as the core's accounts.json.
@@ -89,8 +92,14 @@ class DeviceVault(context: Context) {
         }
     }
 
-    /** Driver-only: resolve a key name to its value at the moment
-     *  of typing. Never called by the model layer, never logged. */
+    /** Resolve a key name to its value at the moment of use.
+     *  The caller list is closed and each caller has exactly
+     *  one sink for the value: the browser driver (types it
+     *  into a field), the own-key brain glue (v0.12.1 — puts
+     *  it in that provider's Authorization header), the
+     *  Settings key Test (same header, one call), and the
+     *  backup export below (into ciphertext). Never called
+     *  by the model layer, never logged, never shown. */
     fun getSecret(key: String): String? {
         if (!validKeyName(key)) return null
         return try {
@@ -104,6 +113,18 @@ class DeviceVault(context: Context) {
         if (!validKeyName(key)) return false
         return try {
             secrets().contains(key)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Remove a secret by key name (v0.12.1 — the Settings
+     *  "Your API keys" Remove button). Returns true when
+     *  the vault write succeeded. */
+    fun removeSecret(key: String): Boolean {
+        if (!validKeyName(key)) return false
+        return try {
+            secrets().edit().remove(key).commit()
         } catch (e: Exception) {
             false
         }

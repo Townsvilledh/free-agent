@@ -48,6 +48,12 @@ class ProactiveWorker(context: Context, params: WorkerParameters) :
         for (taskId in summary.pickupTaskIds) {
             TaskWorker.enqueue(applicationContext, taskId)
         }
+        // v0.12.1: the periodic pass also carries the
+        // in-app update check — UpdateChecker's own 6-hour
+        // throttle + once-per-version notification gate
+        // keep this pass (15-min cadence, Doze permitting)
+        // from ever becoming noise.
+        UpdateChecker.maybeCheck(applicationContext, notify = true)
         return Result.success()
     }
 

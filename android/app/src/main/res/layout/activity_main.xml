@@ -41,6 +41,37 @@
             android:text="@string/new_chat" />
     </LinearLayout>
 
+    <!-- Update banner (v0.12.1): hidden unless
+         UpdateChecker finds a newer version on the
+         distribution branch that wasn't dismissed. The
+         text opens the one-tap APK link; Later dismisses
+         this version only. -->
+    <LinearLayout
+        android:id="@+id/updateBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/bg_bubble_lille"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/updateBannerText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#F5EFE7"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/updateBannerDismiss"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/update_later" />
+    </LinearLayout>
+
     <!-- Nav row (v0.11): Chats (multiple conversations) ·
          Tasks · Settings (backup lives there). Same screens,
          one tap each. -->

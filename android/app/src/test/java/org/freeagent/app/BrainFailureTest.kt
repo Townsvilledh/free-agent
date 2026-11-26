@@ -160,6 +160,42 @@ class BrainFailureTest {
         assertTrue(line.contains("saved here"))
     }
 
+    // ---- own-key routes (v0.12.1) ----
+
+    @Test
+    fun ownKeyRateLimitCopyNamesTheKeyRouteNotTheCarrier() {
+        // A personal key's limit is the user's own free-tier
+        // quota — the shared-carrier-IP explanation belongs
+        // to the anonymous keyless tier only.
+        val line = BrainFailure.statusLine(
+            BrainFailure.Class.RATE_LIMITED, "your Gemini key route",
+            "1 minute", ownKeyName = "Groq"
+        )
+        assertTrue(line.contains("Your Groq key route"))
+        assertTrue(line.contains("free-tier limit"))
+        assertFalse(line.contains("carrier"))
+        assertTrue(line.contains("your Gemini key route"))
+    }
+
+    @Test
+    fun ownKeyNetworkCopyStillNeverBlamesTheConnection() {
+        val line = BrainFailure.statusLine(
+            BrainFailure.Class.NETWORK, null, "2 minutes", ownKeyName = "Cerebras"
+        )
+        assertTrue(line.contains("Your Cerebras key route"))
+        assertTrue(line.contains("Your connection is fine"))
+        assertFalse(line.lowercase().contains("check your connection"))
+    }
+
+    @Test
+    fun keylessCopyIsUnchangedWhenNoOwnKeyNameIsGiven() {
+        val line = BrainFailure.statusLine(
+            BrainFailure.Class.RATE_LIMITED, null, "1 minute"
+        )
+        assertTrue(line.contains("shared"))
+        assertTrue(line.contains("carrier"))
+    }
+
     // ---- per-route health (v0.12 hunt) ----
 
     @Test

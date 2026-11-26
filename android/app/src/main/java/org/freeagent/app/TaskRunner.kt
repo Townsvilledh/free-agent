@@ -14,9 +14,11 @@ import java.util.concurrent.TimeUnit
 
 /**
  * On-device task runner (v0.4; browser lane v0.9). A small
- * plan-act-observe loop over the keyless brain, checkpointing to
- * the TaskStore after EVERY step, using the same state names as
- * the Python core.
+ * plan-act-observe loop over the brain chain — keyless
+ * Pollinations → AI Horde → the user's own saved keys
+ * (v0.12.1, OwnKeyRoutes) — checkpointing to the TaskStore
+ * after EVERY step, using the same state names as the
+ * Python core.
  *
  * Tool scope by task kind:
  * - Note tasks (default): model calls, web_search (keyless
@@ -247,8 +249,17 @@ class TaskRunner(private val context: Context) {
                 store.update(id) { it.put("consecutiveRateLimits", 0) }
             }
             if (httpCode != 200) {
+                val routeName = reply.optString("route", "")
                 store.update(id, TaskStates.FAILED) {
-                    it.put("note", "Free brain returned HTTP $httpCode.")
+                    it.put(
+                        "note",
+                        if (routeName.isNotEmpty() && routeName != "pollinations") {
+                            "Brain route $routeName returned HTTP $httpCode " +
+                                "(the routes before it in the chain also failed)."
+                        } else {
+                            "Free brain returned HTTP $httpCode."
+                        }
+                    )
                 }
                 return TaskStates.FAILED
             }
@@ -459,15 +470,18 @@ class TaskRunner(private val context: Context) {
 
     // ---------- model ----------
 
-    /** One model call. Returns {http, content, retryAfterSec?};
-     *  throws IOException on transport failure (-> waiting_network). */
-    private fun callModel(messages: JSONArray): JSONObject {
-        val body = JSONObject().put("model", MODEL).put("messages", messages)
-        val request = Request.Builder()
-            .url(TEXT_ENDPOINT)
+    /** One OpenAI-compatible chat call. [key] null = the
+     *  keyless route. Returns {http, content?, retryAfterSec?};
+     *  throws IOException on transport failure. */
+    private fun callOpenAi(
+        url: String, model: String, key: String?, messages: JSONArray
+    ): JSONObject {
+        val body = JSONObject().put("model", model).put("messages", messages)
+        val builder = Request.Builder()
+            .url(url)
             .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        client.newCall(request).execute().use { response ->
+        if (!key.isNullOrEmpty()) builder.header("Authorization", "Bearer $key")
+        client.newCall(builder.build()).execute().use { response ->
             val out = JSONObject().put("http", response.code)
             response.header("Retry-After")?.toLongOrNull()?.let {
                 out.put("retryAfterSec", it)
@@ -480,6 +494,158 @@ class TaskRunner(private val context: Context) {
             }
             return out
         }
+    }
+
+    /** Route 2 — AI Horde (keyless, slow community queue):
+     *  the conversation flattened into one prompt, submitted
+     *  with the service's public anonymous key, polled with
+     *  a bounded wait (~3 min — a task step may wait, but
+     *  not forever; on expiry the chain falls through).
+     *  Same result shape as callOpenAi; http 0 when the job
+     *  faulted or the wait expired. */
+    private fun callHorde(messages: JSONArray): JSONObject {
+        val prompt = buildString {
+            for (i in 0 until messages.length()) {
+                val m = messages.getJSONObject(i)
+                val label = when (m.optString("role")) {
+                    "system" -> "System"
+                    "assistant" -> "Lille"
+                    else -> "User"
+                }
+                append(label).append(": ").append(m.optString("content")).append("\n")
+            }
+            append("Lille:")
+        }
+        val params = JSONObject()
+            .put("max_length", 1024)
+            .put("temperature", 0.7)
+            .put("stop_sequence", JSONArray().put("\nUser:"))
+        val body = JSONObject()
+            .put("prompt", prompt)
+            .put("params", params)
+            .put("models", JSONArray())
+            .put("slow_workers", true)
+        val submit = Request.Builder()
+            .url("https://stablehorde.net/api/v2/generate/text/async")
+            .header("apikey", "0000000000")
+            .header("Client-Agent", "lille-android:0.12.1:free-agent")
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        val jobId: String
+        client.newCall(submit).execute().use { response ->
+            if (response.code !in 200..299) {
+                val out = JSONObject().put("http", response.code)
+                response.header("Retry-After")?.toLongOrNull()?.let {
+                    out.put("retryAfterSec", it)
+                }
+                return out
+            }
+            jobId = JSONObject(response.body?.string() ?: "{}")
+                .optString("id", "")
+        }
+        if (jobId.isEmpty()) return JSONObject().put("http", 0)
+        repeat(18) {
+            Thread.sleep(10_000)
+            try {
+                val poll = Request.Builder()
+                    .url("https://stablehorde.net/api/v2/generate/text/status/$jobId")
+                    .header("apikey", "0000000000")
+                    .header("Client-Agent", "lille-android:0.12.1:free-agent")
+                    .build()
+                client.newCall(poll).execute().use { response ->
+                    if (response.code == 200) {
+                        val data = JSONObject(response.body?.string() ?: "{}")
+                        if (data.optBoolean("faulted")) {
+                            return JSONObject().put("http", 0)
+                        }
+                        if (data.optBoolean("done")) {
+                            val gens = data.optJSONArray("generations")
+                            val text = if (gens != null && gens.length() > 0) {
+                                gens.getJSONObject(0).optString("text", "").trim()
+                            } else {
+                                ""
+                            }
+                            return if (text.isNotEmpty()) {
+                                JSONObject().put("http", 200).put("content", text)
+                            } else {
+                                JSONObject().put("http", 0)
+                            }
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                // A dropped poll is not a dead job — keep polling.
+            }
+        }
+        return JSONObject().put("http", 0)
+    }
+
+    /** One model call, walking the brain chain (v0.12.1):
+     *  Pollinations → AI Horde → the user's own-key routes
+     *  for keys actually saved, in BrainFailure.OWN_KEY_ORDER
+     *  (Groq → Gemini → Cerebras → OpenRouter → AgentRouter
+     *  → custom; OwnKeyRoutes). The first route to answer
+     *  200 serves the step and is named in the result.
+     *  Failures fall through WITHIN the call; the aggregate
+     *  keeps the runner's existing waiting discipline: any
+     *  rate-limit seen (and no success) returns that
+     *  rate-limit result (-> waiting_route with its
+     *  Retry-After), else the last hard HTTP failure is
+     *  returned (the FAILED path), else an IOException is
+     *  thrown (-> waiting_network). Own keys are resolved
+     *  from the vault at call time and cross only into the
+     *  Authorization header. */
+    private fun callModel(messages: JSONArray): JSONObject {
+        var rateLimit: JSONObject? = null
+        var lastFailure: JSONObject? = null
+        var lastIo: IOException? = null
+
+        fun attempt(routeName: String, call: () -> JSONObject): JSONObject? {
+            val r = try {
+                call()
+            } catch (e: IOException) {
+                lastIo = e
+                return null
+            }
+            val http = r.optInt("http", 0)
+            if (http == 200) return r.put("route", routeName)
+            if (http == 402 || http == 429) {
+                if (rateLimit == null) rateLimit = r.put("route", routeName)
+            } else if (http != 0) {
+                lastFailure = r.put("route", routeName)
+            }
+            return null
+        }
+
+        attempt("pollinations") { callOpenAi(TEXT_ENDPOINT, MODEL, null, messages) }
+            ?.let { return it }
+        attempt("horde") { callHorde(messages) }?.let { return it }
+        val present = OwnKeyRoutes.presentRoutes { name -> vault.hasSecret(name) }
+        for (route in BrainFailure.OWN_KEY_ORDER) {
+            if (route !in present) continue
+            val spec = OwnKeyRoutes.spec(route) ?: continue
+            val key = vault.getSecret(spec.vaultKeyName) ?: continue
+            val customBase = if (route == BrainFailure.Route.CUSTOM) {
+                vault.getSecret(OwnKeyRoutes.CUSTOM_URL_VAULT_KEY)
+            } else {
+                null
+            }
+            val customModel = if (route == BrainFailure.Route.CUSTOM) {
+                vault.getSecret(OwnKeyRoutes.CUSTOM_MODEL_VAULT_KEY)
+            } else {
+                null
+            }
+            attempt(spec.route.key) {
+                callOpenAi(
+                    OwnKeyRoutes.chatUrl(spec, customBase),
+                    OwnKeyRoutes.chatModel(spec, customModel),
+                    key, messages
+                )
+            }?.let { return it }
+        }
+        rateLimit?.let { return it }
+        lastFailure?.let { return it }
+        throw lastIo ?: IOException("all brain routes unreachable")
     }
 
     private fun parseToolCall(content: String): Pair<String, JSONObject>? {

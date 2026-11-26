@@ -112,28 +112,57 @@ object BrainFailure {
     fun statusLine(
         failure: Class,
         nextRouteLabel: String?,
-        waitText: String
+        waitText: String,
+        ownKeyName: String? = null
     ): String {
+        // v0.12.1: when the route that failed is one of the
+        // user's OWN key routes, the cause names that route
+        // and its own free-tier limit — the shared-carrier-IP
+        // explanation belongs to the anonymous keyless tier
+        // only, and saying it about a personal key would be
+        // the wrong cause (the discipline this file exists
+        // for). OFFLINE is a device fact either way.
         val cause = when (failure) {
             Class.OFFLINE ->
                 "You're offline right now — this message is saved here, " +
                     "and Lille keeps retrying on her own as soon as a " +
                     "connection appears."
             Class.RATE_LIMITED ->
-                "The free brain route is busy — its anonymous tier limits " +
-                    "replies per internet address, and on mobile networks " +
-                    "that address is shared with other people on your " +
-                    "carrier, so the limit can be used up by strangers."
+                if (ownKeyName != null) {
+                    "Your $ownKeyName key route hit its free-tier limit " +
+                        "for now — your message is safe and queued."
+                } else {
+                    "The free brain route is busy — its anonymous tier limits " +
+                        "replies per internet address, and on mobile networks " +
+                        "that address is shared with other people on your " +
+                        "carrier, so the limit can be used up by strangers."
+                }
             Class.NETWORK ->
-                "The free brain route didn't answer in time — the route " +
-                    "or the path to it hiccuped. Your connection is fine; " +
-                    "this one is on the route."
+                if (ownKeyName != null) {
+                    "Your $ownKeyName key route didn't answer in time — " +
+                        "the route or the path to it hiccuped. Your " +
+                        "connection is fine; this one is on the route."
+                } else {
+                    "The free brain route didn't answer in time — the route " +
+                        "or the path to it hiccuped. Your connection is fine; " +
+                        "this one is on the route."
+                }
             Class.SERVER ->
-                "The free brain route's server is having a bad moment " +
-                    "(it answered with an error). Your message is safe " +
-                    "and queued."
+                if (ownKeyName != null) {
+                    "Your $ownKeyName key route's server is having a bad " +
+                        "moment (it answered with an error). Your message " +
+                        "is safe and queued."
+                } else {
+                    "The free brain route's server is having a bad moment " +
+                        "(it answered with an error). Your message is safe " +
+                        "and queued."
+                }
             Class.PERMANENT ->
-                "The free brain route refused that request's shape."
+                if (ownKeyName != null) {
+                    "Your $ownKeyName key route refused that request's shape."
+                } else {
+                    "The free brain route refused that request's shape."
+                }
         }
         val next = when {
             nextRouteLabel != null ->
@@ -146,25 +175,57 @@ object BrainFailure {
         return cause + next
     }
 
-    /** The routes the chat chain walks, in order. Only
-     *  routes LIVE-VERIFIED as genuinely keyless are listed
-     *  (ROUTES.md carries the dated verdicts). */
+    /** The routes the chat chain can walk, in chain
+     *  order. The keyless pair is LIVE-VERIFIED as
+     *  genuinely keyless (ROUTES.md carries the dated
+     *  verdicts); the rest are the user's OWN key routes
+     *  (v0.12.1, OwnKeyRoutes) — present in a chain only
+     *  when the user has saved that key (see [chain]). */
     enum class Route(val key: String, val label: String) {
         POLLINATIONS("pollinations", "the main free route"),
-        HORDE("horde", "the slow community route")
+        HORDE("horde", "the slow community route"),
+        GROQ("groq", "your Groq key route"),
+        GEMINI("gemini", "your Gemini key route"),
+        CEREBRAS("cerebras", "your Cerebras key route"),
+        OPENROUTER("openrouter", "your OpenRouter key route"),
+        AGENTROUTER("agentrouter", "your AgentRouter key route"),
+        CUSTOM("custom", "your custom endpoint")
     }
 
-    /** The route to try after [route] failed, or null when
-     *  the chain is exhausted for this attempt. Any failure
-     *  falls through — another route's request shape and
-     *  limits differ — but the attempt ends when the LAST
-     *  route refuses permanently. */
-    fun nextRoute(route: Route): Route? {
-        val routes = Route.values()
-        val idx = routes.indexOf(route)
-        if (idx < 0 || idx >= routes.size - 1) return null
-        return routes[idx + 1]
+    /** The keyless chain — always present, needs nothing
+     *  from anybody (the no-keys doctrine's floor). */
+    val KEYLESS_CHAIN: List<Route> = listOf(Route.POLLINATIONS, Route.HORDE)
+
+    /** The own-key routes in their walk order, after the
+     *  keyless pair: Groq → Gemini → Cerebras → OpenRouter
+     *  → AgentRouter → custom. */
+    val OWN_KEY_ORDER: List<Route> = listOf(
+        Route.GROQ, Route.GEMINI, Route.CEREBRAS,
+        Route.OPENROUTER, Route.AGENTROUTER, Route.CUSTOM
+    )
+
+    /** The chain for one conversation: the keyless pair,
+     *  then whichever own-key routes the user has actually
+     *  saved a key for, in walk order. A route with no key
+     *  saved is simply absent — never a placeholder, never
+     *  an error. */
+    fun chain(ownKeyPresent: Set<Route>): List<Route> =
+        KEYLESS_CHAIN + OWN_KEY_ORDER.filter { it in ownKeyPresent }
+
+    /** The route to try after [route] failed in [chain],
+     *  or null when the chain is exhausted for this
+     *  attempt. Any failure falls through — another
+     *  route's request shape and limits differ — but the
+     *  attempt ends when the LAST route refuses
+     *  permanently. The no-chain overload walks the
+     *  keyless chain (the v0.12 semantics, unchanged). */
+    fun nextRoute(route: Route, chain: List<Route>): Route? {
+        val idx = chain.indexOf(route)
+        if (idx < 0 || idx >= chain.size - 1) return null
+        return chain[idx + 1]
     }
+
+    fun nextRoute(route: Route): Route? = nextRoute(route, KEYLESS_CHAIN)
 
     // ---- per-route health (v0.12 hunt) ----
     //
@@ -195,35 +256,51 @@ object BrainFailure {
      *  earliest deadline is when a probe makes sense. */
     fun pickNext(
         after: Route,
+        chain: List<Route>,
         coolingUntilMs: Map<Route, Long>,
         nowMs: Long
     ): Route? {
-        val routes = Route.values()
-        val idx = routes.indexOf(after)
+        val idx = chain.indexOf(after)
         if (idx < 0) return null
-        for (i in idx + 1 until routes.size) {
-            val candidate = routes[i]
+        for (i in idx + 1 until chain.size) {
+            val candidate = chain[i]
             val until = coolingUntilMs[candidate] ?: 0L
             if (until <= nowMs) return candidate
         }
         return null
     }
 
-    /** The first route of the chain that is not resting at
+    /** The keyless-chain overload (v0.12 semantics,
+     *  unchanged): the walk when no own keys exist. */
+    fun pickNext(
+        after: Route,
+        coolingUntilMs: Map<Route, Long>,
+        nowMs: Long
+    ): Route? = pickNext(after, KEYLESS_CHAIN, coolingUntilMs, nowMs)
+
+    /** The first route of [chain] that is not resting at
      *  [nowMs] — where a NEW message should start. Null when
      *  the whole chain is resting (the message then waits
      *  for the earliest recovery instead of firing into a
      *  wall). */
     fun firstHealthy(
+        chain: List<Route>,
         coolingUntilMs: Map<Route, Long>,
         nowMs: Long
     ): Route? {
-        for (route in Route.values()) {
+        for (route in chain) {
             val until = coolingUntilMs[route] ?: 0L
             if (until <= nowMs) return route
         }
         return null
     }
+
+    /** The keyless-chain overload (v0.12 semantics,
+     *  unchanged). */
+    fun firstHealthy(
+        coolingUntilMs: Map<Route, Long>,
+        nowMs: Long
+    ): Route? = firstHealthy(KEYLESS_CHAIN, coolingUntilMs, nowMs)
 
     /** True when a failure on the LAST route ends the whole
      *  attempt terminally (permanent everywhere). Retryable

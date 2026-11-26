@@ -1,6 +1,7 @@
 package org.freeagent.app
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -67,9 +68,13 @@ import java.util.concurrent.TimeUnit
  * preview. Full multimodal understanding of attachments is a documented
  * next step — the app does NOT pretend the model saw the file.
  *
- * Keys: NONE are needed. A user's OWN optional keys (AgentRouter/Groq)
- * belong in the Keystore-backed encrypted vault (Settings, planned) and
- * are never shipped in the app, never shared, never collected.
+ * Keys: NONE are needed. A user's OWN optional free keys
+ * (Groq, Gemini, Cerebras, OpenRouter, AgentRouter, or a
+ * custom endpoint) can be added in Settings → "Your API
+ * keys" (v0.12.1): they live in the Keystore-backed
+ * encrypted vault, are never shipped in the app, never
+ * shared, never collected — and when present they join the
+ * brain chain behind the keyless routes (OwnKeyRoutes).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -198,6 +203,22 @@ class MainActivity : AppCompatActivity() {
      *  route fresh. */
     private val routeFailures = mutableMapOf<BrainFailure.Route, Int>()
     private val routeCoolingUntil = mutableMapOf<BrainFailure.Route, Long>()
+
+    /** v0.12.1 own-key routes: the vault (key NAMES are read
+     *  for presence; a key VALUE is resolved only inside
+     *  tryOwnKeyRoute, at the moment of its call) and the
+     *  chain the current conversation walks — the keyless
+     *  pair plus whichever own-key routes have a saved key.
+     *  Refreshed at the start of every fresh ask, so a key
+     *  added in Settings joins the very next message. */
+    private val vault by lazy { DeviceVault(this) }
+    private var brainChain: List<BrainFailure.Route> = BrainFailure.KEYLESS_CHAIN
+
+    private fun refreshBrainChain() {
+        brainChain = BrainFailure.chain(
+            OwnKeyRoutes.presentRoutes { name -> vault.hasSecret(name) }
+        )
+    }
 
     private fun noteRouteFailure(route: BrainFailure.Route) {
         val n = (routeFailures[route] ?: 0) + 1
@@ -332,6 +353,46 @@ class MainActivity : AppCompatActivity() {
                 renderChat(if (current.isNotEmpty()) current else renderedChatId)
             }
         }
+        checkForUpdateBanner()
+    }
+
+    /** v0.12.1 in-app update check: on app open (the
+     *  checker throttles itself to once per 6 h), show the
+     *  dismissible banner when the distribution branch
+     *  carries a newer version that wasn't dismissed.
+     *  Tapping the banner text opens the one-tap APK link —
+     *  the stable signing line installs it in place. */
+    private fun checkForUpdateBanner() {
+        val banner = findViewById<LinearLayout>(R.id.updateBanner)
+        val bannerText = findViewById<TextView>(R.id.updateBannerText)
+        val dismiss = findViewById<Button>(R.id.updateBannerDismiss)
+        UpdateChecker.maybeCheck(this, notify = true) { remote ->
+            if (!uiAlive) return@maybeCheck
+            if (remote != null &&
+                UpdateCheck.shouldShowBanner(
+                    BuildConfig.VERSION_CODE,
+                    UpdateChecker.dismissedCode(this),
+                    remote
+                )
+            ) {
+                bannerText.text = UpdateCheck.bannerText(remote)
+                banner.visibility = View.VISIBLE
+                bannerText.setOnClickListener {
+                    startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            Uri.parse(UpdateCheck.APK_URL)
+                        )
+                    )
+                }
+                dismiss.setOnClickListener {
+                    UpdateChecker.dismiss(this, remote.versionCode)
+                    banner.visibility = View.GONE
+                }
+            } else {
+                banner.visibility = View.GONE
+            }
+        }
     }
 
     override fun onPause() {
@@ -410,8 +471,9 @@ class MainActivity : AppCompatActivity() {
                 (fluidIdentity?.let {
                     "Connected with your Fluid name @${it.username}. "
                 } ?: "") +
-                "Optional: your OWN AgentRouter/Groq key can be added later in Settings " +
-                "(encrypted vault) — never required, never shared." +
+                "Optional: your OWN free API keys (Groq, Gemini, Cerebras, " +
+                "OpenRouter, AgentRouter) can be added in Settings → Your API " +
+                "keys (encrypted vault) — never required, never shared." +
                 if (freshWorld) {
                     "\n\nReinstalling, or on a new phone? Settings → Backup & " +
                         "restore can bring your previous chats and tasks back."
@@ -768,7 +830,9 @@ class MainActivity : AppCompatActivity() {
      * cap and no error wall for a busy route. (v0.12: TWO
      * keyless text routes are live-verified — Pollinations +
      * AI Horde — out of ~45 candidates tested; ROUTES.md
-     * carries every verdict. Pacing + fall-through + per-route
+     * carries every verdict. v0.12.1: the user's OWN saved
+     * keys join the chain behind them — BrainFailure.chain
+     * over OwnKeyRoutes. Pacing + fall-through + per-route
      * health below are the chain's resilience.)
      */
     private fun askBrain(chatId: String, userText: String, attempt: Int) {
@@ -791,8 +855,13 @@ class MainActivity : AppCompatActivity() {
         // is automatic — a rested route is simply eligible
         // again, and its next success clears its record.
         if (carry.isEmpty() && continuations == 0) {
+            // v0.12.1: the chain is rebuilt per fresh ask —
+            // keyless pair first, then the user's own-key
+            // routes for keys actually saved (OwnKeyRoutes).
+            refreshBrainChain()
             val now = System.currentTimeMillis()
-            when (BrainFailure.firstHealthy(routeCoolingUntil, now)) {
+            when (val first = BrainFailure.firstHealthy(brainChain, routeCoolingUntil, now)) {
+                BrainFailure.Route.POLLINATIONS -> Unit // main route healthy: normal path
                 BrainFailure.Route.HORDE -> {
                     replaceCurrentReply(
                         chatId,
@@ -810,7 +879,7 @@ class MainActivity : AppCompatActivity() {
                     if (chatId == activeChatId) updateComposerState()
                     replaceCurrentReply(
                         chatId,
-                        "Every free brain route is resting after repeated " +
+                        "Every brain route is resting after repeated " +
                             "failures. Your message is queued — Lille " +
                             "retries on her own in about " +
                             BrainPacing.describeWait(waitMs) + "."
@@ -821,7 +890,20 @@ class MainActivity : AppCompatActivity() {
                     }
                     return
                 }
-                else -> Unit // main route healthy: normal path
+                else -> {
+                    // The keyless pair is resting but one of
+                    // the user's own key routes is healthy:
+                    // start there directly.
+                    val spec = OwnKeyRoutes.spec(first)
+                    replaceCurrentReply(
+                        chatId,
+                        "The free routes are resting after repeated " +
+                            "failures — using your " +
+                            (spec?.displayName ?: "own") + " key route."
+                    )
+                    tryOwnKeyRoute(chatId, userText, historyText, first)
+                    return
+                }
             }
         }
         val remaining = BrainPacing.remainingIntervalMs(
@@ -1088,23 +1170,35 @@ class MainActivity : AppCompatActivity() {
     ) {
         val flight = flightFor(chatId)
         noteRouteFailure(route)
+        // The cause copy names the route that actually
+        // failed: own-key routes get their own wording
+        // (BrainFailure.statusLine's ownKeyName), never the
+        // anonymous tier's shared-IP explanation.
+        val failedOwnKeyName = if (OwnKeyRoutes.isOwnKeyRoute(route)) {
+            OwnKeyRoutes.spec(route)?.displayName
+        } else {
+            null
+        }
         val next = BrainFailure.pickNext(
-            route, routeCoolingUntil, System.currentTimeMillis()
+            route, brainChain, routeCoolingUntil, System.currentTimeMillis()
         )
         if (next != null) {
             replaceCurrentReply(
-                chatId, BrainFailure.statusLine(failure, next.label, "")
+                chatId,
+                BrainFailure.statusLine(failure, next.label, "", failedOwnKeyName)
             )
             when (next) {
                 BrainFailure.Route.HORDE ->
                     tryHorde(chatId, userText, historyText)
                 BrainFailure.Route.POLLINATIONS ->
                     askBrain(chatId, userText, attempt, reframed, "", 0, historyText)
+                else ->
+                    tryOwnKeyRoute(chatId, userText, historyText, next)
             }
             return
         }
         if (BrainFailure.attemptEndsTerminally(failure)) {
-            val shown = "The free brain routes refused that request's shape — " +
+            val shown = "The brain routes refused that request's shape — " +
                 "it can't be retried as-is. Your message stays above; " +
                 "rephrase it and I'll try again."
             replaceCurrentReply(chatId, shown)
@@ -1120,7 +1214,7 @@ class MainActivity : AppCompatActivity() {
         replaceCurrentReply(
             chatId,
             BrainFailure.statusLine(
-                failure, null, BrainPacing.describeWait(waitMs)
+                failure, null, BrainPacing.describeWait(waitMs), failedOwnKeyName
             )
         )
         schedule(flight, waitMs) {
@@ -1160,7 +1254,7 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder()
             .url("https://stablehorde.net/api/v2/generate/text/async")
             .header("apikey", "0000000000")
-            .header("Client-Agent", "lille-android:0.12.0:free-agent")
+            .header("Client-Agent", "lille-android:0.12.1:free-agent")
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
         lastBrainCallAtMs = System.currentTimeMillis()
@@ -1240,7 +1334,7 @@ class MainActivity : AppCompatActivity() {
             val request = Request.Builder()
                 .url("https://stablehorde.net/api/v2/generate/text/status/$jobId")
                 .header("apikey", "0000000000")
-                .header("Client-Agent", "lille-android:0.12.0:free-agent")
+                .header("Client-Agent", "lille-android:0.12.1:free-agent")
                 .build()
             val call = client.newCall(request)
             flight.call = call
@@ -1310,6 +1404,155 @@ class MainActivity : AppCompatActivity() {
         val shown = rawAnswer.trim() +
             "\n\n(Answered by the slow community route — the main free " +
             "route is busy. Community models can be rougher than usual.)"
+        flight.history.add(
+            JSONObject().put("role", "user").put("content", historyText)
+        )
+        flight.history.add(
+            JSONObject().put("role", "assistant").put("content", shown)
+        )
+        chatStore.appendMessage(chatId, "assistant", shown)
+        if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
+        replaceCurrentReply(chatId, shown)
+        BackupManager.requestBackup(this)
+        finishFlight(chatId)
+    }
+
+    /** v0.12.1 — an own-key route call (Groq / Gemini /
+     *  Cerebras / OpenRouter / AgentRouter / custom; the
+     *  spec lives in OwnKeyRoutes). Plain non-streaming
+     *  OpenAI-compatible POST: the key is resolved from the
+     *  vault at this moment and crosses only into the
+     *  Authorization header — never into the message body,
+     *  the chat, a log, or the task context. No refusal /
+     *  continuation machinery (those belong to the primary
+     *  route's stream); failures hand back to the same
+     *  BrainFailure chain discipline as every route. */
+    private fun tryOwnKeyRoute(
+        chatId: String,
+        userText: String,
+        historyText: String,
+        route: BrainFailure.Route
+    ) {
+        val flight = flightFor(chatId)
+        val gen = flight.generation
+        val spec = OwnKeyRoutes.spec(route)
+        val key = spec?.let { vault.getSecret(it.vaultKeyName) }
+        if (spec == null || key.isNullOrEmpty()) {
+            // The key was removed between the chain refresh
+            // and this call: the route is absent, not broken.
+            // Fall through as a network-class failure; the
+            // next fresh ask rebuilds the chain without it.
+            brainRouteFailed(
+                chatId, userText, 0, false, historyText,
+                route, BrainFailure.Class.NETWORK, null
+            )
+            return
+        }
+        val customBase = if (route == BrainFailure.Route.CUSTOM) {
+            vault.getSecret(OwnKeyRoutes.CUSTOM_URL_VAULT_KEY)
+        } else {
+            null
+        }
+        val customModel = if (route == BrainFailure.Route.CUSTOM) {
+            vault.getSecret(OwnKeyRoutes.CUSTOM_MODEL_VAULT_KEY)
+        } else {
+            null
+        }
+        val messages = JSONArray()
+        messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
+        for (m in flight.history.takeLast(MAX_HISTORY)) messages.put(m)
+        messages.put(JSONObject().put("role", "user").put("content", userText))
+        val bodyJson = JSONObject()
+            .put("model", OwnKeyRoutes.chatModel(spec, customModel))
+            .put("messages", messages)
+        val request = Request.Builder()
+            .url(OwnKeyRoutes.chatUrl(spec, customBase))
+            .header("Authorization", "Bearer $key")
+            .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        lastBrainCallAtMs = System.currentTimeMillis()
+        val call = client.newCall(request)
+        flight.call = call
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                postIfCurrent(flight, gen) {
+                    brainRouteFailed(
+                        chatId, userText, 0, false, historyText,
+                        route,
+                        BrainFailure.classify(
+                            null,
+                            if (e is SocketTimeoutException) {
+                                BrainFailure.IoKind.TIMEOUT
+                            } else {
+                                BrainFailure.IoKind.OTHER
+                            },
+                            deviceOnline()
+                        ),
+                        null
+                    )
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val code = response.code
+                val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                val text = try {
+                    response.body?.string()
+                } catch (e: Exception) {
+                    null
+                }
+                response.close()
+                val answer = if (code == 200 && text != null) {
+                    try {
+                        JSONObject(text).getJSONArray("choices")
+                            .getJSONObject(0).getJSONObject("message")
+                            .optString("content", "").trim()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                } else {
+                    ""
+                }
+                postIfCurrent(flight, gen) {
+                    when {
+                        code == 200 && answer.isNotEmpty() ->
+                            deliverOwnKeyAnswer(chatId, historyText, answer, route)
+                        code == 200 ->
+                            // A 200 with no usable text is a
+                            // sick route, not an answer.
+                            brainRouteFailed(
+                                chatId, userText, 0, false, historyText,
+                                route, BrainFailure.Class.NETWORK, null
+                            )
+                        else ->
+                            brainRouteFailed(
+                                chatId, userText, 0, false, historyText,
+                                route,
+                                BrainFailure.classify(code, null, deviceOnline()),
+                                retryAfter
+                            )
+                    }
+                }
+            }
+        })
+    }
+
+    /** An own-key answer lands through the same
+     *  store/history path as every answer, with the route
+     *  named — the user always knows which brain answered,
+     *  and that this one ran on their own key. */
+    private fun deliverOwnKeyAnswer(
+        chatId: String,
+        historyText: String,
+        rawAnswer: String,
+        route: BrainFailure.Route
+    ) {
+        val flight = flightFor(chatId)
+        flight.brainStreak = 0
+        noteRouteSuccess(route)
+        val name = OwnKeyRoutes.spec(route)?.displayName ?: "your own key"
+        val shown = rawAnswer.trim() +
+            "\n\n(Answered by your $name key route.)"
         flight.history.add(
             JSONObject().put("role", "user").put("content", historyText)
         )

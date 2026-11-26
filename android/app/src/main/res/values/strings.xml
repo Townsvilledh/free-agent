@@ -74,6 +74,9 @@
     <string name="new_chat">New chat</string>
     <string name="settings">Settings</string>
     <string name="settings_title">Settings</string>
+    <string name="update_later">Later</string>
+    <string name="settings_keys_title">Your API keys (optional)</string>
+    <string name="settings_keys_hint">Lille works fully with no key at all — the free keyless brain is her default. If you have your OWN free key from one of these services, adding it gives her one more brain route to fall back to when the free routes are busy. A key is stored only on this phone, in her encrypted vault; it is sent only to that service, never shown, never logged. Adding or removing a key is always your choice, and she never asks for one.</string>
     <string name="delete_chat">Delete</string>
     <string name="current_chat">Current chat</string>
 

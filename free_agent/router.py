@@ -275,7 +275,7 @@ class Router:
         headers = {
             "Content-Type": "application/json",
             "apikey": "0000000000",
-            "Client-Agent": "lille-core:0.12.0:free-agent",
+            "Client-Agent": "lille-core:0.12.1:free-agent",
         }
         body = json.dumps({
             "prompt": prompt,

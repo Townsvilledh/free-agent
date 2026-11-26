@@ -73,22 +73,48 @@ class Config:
                         cooldown_seconds=300, kind="horde"),
             # OPTIONAL personal keys (user's own, vault-only, never shipped
             # in the app and never collected by us). Enabled only when the
-            # user has actually supplied their own key.
+            # user has actually supplied their own key. v0.12.1: the chain
+            # order after the keyless pair is Groq -> Gemini -> Cerebras ->
+            # OpenRouter -> AgentRouter -> custom, the same order the app
+            # walks (OwnKeyRoutes). Keys come from the environment ONLY;
+            # absent = the route is simply not in the chain.
+            # Groq free tier. External provider => not trusted by default.
+            ProviderCfg("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY",
+                        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("GROQ_API_KEY"))),
+            # Gemini free tier (AI Studio key), via Google's
+            # OpenAI-compatible endpoint. gemini-flash-latest is the
+            # documented alias for the current Flash model.
+            ProviderCfg("gemini-free", "https://generativelanguage.googleapis.com/v1beta/openai/",
+                        "GEMINI_API_KEY", ["gemini-flash-latest"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("GEMINI_API_KEY"))),
+            # Cerebras free tier (~1M tokens/day; llama-3.3-70b is the
+            # documented free-tier flagship).
+            ProviderCfg("cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY",
+                        ["llama-3.3-70b"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("CEREBRAS_API_KEY"))),
+            # OpenRouter free models. "openrouter/free" is OpenRouter's
+            # own free-model auto-router (verified present in the keyless
+            # GET /models list 2026-11-26; the individual :free roster
+            # rotates, the router id does not).
+            ProviderCfg("openrouter-free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY",
+                        ["openrouter/free"], trusted_for_private=False,
+                        enabled=bool(os.environ.get("OPENROUTER_API_KEY"))),
             # AgentRouter free credit. Community relay, unknown retention
             # => NOT trusted for private content.
             ProviderCfg("agentrouter", "https://agentrouter.org/v1", "AGENTROUTER_API_KEY",
                         ["claude-opus-4-8", "gpt-5.6-sol", "deepseek-v4-flash"], trusted_for_private=False,
                         enabled=bool(os.environ.get("AGENTROUTER_API_KEY")),
                         cooldown_seconds=1800),  # daily batch quota: cool longer
-            # Groq free tier. Also an external provider => not trusted by default.
-            ProviderCfg("groq", "https://api.groq.com/openai/v1", "GROQ_API_KEY",
-                        ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"], trusted_for_private=False,
-                        enabled=bool(os.environ.get("GROQ_API_KEY"))),
-            # Config stubs for more free tiers (enable when keys exist).
-            ProviderCfg("gemini-free", "https://generativelanguage.googleapis.com/v1beta/openai/",
-                        "GEMINI_API_KEY", ["gemini-flash-latest"], trusted_for_private=False, enabled=False),
-            ProviderCfg("openrouter-free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY",
-                        ["deepseek/deepseek-chat:free"], trusted_for_private=False, enabled=False),
+            # Custom OpenAI-compatible endpoint (the user's own server
+            # or a relay they trust). Needs base URL + key (+ optional
+            # model name) in the environment; absent = absent.
+            ProviderCfg("custom-openai", os.environ.get("CUSTOM_LLM_BASE_URL", ""),
+                        "CUSTOM_LLM_API_KEY",
+                        [os.environ.get("CUSTOM_LLM_MODEL", "default")],
+                        trusted_for_private=False,
+                        enabled=bool(os.environ.get("CUSTOM_LLM_BASE_URL")) and
+                                bool(os.environ.get("CUSTOM_LLM_API_KEY"))),
             ProviderCfg("cloudflare-workers-ai", "", "CLOUDFLARE_API_TOKEN",
                         [], trusted_for_private=False, enabled=False),
             # A local model (Ollama on the host) is the ONLY default-trusted path

@@ -466,5 +466,112 @@ class TestHordeRoute(unittest.TestCase):
         self.assertEqual(horde.kind, "horde")
         self.assertFalse(horde.trusted_for_private)
 
+class TestOwnKeyRoutes(unittest.TestCase):
+    """v0.12.1 own-key parity in the core: the same providers
+    as the app, keys read from environment variables ONLY.
+    Absent env = the route is disabled (absent from the
+    walked chain); present env = enabled, in the order
+    groq -> gemini -> cerebras -> openrouter -> agentrouter
+    -> custom, after the keyless pair. Dummy values only."""
+
+    OWN_KEY_ENVS = {
+        "GROQ_API_KEY": "groq",
+        "GEMINI_API_KEY": "gemini-free",
+        "CEREBRAS_API_KEY": "cerebras",
+        "OPENROUTER_API_KEY": "openrouter-free",
+        "AGENTROUTER_API_KEY": "agentrouter",
+    }
+
+    def _cfg(self, env):
+        import unittest.mock as mock
+        with mock.patch.dict(os.environ, env, clear=True):
+            return Config.from_env()
+
+    def _in_env(self, env, fn):
+        """Run fn(cfg) INSIDE the patched environment —
+        ProviderCfg.key() reads os.environ at call time, so
+        key assertions made after the patch exits would see
+        the real (empty) environment."""
+        import unittest.mock as mock
+        with mock.patch.dict(os.environ, env, clear=True):
+            return fn(Config.from_env())
+
+    def test_no_env_keys_no_own_key_routes_enabled(self):
+        def check(cfg):
+            by_name = {p.name: p for p in cfg.providers}
+            for name in list(self.OWN_KEY_ENVS.values()) + ["custom-openai"]:
+                self.assertIn(name, by_name)
+                self.assertFalse(by_name[name].enabled, name)
+                self.assertEqual(by_name[name].key(), "", name)
+        self._in_env({}, check)
+
+    def test_each_env_key_enables_exactly_its_route(self):
+        for env_name, provider_name in self.OWN_KEY_ENVS.items():
+            def check(cfg, provider_name=provider_name):
+                by_name = {p.name: p for p in cfg.providers}
+                self.assertTrue(by_name[provider_name].enabled, provider_name)
+                self.assertEqual(
+                    by_name[provider_name].key(), "dummy-key-value")
+                for other in self.OWN_KEY_ENVS.values():
+                    if other != provider_name:
+                        self.assertFalse(by_name[other].enabled, other)
+            self._in_env({env_name: "dummy-key-value"}, check)
+
+    def test_custom_route_needs_base_url_and_key(self):
+        cfg = self._cfg({"CUSTOM_LLM_API_KEY": "dummy-key-value"})
+        by_name = {p.name: p for p in cfg.providers}
+        self.assertFalse(by_name["custom-openai"].enabled)
+        cfg = self._cfg({"CUSTOM_LLM_BASE_URL": "https://example.invalid/v1"})
+        by_name = {p.name: p for p in cfg.providers}
+        self.assertFalse(by_name["custom-openai"].enabled)
+        cfg = self._cfg({
+            "CUSTOM_LLM_BASE_URL": "https://example.invalid/v1",
+            "CUSTOM_LLM_API_KEY": "dummy-key-value",
+            "CUSTOM_LLM_MODEL": "my-model",
+        })
+        custom = {p.name: p for p in cfg.providers}["custom-openai"]
+        self.assertTrue(custom.enabled)
+        self.assertEqual(custom.base_url, "https://example.invalid/v1")
+        self.assertEqual(custom.models, ["my-model"])
+
+    def test_chain_order_keyless_then_own_keys(self):
+        env = {name: "dummy-key-value" for name in self.OWN_KEY_ENVS}
+        env["CUSTOM_LLM_BASE_URL"] = "https://example.invalid/v1"
+        env["CUSTOM_LLM_API_KEY"] = "dummy-key-value"
+        cfg = self._cfg(env)
+        enabled = [p.name for p in cfg.providers if p.enabled]
+        self.assertEqual(enabled, [
+            "keyless-pollinations", "ai-horde", "groq", "gemini-free",
+            "cerebras", "openrouter-free", "agentrouter", "custom-openai",
+        ])
+
+    def test_router_falls_through_keyless_to_env_key_route(self):
+        cfg = self._cfg({"GROQ_API_KEY": "dummy-key-value"})
+        calls = []
+        def transport(p, messages):
+            calls.append(p.name)
+            return (402, "") if p.name == "keyless-pollinations" else (200, "from-groq")
+        r = Router(cfg, transport=transport)
+        r.horde_transport = lambda p, m: (0, "", None)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["provider"], "groq")
+        self.assertEqual(out["text"], "from-groq")
+        self.assertEqual(
+            calls, ["keyless-pollinations", "groq"],
+            "horde runs on its own transport; the openai transport "
+            "must see pollinations then groq, in chain order",
+        )
+
+    def test_route_table_matches_the_same_order(self):
+        from free_agent.routes import ROUTE_TABLES
+        names = [name for name, _s, _k in ROUTE_TABLES["text"]]
+        self.assertEqual(names[:8], [
+            "keyless-pollinations", "ai-horde", "groq", "gemini-free",
+            "cerebras", "openrouter-free", "agentrouter", "custom-openai",
+        ])
+        own = {name: key for name, _s, key in ROUTE_TABLES["text"]}
+        for name in self.OWN_KEY_ENVS.values():
+            self.assertEqual(own[name], "own-key", name)
+
 if __name__ == "__main__":
     unittest.main()

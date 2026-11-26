@@ -33,10 +33,20 @@ ROUTE_TABLES = {
         # Every other verdict — refused / needs-key / dead /
         # broken / challenge-walled — is recorded in ROUTES.md.
         ("ai-horde", "live", "none"),
-        ("agentrouter", "stub", "own-key"),
+        # Own-key routes (v0.12.1): live code in BOTH the core
+        # (keys from environment variables only) and the app
+        # (keys from the user's encrypted vault, Settings ->
+        # "Your API keys"). "stub" here means what it always
+        # meant — disabled until the user adds their OWN key;
+        # absent key = absent route. Walk order after the
+        # keyless pair: groq -> gemini -> cerebras ->
+        # openrouter -> agentrouter -> custom.
         ("groq", "stub", "own-key"),
         ("gemini-free", "stub", "own-key"),
+        ("cerebras", "stub", "own-key"),
         ("openrouter-free", "stub", "own-key"),
+        ("agentrouter", "stub", "own-key"),
+        ("custom-openai", "stub", "own-key"),
         ("cloudflare-workers-ai", "stub", "own-key"),
         # local-ollama is deliberately NOT in the public text chain:
         # it is the trusted PRIVATE path (privacy routing), not a
@@ -81,7 +91,9 @@ RATE_LIMIT_NOTES = {
     "agentrouter": "Premium models released in daily batch quotas (402 when a batch is exhausted); DeepSeek-class routes effectively unlimited.",
     "groq": "Per-model free caps, e.g. Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day.",
     "gemini-free": "Free-tier per-model request/day caps shown in AI Studio; change frequently.",
-    "openrouter-free": ":free models ~50 requests/day without credit purchase.",
+    "cerebras": "Free tier ~1M tokens/day, ~30 requests/min (provider docs); Llama 3.3 70B is the documented flagship.",
+    "openrouter-free": ":free models ~50 requests/day without credit purchase; the openrouter/free auto-router id is the default (keyless-verified present 2026-11-26).",
+    "custom-openai": "The user's own OpenAI-compatible endpoint: their server, their limits, their trust decision.",
     "cloudflare-workers-ai": "Free tier ~10,000 neurons/day.",
     "pollinations-image": "Keyless; free images carry a small logo; results cached by URL (treat as public).",
     "duckduckgo-instant": "Keyless Instant Answers API; returns instant answers only, not full web results; be gentle (no published quota).",
