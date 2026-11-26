@@ -112,6 +112,27 @@ fallbacks behind the keyless pair:
   routes are external providers — privacy routing is
   unchanged, and private content never goes to them.
 
+**Host-side Groq bridge — 2026-11-26.** On this host, Ethuram's
+own Groq key also serves Lille's host-side jobs (runner lane,
+proofs, sweeps) through the launcher `python -m
+free_agent.hostkeys` (`free_agent/hostkeys.py`). The launcher
+obtains a short-lived *surrogate* from the custom.groq connector
+exchange at runtime and spawns the job with
+`GROQ_API_KEY=<surrogate>` in the child environment only; the
+runtime swaps the surrogate for the real key on the approved
+egress to api.groq.com. The real key is never present on this
+host — not in any process, file, or log — and the child's output
+is relayed through a scrubber so the surrogate cannot leak into
+logs either. If the exchange yields nothing, the launcher
+refuses to run. Ordering is exactly the production chain above:
+keyless routes first, Groq after them; the bridge changes only
+how the host supplies the key, never the order. The phone app
+is untouched by this: on a phone, the same key reaches Lille
+only through the user's own paste in Settings → "Your API
+keys". Proof harness: `scripts/groq_proof.py` (run through the
+launcher; its groq-only route pin is a labelled test-harness
+selection, not production behaviour).
+
 **The exhaustive keyless-brain hunt — v0.12 (real completion calls
 from the build VM, 2026-11-26, three rounds, ~45 candidates).**
 Ethuram's order: "if we can find ten use them all, if 50 use them
