@@ -177,8 +177,13 @@ softened.
   invisible, and repeat runs re-report the same findings as new.
 - **Verdict:** Lille ahead by construction on auditability; the
   honest open gap is surface *reach* — X, the surface Ethuram
-  finds things on by scrolling, has no keyless route, and until
-  one exists every sweep says so in writing.
+  finds things on by scrolling, has no keyless route. v0.8
+  added the session route (the sweep's X surface is backed by
+  Lille's own browser session when one exists), but no session
+  exists yet: her own X account creation stands at NEEDS
+  ETHURAM, parked at X's Arkose human-verification after valid
+  submits (see the tally). Until a session exists, every sweep
+  still names X NOT CHECKED — now with that reason.
 
 ## The video boundary (binding)
 
@@ -206,12 +211,17 @@ single step only he can take (VIDEO.md).
 | 2026-11-25 | v0.7 proofs (a)+(c) — pending-result watches + scheduled lane (bar 8 measurements, not loop tasks) | PASS (three real Actions runs watched to conclusion and reported by passes alone — two *failure* conclusions surfaced 56s/44s after landing, one success likewise; the `lille-proactive.yml` lane restored state from `lille-state`, landed a seeded watch on the runner at 10:01:26 UTC, and committed state + report back to the branch, verified from the branch itself) |
 | 2026-11-25 | v0.7 thoroughness sweep #1 — "hackathons open for solo online entry" (bar 9 measurement, not a loop task) | PASS with a named remainder (STATUS DONE; 27 results all NEW across 3 surfaces actually checked — Devpost 7, GitHub 10, Hacker News 10 — under 5 phrasings; 3 surfaces named NOT CHECKED with reasons in the mandatory coverage note: DuckDuckGo HTML HTTP 202 bot-challenge, DoraHacks HTTP error/bot wall, X via Nitter timeout/no keyless route. The dedup re-run has since been executed (2026-11-25 ~11:33 WAT, by Muse): 27 of 27 results already known, 0 new — dedup live-proven; report in live-tests/2026-11-25-v07-sweep-report-2-dedup.md |
 
-Tally so far: **8 live tasks, 8 completed** (counting the v0.6 video
-as one task — it took 7 spec attempts, all recorded in its proof
-file; earlier tasks also completed only after machinery fixes driven
-by failed attempts — the attempts are counted in the proof files,
-not hidden). The v0.7 (a)/(c) rows are bar-8 measurements rather
-than loop tasks and are not counted in the 8. All at $0.
+| 2026-11-25 | v0.8 proof, leg 1 — browser basics: open the Wikipedia Lagos article, follow a link, extract a fact to a file, screenshot evidence (general browser control, live brain) | PASS (SHIPPED on attempt 6; attempts 1–5 exposed a screenshot compositor stall, a wait-arg collision, a path-flattening sanitiser, a grader file-token gap and the keyless endpoint's body limit — each fixed in the machinery and regression-tested; fact + screenshot verified by Muse; `live-tests/2026-11-25-v08-proof.md`) |
+| 2026-11-25/26 | v0.8 proof, leg 2 — formal acceptance test: Lille creates her OWN X account end-to-end (her loop only; Muse builds/verifies) | NEEDS ETHURAM — not passed, not failed (20 attempts, each driving machinery fixes recorded in the proof file; attempts 18 and 19 both drove the real signup form to a valid submit and met X's Arkose "Verify you are human" wall; attempt 19 graded NEEDS ETHURAM from evidence — CHALLENGE observed, routes worked/walled — with everything pre-staged: identity kit, vault-held password, parked browser profile. The test resumes and can still pass the moment the human-only step is taken; `live-tests/2026-11-25-v08-proof.md`) |
+
+Tally so far: **9 live tasks completed of 10 attempted** (counting
+the v0.6 video as one task — it took 7 spec attempts, all recorded
+in its proof file; earlier tasks also completed only after
+machinery fixes driven by failed attempts — the attempts are
+counted in the proof files, not hidden). The tenth, her X account,
+stands NEEDS ETHURAM at a genuine human-only wall — not counted
+as a completion. The v0.7 (a)/(c) rows are bar-8 measurements
+rather than loop tasks and are not counted. All at $0.
 
 ## Open gaps — where Manus genuinely leads today
 
@@ -223,16 +233,21 @@ than loop tasks and are not counted in the 8. All at $0.
    routing — optional user-supplied keys already supported; keyless
    frontier access does not exist today and is not promised).
 2. **Browser polish.** Manus drives a real browser with a mature
-   harness and session replay. **Lille has a scripted capture
-   instrument** (v0.6: CDP-driven step lists in headless Chromium —
-   it has completed live captures of a real web app end to end,
-   including form flows, a seed-backup quiz and a live route
-   search), but that is *not* general browser control: no open-ended
-   browsing, no session replay, no perception-driven exploration.
-   The gap narrows; it does not close. *Closes at:* the browser
-   rung — structural perception first (API → accessibility/DOM →
-   vision last, per DESIGN #2), proven on live tasks before it is
-   claimed.
+   harness and session replay. **Lille now has general browser
+   control for scripted + interactive basics (v0.8)**: a
+   persistent-profile CDP driver with structural perception
+   (visible text + ref-addressed elements, SECRET-field
+   protection, challenge detection, network-error perception),
+   proven live on an open-ended web task (Wikipedia: navigate,
+   follow a link, extract, screenshot — SHIPPED) and on a real
+   multi-step signup flow driven to its human-verification wall
+   across 20 attempts. What is still missing versus Manus:
+   session replay, vision-grounded interaction, and polish —
+   her perception is structural only, and a determined 20B
+   driver still loses threads a frontier driver would hold.
+   The gap is narrowed to polish and judgement; the control
+   itself is proven. *Closes further at:* an on-device browser
+   rung and vision grounding, each proven live before claimed.
 3. **Task size / long-horizon builds.** Manus completes 80-minute
    multi-file app builds. Lille's proven envelope today is small
    repo tasks (single-digit files, ≤25-step spec runs). *Closes
@@ -252,7 +267,7 @@ proficient at that size yet.** Readiness by capability:
 | Long-spec comprehension (multi-thousand-word pack, hard rules, acceptance criteria) | Partial | Spec mode parses Goal/Hard rules/Criteria/Deliverables/Push and grades criteria from evidence — proven on small specs. A pack of Buildathon size has never been run; context limits of the 20B brain are the binding constraint. Measurement to build: run a sectioned large spec and score criterion coverage. |
 | Multi-workstream planning (3 workstreams over 6 days, day-by-day plan) | Not yet | The loop plans step-by-step inside one task; there is no multi-day planner, no workstream state. v0.7 added the commitments register (pending results + deadlines tracked and surfaced), which is the substrate a planner would stand on — the planner layer itself does not exist. |
 | Code changes in a large existing codebase (Fluid: a very large single-file wallet core + tests) | Partial | Repo tools (clone/tree/read/edit/test/diff/commit) are proven on small repos. Never attempted on a Fluid-sized repo; file-context limits and 25-step budgets bind. Measurement to build: a real Fluid maintenance task (e.g. a test-covered utility fix) as a spec, scored like proofs (a)–(c). |
-| Test/build verification (run the suite, first-user walk of the live build) | Partial | run_tests auto-detects and reports real exit codes — proven. The "first-user walk" (open the live app, click every control) needs the browser rung — not yet. |
+| Test/build verification (run the suite, first-user walk of the live build) | Partial | run_tests auto-detects and reports real exit codes — proven. The browser rung the first-user walk needed shipped in v0.8 and is proven on interactive basics; a full first-user walk of the live Fluid build is now possible and is the next measurement — not yet run. |
 | Deadline discipline (freeze dates, submission by a fixed midnight) | Partial | v0.7: commitments carry deadlines; a deadline passing unlanded is surfaced as a BLOCKED report, never silent, and proactive passes work the queue on schedule (bar 8). Freeze *enforcement* (refusing new work after a freeze) does not exist. |
 | Honest status reporting (shipped / in build / unproven, exact blockers, single-step asks) | Proven (small scale) | The spec report shape (SHIPPED / BLOCKED / NEEDS ETHURAM with per-criterion evidence + Cost line) is enforced by code and validated in tests. Proven on v0.5's small proofs; unproven at Buildathon scale. |
 

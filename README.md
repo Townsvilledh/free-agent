@@ -83,7 +83,7 @@ python -m unittest discover tests -v
 
 ## Muse-twin roadmap — capability status (honest, updated per release)
 Lille's scope is "everything Muse has that the app needs — only the
-style/face differs". Status as of **v0.7**:
+style/face differs". Status as of **v0.8**:
 
 | Muse capability | Lille status |
 |---|---|
@@ -93,7 +93,7 @@ style/face differs". Status as of **v0.7**:
 | Image generation | In progress — keyless endpoint chosen (`image.pollinations.ai`, see KEYLESS.md); in-app UI lands next |
 | Voice in / voice out | Planned |
 | Web search | **Built (v0.2)** — keyless chain: DuckDuckGo Instant → Wikipedia → Open Library (`tools/search_tool.py`); full web results are a candidate, honestly marked in ROUTES.md |
-| Web browsing / browser tasks | Partial — a scripted Chromium capture instrument exists in core (v0.6, CDP-driven step lists; it records walkthroughs for video). General browser control (open-ended tasks in a live browser) is NOT built yet — see BENCHMARK.md gap 2 |
+| Web browsing / browser tasks | **Built in core (v0.8)** — a persistent-profile Chromium driven by deterministic tools (open/read/click/type/upload/screenshot/wait) with structural perception (visible text + element refs), a per-task domain allowlist, vault-typed secrets that never enter model context, and CHALLENGE stop-and-report on human-only walls (XLANE.md). On top sits the X lane (session/feed/search/post, Sentinel posting gates). Lille's OWN X account is being created by her own spec run: the run stands at NEEDS ETHURAM — she drove the real signup to valid submits and met X's Arkose human-verification wall, with everything pre-staged (live-tests/2026-11-25-v08-proof.md). The browser lives on the host running her core/runner, NOT on the phone — no on-device browser yet. Known limitation: this Chromium build blocks loopback navigation (local dev servers) outright |
 | Fallback routing (every capability, 4–5 routes deep, cooldowns, honest queueing) | **Built (v0.2, text + search)** — the Fallback Law, see ROUTES.md; image/voice chains defined with honest gaps |
 | Gmail access | In progress — readonly-first OAuth skeleton built; live connection is a later milestone |
 | Long-term memory (SOUL/USER/MEMORY files) | Built (core) — loaded into the system prompt; on-device sync planned |

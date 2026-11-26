@@ -17,8 +17,21 @@ by plain code here, never by asking the model to behave.
   against sandbox state before accepting them.
 """
 import json, os
-from . import gittools, sandbox, videotools
+from . import browsertools, gittools, sandbox, videotools
 from .tools import search_tool
+
+_RUNTIME_CONTEXT = {}
+
+
+def set_runtime_context(ctx):
+    """Called by TaskLoop with the Sentinel's spec context so tool
+    handlers (which receive only task_dir + args) enforce the same
+    rules the Sentinel checked — e.g. the browser domain allowlist
+    and the X posting mode."""
+    _RUNTIME_CONTEXT.clear()
+    if isinstance(ctx, dict):
+        _RUNTIME_CONTEXT.update(ctx)
+    browsertools.set_context(_RUNTIME_CONTEXT)
 
 FINISH = "finish"
 
@@ -137,6 +150,93 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {
+        "name": "browser_open",
+        "description": "Open a URL in Lille's persistent browser (sessions survive between runs). Only domains the task/spec authorises (Browser domains) may be opened. Returns the page's visible text + an element list with refs for browser_click/browser_type. If the result starts with CHALLENGE, the page is a human-only wall (CAPTCHA/code/phone): STOP and finish, naming the wall — never try to solve or bypass it.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"},
+            "settle": {"type": "number", "description": "Seconds to let the page settle, default 4"}},
+            "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "browser_read",
+        "description": "Re-read the current page: visible text + element list with fresh refs (refs are reassigned on every read).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "browser_click",
+        "description": "Click an element by ref (from the latest browser_read/open) or by its visible text.",
+        "parameters": {"type": "object", "properties": {
+            "ref": {"type": "integer"},
+            "text": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "browser_type",
+        "description": "Type text into an element by ref. REFUSES password/secret fields — for those use browser_type_secret with a vault key name.",
+        "parameters": {"type": "object", "properties": {
+            "ref": {"type": "integer"},
+            "text": {"type": "string"}},
+            "required": ["ref", "text"]}}},
+    {"type": "function", "function": {
+        "name": "browser_type_secret",
+        "description": "Type a secret stored in Lille's encrypted vault into a field by ref. You pass ONLY the vault key NAME — the value is resolved host-side and never enters your context, the trace, or any log. Create the secret first with vault_gen_secret.",
+        "parameters": {"type": "object", "properties": {
+            "ref": {"type": "integer"},
+            "vault_key": {"type": "string", "description": "Vault key NAME, e.g. x_password"}},
+            "required": ["ref", "vault_key"]}}},
+    {"type": "function", "function": {
+        "name": "browser_upload",
+        "description": "Attach a file to a file-input element by ref. The file must be inside the task sandbox or Lille's repo assets/ dir (e.g. her mascot images for an avatar).",
+        "parameters": {"type": "object", "properties": {
+            "ref": {"type": "integer"},
+            "path": {"type": "string"}},
+            "required": ["ref", "path"]}}},
+    {"type": "function", "function": {
+        "name": "browser_screenshot",
+        "description": "Save a PNG screenshot of the current page into the task sandbox as evidence.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "File name, default shot.png"}}}}},
+    {"type": "function", "function": {
+        "name": "browser_wait",
+        "description": "Wait for seconds, or until the page shows the given text (timeout seconds, default 30).",
+        "parameters": {"type": "object", "properties": {
+            "seconds": {"type": "number"},
+            "text": {"type": "string"},
+            "timeout": {"type": "number"}}}}},
+    {"type": "function", "function": {
+        "name": "vault_gen_secret",
+        "description": "Generate a strong secret (e.g. a new account password) and store it in Lille's encrypted vault under the given key name. Returns ONLY the key name — the value is never shown to you or written anywhere else. Use browser_type_secret to type it.",
+        "parameters": {"type": "object", "properties": {
+            "key": {"type": "string", "description": "Key name, e.g. x_password"},
+            "length": {"type": "integer"}},
+            "required": ["key"]}}},
+    {"type": "function", "function": {
+        "name": "vault_record_account",
+        "description": "Record account METADATA (site, username, which vault key holds its secret — never the secret itself) in Lille's accounts record after creating an account.",
+        "parameters": {"type": "object", "properties": {
+            "site": {"type": "string"},
+            "username": {"type": "string"},
+            "vault_key": {"type": "string"}},
+            "required": ["site", "username", "vault_key"]}}},
+    {"type": "function", "function": {
+        "name": "x_session_status",
+        "description": "Check whether an X account is logged in in Lille's browser profile, and as whom (read from the page, never from cookies).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "x_read_feed",
+        "description": "Read the logged-in X home timeline (top posts: author, text, status URLs). Requires a live session in Lille's profile.",
+        "parameters": {"type": "object", "properties": {
+            "count": {"type": "integer", "description": "Posts to read, default 10, max 20"}}}}},
+    {"type": "function", "function": {
+        "name": "x_search",
+        "description": "Search X with the logged-in session and return the top results (author, text, status URLs).",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "count": {"type": "integer"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "x_post",
+        "description": "Post to X as the logged-in account and verify the post on the profile timeline (returns its URL). GATED: the spec must authorise posting — for Lille's OWN account via the X lane (account: own); for Ethuram's account only with explicit approval in the spec. Copy rules are enforced: no invented offers/prizes; '₿itcoin or nothing' is @Bitcoinornatin's branding and is refused on Lille's own page.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string"}},
+            "required": ["text"]}}},
+    {"type": "function", "function": {
         "name": FINISH,
         "description": "Declare the task complete. List any output files you claim to have produced in 'outputs' — they are verified to exist before the task is accepted as done.",
         "parameters": {"type": "object", "properties": {
@@ -170,6 +270,30 @@ def args_summary(name, args):
                 f"out={args.get('out')!r}")
     if name == "render_card":
         return f"out={args.get('out')!r} title={str(args.get('title', ''))[:40]!r}"
+    if name == "browser_type":
+        # Typed text can be an email address or a name — log the
+        # shape, never the content.
+        return f"ref={args.get('ref')} chars={len(str(args.get('text', '')))}"
+    if name == "browser_type_secret":
+        # ONLY the vault key name — the value must never reach a
+        # summary, a trace, or a log.
+        return f"ref={args.get('ref')} vault_key={args.get('vault_key')!r}"
+    if name == "vault_gen_secret":
+        return f"key={args.get('key')!r} (value never logged)"
+    if name == "vault_record_account":
+        return (f"site={args.get('site')!r} "
+                f"username={args.get('username')!r} "
+                f"vault_key={args.get('vault_key')!r}")
+    if name == "browser_open":
+        return f"url={str(args.get('url', ''))[:90]!r}"
+    if name == "browser_click":
+        return f"ref={args.get('ref')} text={str(args.get('text', ''))[:40]!r}"
+    if name == "browser_upload":
+        return f"ref={args.get('ref')} path={str(args.get('path', ''))[:80]!r}"
+    if name == "x_post":
+        return f"chars={len(str(args.get('text', '')))} text={str(args.get('text', ''))[:60]!r}"
+    if name == "x_search":
+        return f"query={str(args.get('query', ''))[:60]!r}"
     if name == FINISH:
         return f"outputs={args.get('outputs', [])!r}"
     return json.dumps({k: (str(v)[:80]) for k, v in args.items()})[:200]
@@ -231,6 +355,69 @@ class Sentinel:
                         sandbox.resolve_inside(task_dir, scene["audio"])
             except sandbox.SandboxError as e:
                 return False, str(e)
+        if name.startswith("browser_") or name.startswith("x_"):
+            # v0.8 browser control: a task may only browse domains
+            # its spec/task explicitly authorised (spec_context
+            # "browser_domains", or FREEAGENT_BROWSER_DOMAINS for
+            # plain tasks). No authorised domains = no browsing.
+            doms = [str(d).lower().strip() for d in
+                    (self.spec_context.get("browser_domains") or [])
+                    if str(d).strip()]
+            env = os.environ.get("FREEAGENT_BROWSER_DOMAINS", "")
+            doms += [d.lower().strip() for d in env.split(",")
+                     if d.strip()]
+            if not doms:
+                return False, ("no browser domains are authorised for "
+                               "this task (the spec must list Browser "
+                               "domains; plain tasks use "
+                               "FREEAGENT_BROWSER_DOMAINS)")
+            if name == "browser_open":
+                url = str(args.get("url", ""))
+                if not url.startswith(("https://", "http://")):
+                    return False, "browser_open URLs must be http(s)"
+                if not browsertools.domain_allowed(url, doms):
+                    return False, (f"domain {browsertools.domain_of(url)!r} "
+                                   "is not in this task's browser "
+                                   f"allowlist ({', '.join(doms)})")
+            if name.startswith("x_"):
+                if not browsertools.domain_allowed("https://x.com", doms):
+                    return False, ("the X lane needs x.com in this "
+                                   "task's browser allowlist")
+            if name == "browser_upload":
+                path = str(args.get("path", ""))
+                try:
+                    sandbox.resolve_inside(task_dir, path)
+                except sandbox.SandboxError:
+                    assets = os.path.abspath(browsertools.ASSETS_DIR)
+                    cand = os.path.abspath(path)
+                    if not cand.startswith(assets + os.sep):
+                        return False, ("browser_upload path must be "
+                                       "inside the task sandbox or "
+                                       "Lille's repo assets/ dir")
+            if name == "browser_type_secret":
+                import re as _re2
+                if not _re2.match(r"^[A-Za-z0-9_.-]{1,64}$",
+                                  str(args.get("vault_key", ""))):
+                    return False, ("browser_type_secret takes a vault "
+                                   "key NAME ([A-Za-z0-9_.-]{1,64}), "
+                                   "never a value")
+            if name == "x_post":
+                mode = self.spec_context.get("x_post_mode")
+                if mode is None:
+                    return False, ("x_post is not authorised by the "
+                                   "spec (the X lane section must name "
+                                   "the account: own | user)")
+                if mode == "user" and not \
+                        self.spec_context.get("x_post_approved"):
+                    return False, ("posting to Ethuram's X account "
+                                   "needs explicit approval in the "
+                                   "spec (X lane: post approved: yes) "
+                                   "— default is deny")
+        if name in ("vault_gen_secret", "vault_record_account"):
+            import re as _re3
+            key = str(args.get("key") or args.get("vault_key") or "")
+            if not _re3.match(r"^[A-Za-z0-9_.-]{1,64}$", key):
+                return False, "vault key names must match [A-Za-z0-9_.-]{1,64}"
         if name == "git_push":
             branch = str(args.get("branch", ""))
             authorised = self.spec_context.get("push_branches", [])
@@ -354,6 +541,110 @@ def _h_assemble_video(task_dir, args):
 def _h_verify_video(task_dir, args):
     return videotools.verify_video(task_dir, args)
 
+def _h_browser_open(task_dir, args):
+    return browsertools.h_browser_open(task_dir, args)
+
+def _h_browser_read(task_dir, args):
+    return browsertools.h_browser_read(task_dir, args)
+
+def _h_browser_click(task_dir, args):
+    return browsertools.h_browser_click(task_dir, args)
+
+def _h_browser_type(task_dir, args):
+    return browsertools.h_browser_type(task_dir, args)
+
+def _h_browser_type_secret(task_dir, args):
+    return browsertools.h_browser_type_secret(task_dir, args)
+
+def _h_browser_upload(task_dir, args):
+    return browsertools.h_browser_upload(task_dir, args)
+
+def _h_browser_screenshot(task_dir, args):
+    return browsertools.h_browser_screenshot(task_dir, args)
+
+def _h_browser_wait(task_dir, args):
+    return browsertools.h_browser_wait(task_dir, args)
+
+def _h_vault_gen_secret(task_dir, args):
+    return browsertools.h_vault_gen_secret(task_dir, args)
+
+def _h_vault_record_account(task_dir, args):
+    return browsertools.h_vault_record_account(task_dir, args)
+
+def _h_x_session_status(task_dir, args):
+    return browsertools.x_session_status(task_dir)
+
+def _h_x_read_feed(task_dir, args):
+    return browsertools.x_read_feed(task_dir, args)
+
+def _h_x_search(task_dir, args):
+    return browsertools.x_search(task_dir, args)
+
+def _h_x_post(task_dir, args):
+    return browsertools.x_post(task_dir, args)
+
+# Tool groups for per-task schema subsetting. The keyless
+# anonymous endpoint rejects oversized request bodies (HTTP 413,
+# measured live in the v0.8 proof: the full 32-tool schema set is
+# 13.2 KB on its own), so a task sends only the schemas its spec
+# actually calls for.
+CORE_TOOLS = ("finish", "write_file", "read_file", "list_files",
+              "run_python", "web_search", "repo_tree")
+# Browser/X specs act on the web, not the repo: file tools +
+# finish are all the core they need, and every schema byte
+# counts against the keyless endpoint's body limit.
+CORE_MIN_TOOLS = ("finish", "write_file", "read_file", "list_files")
+GIT_TOOLS = ("git_clone", "git_commit", "git_push", "git_diff",
+             "run_tests")
+BROWSER_TOOLS = ("browser_open", "browser_read", "browser_click",
+                 "browser_type", "browser_type_secret",
+                 "browser_upload", "browser_screenshot",
+                 "browser_wait", "vault_gen_secret",
+                 "vault_record_account")
+X_TOOLS = ("x_session_status", "x_read_feed", "x_search", "x_post")
+VIDEO_TOOLS = ("capture_walkthrough", "render_card", "narrate",
+               "assemble_video", "verify_video")
+SWEEP_TOOLS = ("sweep",)
+
+
+def schemas_for(names):
+    """The subset of TOOL_SCHEMAS whose function name is in
+    `names` (order preserved). None -> the full set."""
+    if names is None:
+        return TOOL_SCHEMAS
+    keep = set(names)
+    out = []
+    for s in TOOL_SCHEMAS:
+        fn = s.get("function", s)
+        if fn.get("name") in keep:
+            out.append(s)
+    return out or TOOL_SCHEMAS
+
+
+def compact_schemas(schemas):
+    """Description-stripped schemas for the keyless route, whose
+    anonymous endpoint rejects bodies over ~16 KB (measured live,
+    v0.8): parameter descriptions are dropped and function
+    descriptions cut to their first sentence. The model's usage
+    guidance lives in the system prompt + task text; the schema
+    still carries every name, type and required field."""
+    import copy
+
+    out = []
+    for s in schemas:
+        c = copy.deepcopy(s)
+        fn = c.get("function", c)
+        desc = fn.get("description", "")
+        if desc:
+            fn["description"] = desc.split(". ")[0][:80]
+        params = fn.get("parameters", {})
+        for prop in (params.get("properties") or {}).values():
+            if isinstance(prop, dict):
+                prop.pop("description", None)
+        out.append(c)
+    return out
+
+
 HANDLERS = {
     "write_file": _h_write_file,
     "read_file": _h_read_file,
@@ -372,6 +663,20 @@ HANDLERS = {
     "narrate": _h_narrate,
     "assemble_video": _h_assemble_video,
     "verify_video": _h_verify_video,
+    "browser_open": _h_browser_open,
+    "browser_read": _h_browser_read,
+    "browser_click": _h_browser_click,
+    "browser_type": _h_browser_type,
+    "browser_type_secret": _h_browser_type_secret,
+    "browser_upload": _h_browser_upload,
+    "browser_screenshot": _h_browser_screenshot,
+    "browser_wait": _h_browser_wait,
+    "vault_gen_secret": _h_vault_gen_secret,
+    "vault_record_account": _h_vault_record_account,
+    "x_session_status": _h_x_session_status,
+    "x_read_feed": _h_x_read_feed,
+    "x_search": _h_x_search,
+    "x_post": _h_x_post,
 }
 
 def execute(name, args, task_dir):

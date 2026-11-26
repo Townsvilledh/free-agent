@@ -74,9 +74,20 @@ before it is claimed — no rung is described as done from intention:
    hard boundary in VIDEO.md: where rules require the entrant
    PERSONALLY on camera, a Lille video never substitutes.
 7. Build-and-deliver via Actions
-8. Browser control (structural perception first — principle 2).
-   v0.6's capture is a scripted instrument, NOT this rung.
-9. Scheduling / proactivity — **built (v0.7); Lille stands here.**
+8. Browser control — **built in core (v0.8).** A persistent-profile
+   Chromium driven by deterministic tools (open/read/click/type/
+   upload/screenshot/wait) with structural perception (visible text
+   + element refs — principle 2), a per-task domain allowlist,
+   vault-typed secrets that never enter model context, CHALLENGE
+   stop-and-report on human-only walls, and the X lane on top
+   (session/feed/search/post with Sentinel posting gates) —
+   including Lille's OWN X account, whose creation her own spec
+   run is executing at Ethuram's direction — the run stands at
+   NEEDS ETHURAM at X's Arkose wall, everything pre-staged
+   (XLANE.md, live-tests/2026-11-25-v08-proof.md). The browser lives on the host
+   running her core/runner, NOT on the phone; there is no on-device
+   browser yet. Live proofs: live-tests/2026-11-25-v08-proof.md.
+9. Scheduling / proactivity — **built (v0.7).**
    The Proactivity Law as machinery (PROACTIVITY.md), with its
    sibling the Thoroughness Law (`free_agent/sweep.py`: multi-
    surface sweeps, dedup against a known-items record, a mandatory

@@ -15,6 +15,11 @@ A sweep therefore:
    (Algolia). Attempted-and-honest surfaces: DoraHacks (bot-walled
    from this host today) and X via public Nitter (answers but
    serves no tweet content — X has no working keyless route).
+   Since v0.8 the sweep also tries X via Lille's OWN logged-in
+   browser session (surface_x_session): when she has a live
+   session it is a checked surface with real posts; when she does
+   not, the coverage note names that too — the gap is printed,
+   never silent, either way.
 2. Dedups against a persisted known-items record
    (<workspace>/sweep_known.json: title+URL fingerprints from every
    prior sweep). The report separates NEW from already-known; a
@@ -202,6 +207,15 @@ def surface_x(topic, http_get):
             for t in tweets]
 
 
+def surface_x_session(topic, phr):
+    """X via Lille's OWN logged-in browser session (v0.8) — the
+    surface Ethuram actually stumbles on things with. Raises
+    SurfaceError (named in the coverage note) when she has no
+    session on this host yet."""
+    from . import browsertools
+    return browsertools.sweep_x_items(keywords(topic))
+
+
 def default_surfaces(http_get, http_json):
     """[(name, callable)] in sweep order. Callables take the topic
     (web takes the phrasing list) and return item dicts, or raise
@@ -212,6 +226,7 @@ def default_surfaces(http_get, http_json):
         ("dorahacks", lambda topic, phr: surface_dorahacks(topic, http_get)),
         ("github", lambda topic, phr: surface_github(topic, http_json)),
         ("hackernews", lambda topic, phr: surface_hackernews(topic, http_json)),
+        ("x (via Lille's browser session)", surface_x_session),
         ("x (via public Nitter)", lambda topic, phr: surface_x(topic, http_get)),
     ]
 

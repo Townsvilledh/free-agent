@@ -216,5 +216,81 @@ class SpecRunMockedTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(task_dir, "SPEC_REPORT.md")))
 
 
+class PngCriterionTests(unittest.TestCase):
+    """v0.8 proof attempt 3: a screenshot criterion named a .png
+    file, but _FILE_TOKEN had no image extensions, so an existing
+    deliverable graded as 'no checkable evidence'."""
+
+    def test_png_file_criterion_uses_file_evidence(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            repo = os.path.join(td, "repo")
+            os.makedirs(repo)
+            with open(os.path.join(repo, "wiki.png"), "wb") as f:
+                f.write(b"\x89PNG")
+            ev = {"repo_dir": repo, "tests_passed": False,
+                  "commit_hashes": [], "pushed": []}
+            spec = {"criteria": [
+                        "A screenshot of the page is saved as wiki.png"],
+                    "push_branches": []}
+            out = specmode.evaluate_criteria(spec, ev, td)
+            self.assertTrue(out[0][1], out)
+            self.assertIn("wiki.png", out[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeSpecTests(unittest.TestCase):
+    """v0.8: spec runs checkpoint to disk on every step and can
+    resume in a fresh process (host restarts killed three live
+    proof runs before this existed)."""
+
+    SIMPLE = """# Fact file
+
+Goal
+Write a fact to fact.txt.
+
+Acceptance criteria
+- [ ] fact.txt exists
+
+Deliverables
+- fact.txt
+"""
+
+    def test_checkpoint_written_and_resume_continues(self):
+        model = ScriptedModel([
+            native("write_file", {"path": "repo/fact.txt",
+                                  "content": "a fact"}),
+            native("finish", {"summary": "done",
+                              "outputs": ["repo/fact.txt"]}, "c2"),
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            report, result, task_dir = specmode.run_spec(
+                self.SIMPLE, repo=None, workspace_root=td,
+                model_call=model, max_steps=10)
+            self.assertTrue(report.startswith("STATUS: SHIPPED"),
+                            report)
+            self.assertTrue(os.path.isfile(
+                os.path.join(task_dir, "spec.json")))
+            self.assertTrue(os.path.isfile(
+                os.path.join(task_dir, "checkpoint.json")))
+            # A fresh "process" (new loop, new model) resumes
+            # from the disk checkpoint and still grades from the
+            # evidence on disk.
+            model2 = ScriptedModel([
+                native("finish", {"summary": "resumed and done",
+                                  "outputs": ["repo/fact.txt"]}),
+            ])
+            out = specmode.resume_spec(task_dir, model_call=model2,
+                                       max_steps=10)
+            self.assertIsNotNone(out)
+            report2, _r2, td2 = out
+            self.assertEqual(td2, task_dir)
+            self.assertTrue(report2.startswith("STATUS: SHIPPED"),
+                            report2)
+
+    def test_resume_without_checkpoint_is_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(specmode.resume_spec(td))

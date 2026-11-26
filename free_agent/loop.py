@@ -45,6 +45,7 @@ Rules:
 - When the task is fully done, call the finish tool with a summary and list every output file you produced in "outputs" — claimed outputs are verified to exist, so do not claim files you did not create.
 - If a tool result is an error, read it, fix the cause, and try again. Do not repeat an identical failing call.
 - Never invent results: only claim what tool outputs actually showed.
+- Browser tasks: work from browser_read's element refs (refs are reassigned on every read — re-read after each navigation). Passwords are NEVER typed by you or written into any file: create them with vault_gen_secret (you receive only a key name) and type them with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only wall (CAPTCHA, an emailed code, a phone demand): STOP immediately and call finish with a summary naming that exact wall — never try to solve, bypass, or route around it.
 """
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
@@ -134,7 +135,8 @@ class TaskLoop:
                  max_steps=DEFAULT_MAX_STEPS, approver=None,
                  max_total_chars=DEFAULT_MAX_TOTAL_CHARS, clock=None,
                  pace_seconds=None, on_checkpoint=None, control_check=None,
-                 sentinel_context=None, finish_guard=None):
+                 sentinel_context=None, finish_guard=None,
+                 tool_names=None, task_brief=None):
         """model_call(messages, tools) -> {"content": str|None,
         "tool_calls": [{"id","name","args"}] | None, "provider": str}
         When omitted, one is built on the Router (Fallback Law)."""
@@ -144,6 +146,7 @@ class TaskLoop:
         self.max_total_chars = max_total_chars
         self.sentinel = tasktools.Sentinel(approver=approver,
                                            spec_context=sentinel_context)
+        tasktools.set_runtime_context(sentinel_context)
         self.clock = clock or time.time
         # Pacing: the keyless anonymous tier allows ~1 request per
         # ~45s per IP. pace_seconds (or FREEAGENT_PACE_SECONDS) makes
@@ -158,7 +161,20 @@ class TaskLoop:
         # at most the in-flight model call; control_check() returns
         # "run" | "pause" | "cancel" and is consulted between steps.
         self.on_checkpoint = on_checkpoint
+        # v0.8 payload discipline: a long task text (a spec with
+        # an identity kit + rules runs ~4 KB) is re-sent on EVERY
+        # model call and sets the wire floor compaction cannot
+        # go below — attempt 17 died of a 413 at step 5 with the
+        # floor above the provider's limit. When a brief is
+        # given, the full text is used for the first call only;
+        # later calls carry the brief (goal + rules + criteria),
+        # and the full text stays on disk in the task dir.
+        self.task_brief = task_brief
         self.control_check = control_check
+        # Per-task tool subsetting (v0.8): the keyless endpoint
+        # rejects oversized bodies (HTTP 413); a spec run sends
+        # only the schemas its spec calls for. None = full set.
+        self.tool_names = tool_names
         # v0.5 spec mode: optional deterministic finish guard —
         # callable(steps_so_far, finish_args) -> rejection str | None.
         self.finish_guard = finish_guard
@@ -208,13 +224,169 @@ class TaskLoop:
                     "provider": out.get("provider")}
         return call
 
+    # Plain-text replies get this many nudges before the run
+    # stops. One was too few for long browser work: the 20B
+    # brain narrates a discouragement, gets nudged, and very
+    # often recovers into productive tool steps (v0.8 X proof —
+    # attempts repeatedly ended one nudge after a wobble).
+    MAX_PLAIN_TEXT_NUDGES = 3
+
+    # History budget for the model's view (v0.8): the keyless
+    # anonymous endpoint 413s oversized request bodies, and a long
+    # browser run accumulates an observation per step. Older
+    # observations are compacted to stubs in the model's view —
+    # the on-disk trace always keeps the full record.
+    HISTORY_BUDGET_CHARS = 9500
+    KEEP_FULL_OBSERVATIONS = 1
+
+    @staticmethod
+    def _compact_history(messages):
+        def size(m):
+            c = m.get("content")
+            n = len(c) if isinstance(c, str) else 0
+            if m.get("tool_calls"):
+                # Assistant tool-call messages carry their
+                # arguments on the wire too — count them, or the
+                # budget lies (v0.8 X attempt 2 died of 413 with
+                # the budget reporting headroom).
+                n += len(json.dumps(m["tool_calls"]))
+            return n
+
+        total = sum(size(m) for m in messages)
+        if total <= TaskLoop.HISTORY_BUDGET_CHARS:
+            return
+        obs_idx = [i for i, m in enumerate(messages)
+                   if m.get("role") == "tool"
+                   or (m.get("role") == "user"
+                       and isinstance(m.get("content"), str)
+                       and m["content"].startswith("Tool result ("))]
+        for i in obs_idx[:-TaskLoop.KEEP_FULL_OBSERVATIONS] or []:
+            c = messages[i].get("content") or ""
+            if len(c) <= 190:
+                continue
+            messages[i] = dict(
+                messages[i],
+                content=c[:130] + " …[compacted — full result is in "
+                                  "the task trace]")
+            total -= len(c) - len(messages[i]["content"])
+            if total <= TaskLoop.HISTORY_BUDGET_CHARS:
+                break
+        if total > TaskLoop.HISTORY_BUDGET_CHARS:
+            # Still over: stub OLD assistant prose. The 20B brain
+            # narrates as it works; ten steps of narration alone
+            # crossed the keyless body limit in the v0.8 X proof
+            # (attempt 7 died at step 10 with every observation
+            # already stubbed). Recent replies stay full.
+            for m in messages[2:-3]:
+                if total <= TaskLoop.HISTORY_BUDGET_CHARS:
+                    break
+                c = m.get("content")
+                if m.get("role") == "assistant" \
+                        and isinstance(c, str) and len(c) > 220:
+                    m["content"] = (c[:160] + " …[earlier reply "
+                                    "compacted]")
+                    total -= len(c) - len(m["content"])
+        if total > TaskLoop.HISTORY_BUDGET_CHARS:
+            # Still over: shrink OLD assistant tool-call arguments
+            # (the results already carry the outcomes; the trace
+            # keeps the true record). Pairing stays valid — the
+            # call ids and names are untouched.
+            for m in messages[2:-4]:
+                if total <= TaskLoop.HISTORY_BUDGET_CHARS:
+                    break
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    args = fn.get("arguments")
+                    if isinstance(args, str) and len(args) > 60:
+                        total -= len(args) - 2
+                        fn["arguments"] = "{}"
+
+    # Hard wire cap for the keyless route (v0.8): the anonymous
+    # endpoint accepted a 12,081-byte body and rejected 16,102
+    # bytes in direct probes. Content-char budgets kept lying
+    # (JSON structure, roles and tool-call payloads ride along),
+    # so the loop now measures the actual request body and
+    # compacts until it fits — the trace keeps the full record.
+    WIRE_CAP_BYTES = 14800
+
+    @staticmethod
+    def _wire_size(messages, schemas):
+        body = {"model": "openai-fast", "messages": messages,
+                "tools": schemas or [], "tool_choice": "auto"}
+        return len(json.dumps(body))
+
+    @staticmethod
+    def _compact_aggressive(messages):
+        """Second-stage compaction, driven by the measured wire
+        size: stub ALL assistant prose beyond the last two
+        messages, shrink every older tool-call's arguments, and
+        truncate the newest observation if it alone is huge."""
+        for m in messages[2:-2]:
+            c = m.get("content")
+            if m.get("role") == "assistant" \
+                    and isinstance(c, str) and len(c) > 140:
+                m["content"] = c[:120] + " …[compacted]"
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str) and len(args) > 60:
+                    fn["arguments"] = "{}"
+        for m in reversed(messages):
+            if m.get("role") in ("tool", "user") \
+                    and isinstance(m.get("content"), str) \
+                    and len(m["content"]) > 2400:
+                m["content"] = (m["content"][:2400] +
+                                " …[truncated to fit the route's "
+                                "request limit]")
+                break
+
+    @staticmethod
+    def _trim_history(messages, schemas, cap):
+        """Last resort for long runs: DELETE the oldest
+        assistant+result groups from the model's view. Stub
+        residue grows ~400 bytes/step no matter how tight the
+        stubs are (v0.8 X attempt 9 died at step 17 fully
+        stubbed); a 70-step browser run fits only if old groups
+        leave. The page holds the live state (she re-reads it —
+        refs are per-read anyway) and the on-disk trace keeps
+        the full record. The last three groups always stay."""
+        def groups():
+            idx, cur = [], []
+            for i in range(2, len(messages)):
+                if messages[i].get("role") == "assistant" and cur:
+                    idx.append(cur)
+                    cur = []
+                cur.append(i)
+            if cur:
+                idx.append(cur)
+            return idx
+
+        while TaskLoop._wire_size(messages, schemas) > cap:
+            gs = groups()
+            if len(gs) <= 3:
+                return
+            drop = set(gs[0])
+            messages[:] = [m for i, m in enumerate(messages)
+                           if i not in drop]
+
     def _call_model(self, messages):
+        self._compact_history(messages)
         if self.pace_seconds > 0 and self._last_call_ts:
             wait = self.pace_seconds - (time.time() - self._last_call_ts)
             if wait > 0:
                 time.sleep(wait)
         self._last_call_ts = time.time()
-        return self.model_call(messages, tasktools.TOOL_SCHEMAS)
+        schemas = tasktools.schemas_for(self.tool_names)
+        if self.tool_names is not None:
+            # Spec runs ride the keyless route: send the
+            # description-stripped schemas (see compact_schemas).
+            schemas = tasktools.compact_schemas(schemas)
+            if self._wire_size(messages, schemas) > self.WIRE_CAP_BYTES:
+                self._compact_aggressive(messages)
+            if self._wire_size(messages, schemas) > self.WIRE_CAP_BYTES:
+                self._trim_history(messages, schemas,
+                                   self.WIRE_CAP_BYTES)
+        return self.model_call(messages, schemas)
 
     # ---------- checkpointing (v0.4 durable tasks) ----------
     def _checkpoint(self, state):
@@ -258,7 +430,7 @@ class TaskLoop:
                 {"role": "user", "content": task_text},
             ],
             "steps": [], "iterations_done": 0, "total_chars": 0,
-            "reframed": False, "nudged": False, "provider": None,
+            "reframed": False, "nudged": 0, "provider": None,
         }
         return self._execute(state)
 
@@ -273,7 +445,7 @@ class TaskLoop:
             "iterations_done": snap.get("iterations_done", 0),
             "total_chars": snap.get("total_chars", 0),
             "reframed": snap.get("reframed", False),
-            "nudged": snap.get("nudged", False),
+            "nudged": snap.get("nudged", 0),
             "provider": snap.get("provider"),
         }
         return self._execute(state)
@@ -286,7 +458,10 @@ class TaskLoop:
         messages = state["messages"]
         total_chars = state["total_chars"]
         reframed = state["reframed"]
+        # Older checkpoints store `nudged` as a bool.
         nudged = state["nudged"]
+        if isinstance(nudged, bool):
+            nudged = 1 if nudged else 0
         result = None
 
         def record(kind, tool="", args_summary="", result_summary=""):
@@ -299,7 +474,55 @@ class TaskLoop:
             self._checkpoint(state)
 
         self._checkpoint(state)
+        steered_streaks = set()
+        brief_swapped = state["iterations_done"] >= 1
         for step_no in range(state["iterations_done"] + 1, self.max_steps + 1):
+            if self.task_brief and not brief_swapped \
+                    and len(messages) > 1:
+                messages[1] = {"role": "user",
+                               "content": self.task_brief}
+                brief_swapped = True
+            # Click-loop guard (v0.8 X attempt 15-resumed): three
+            # identical consecutive tool actions with no change
+            # of course mean the model is stuck in a loop (it
+            # clicked the same ToS-page element repeatedly).
+            # Steer once per streak: name the loop and point at
+            # re-opening the task's pages instead.
+            # Malformed-streak steer (v0.8 X attempt 16): the
+            # brain repeatedly emitted a ~2 KB write_file whose
+            # JSON broke the same way, burning the run before
+            # any real work. Two malformed calls of the same
+            # tool in a row -> steer to short, different calls.
+            mal_steps = [s for s in steps if s.kind == "malformed"]
+            if len(mal_steps) >= 2 and len(steps) >= 2 \
+                    and steps[-1].kind == "malformed" \
+                    and steps[-2].kind == "malformed" \
+                    and steps[-1].tool == steps[-2].tool \
+                    and steps[-1].tool not in steered_streaks:
+                steered_streaks.add(steps[-1].tool)
+                messages.append({"role": "user", "content":
+                    f"Your {steps[-1].tool} calls keep arriving "
+                    "malformed — the arguments are too long or "
+                    "broken. Do NOT retry that call. Keep every "
+                    "argument SHORT (one line), and take the "
+                    "task's first real step now (for a browser "
+                    "task: browser_open)."}) 
+            tool_steps = [s for s in steps if s.kind == "tool"]
+            if len(tool_steps) >= 3:
+                last3 = tool_steps[-3:]
+                sig = (last3[0].tool, last3[0].args_summary)
+                if sig[0] and all(
+                        (s.tool, s.args_summary) == sig for s in last3) \
+                        and sig not in steered_streaks:
+                    steered_streaks.add(sig)
+                    messages.append({"role": "user", "content":
+                        f"Loop check: you have called {sig[0]} with the "
+                        "same arguments three times in a row and the "
+                        "situation has not changed. Stop repeating it. "
+                        "Take a different action: browser_read the "
+                        "current page carefully, or browser_open the "
+                        "page the task actually needs, and continue "
+                        "from there."})
             ctl = self._control()
             if ctl in ("pause", "cancel"):
                 record("stop", result_summary=f"task {ctl}led by user")
@@ -377,12 +600,15 @@ class TaskLoop:
                            result_summary="task rephrased once after a phrasing refusal")
                     sync()
                     continue
-                if not nudged:
-                    nudged = True
+                if nudged < TaskLoop.MAX_PLAIN_TEXT_NUDGES:
+                    nudged += 1
                     messages.append({"role": "assistant", "content": content or ""})
                     messages.append({"role": "user", "content":
                         "You replied with plain text. If the task is done, call the "
-                        "finish tool; otherwise call a tool to continue."})
+                        "finish tool; otherwise call a tool to continue. Giving up "
+                        "in words is not a result — the task is graded from tool "
+                        "evidence, and routes in the task that you have not tried "
+                        "yet are still open to you."})
                     record("text", result_summary="plain-text reply; nudged to use tools/finish")
                     sync()
                     continue
@@ -407,6 +633,20 @@ class TaskLoop:
             finished = None
             for c in calls:
                 name = c["name"]
+                # Deterministic repair of a known GPT-OSS emission
+                # quirk: the channel marker leaks into native tool
+                # names ("browser_click<|channel|>commentary").
+                # Truncate at the first character outside
+                # [a-z0-9_]; accept the repair only when the result
+                # is a real tool — anything else still meets the
+                # Sentinel under its true (denied) name. (v0.8 X
+                # attempt 9 burned six steps on corrupted names
+                # one form-submit short of the verification email.)
+                if name not in tasktools.HANDLERS and name != "finish":
+                    cleaned = re.split(r"[^a-z0-9_]", name or "")[0]
+                    if cleaned in tasktools.HANDLERS or cleaned == "finish":
+                        name = cleaned
+                        c = dict(c, name=cleaned)
                 args = c.get("args") or {}
                 if c.get("malformed"):
                     obs = f"error: {c['malformed']}"
@@ -472,8 +712,19 @@ class TaskLoop:
         self._persist_trace(result)
         return result
 
+    # Keyless anonymous endpoints reject oversized requests
+    # (HTTP 413, hit live in the v0.8 browser proof attempt 3
+    # after a few full-page browser observations). No single
+    # observation may bloat the context past this cap.
+    MAX_OBSERVATION_CHARS = 6000
+
     @staticmethod
     def _observe(messages, call, observation):
+        if observation and len(observation) > TaskLoop.MAX_OBSERVATION_CHARS:
+            cap = TaskLoop.MAX_OBSERVATION_CHARS
+            observation = (observation[:cap] +
+                           f"\n[observation truncated at {cap} chars "
+                           "to protect the model context]")
         if call.get("text_mode"):
             messages.append({"role": "user",
                              "content": f"Tool result ({call['name']}): {observation}"})
