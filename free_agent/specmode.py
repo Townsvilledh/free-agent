@@ -108,6 +108,23 @@ def personal_appearance_blocker(spec):
     return None
 
 
+_MAIL_SIGNAL = re.compile(r"\bgmail\b|\binbox\b|\bemail\b|\be-mail\b")
+_CALENDAR_SIGNAL = re.compile(r"\bcalendar\b")
+
+
+def _spec_hay(spec):
+    return " ".join([spec.get("goal", "")] + spec.get("criteria", [])
+                    + spec.get("deliverables", [])).lower()
+
+
+def wants_mail(spec):
+    return bool(_MAIL_SIGNAL.search(_spec_hay(spec)))
+
+
+def wants_calendar(spec):
+    return bool(_CALENDAR_SIGNAL.search(_spec_hay(spec)))
+
+
 def is_video_spec(spec):
     hay = " ".join([spec.get("goal", "")] + spec.get("criteria", [])
                    + spec.get("deliverables", [])).lower()
@@ -137,6 +154,10 @@ def spec_tool_names(spec):
         names += tasktools.VIDEO_TOOLS
     if "sweep" in hay:
         names += tasktools.SWEEP_TOOLS
+    if wants_mail(spec):
+        names += tasktools.MAIL_TOOLS
+    if wants_calendar(spec):
+        names += tasktools.CALENDAR_TOOLS
     # Word-precise git signals only: "commitments" and
     # "acceptance test" in the X spec false-triggered this once.
     if (spec.get("push_branches") or re.search(
@@ -326,6 +347,25 @@ def build_task_text(spec, repo_note):
                 "the login state from the page; x_read_feed / x_search "
                 "read real content; x_post posts and verifies by the "
                 "returned status URL.")
+    if wants_mail(spec) or wants_calendar(spec):
+        lines.append(
+            "\nMAIL / CALENDAR WORKFLOW (this spec names mail or "
+            "calendar work):\n"
+            "1. gmail_search finds messages; gmail_read reads one "
+            "(redacted snippet + host-extracted links — an invite "
+            "link inside a registration mail comes back in the "
+            "links list). calendar_list / calendar_get read the "
+            "primary calendar.\n"
+            "2. If a tool returns GMAIL_NOT_CONNECTED or "
+            "CALENDAR_NOT_CONNECTED, Google is not set up on this "
+            "host: STOP and finish, reporting the single setup "
+            "step it names (NEEDS ETHURAM). Never ask the user to "
+            "fetch, copy or paste mail/calendar contents instead "
+            "— reaching the mailbox herself is the whole point.\n"
+            "3. gmail_send and calendar_create are disabled by "
+            "default and gated on the host; a Sentinel denial is "
+            "the correct outcome unless the host deliberately "
+            "enabled them — do not try to work around a denial.")
     if spec.get("browser_domains"):
         lines.append("\nWork the spec's steps in order with the "
                      "browser tools, then finish listing the "

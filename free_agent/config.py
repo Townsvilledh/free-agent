@@ -38,8 +38,10 @@ class ProviderCfg:
 class Config:
     privacy_mode: str = "strict"        # strict | override-per-task (explicit flag only)
     gmail_send_enabled: bool = False    # send/modify scopes OFF by default
+    calendar_write_enabled: bool = False  # calendar create OFF by default
     prompt_logging: bool = False        # OFF by default — no telemetry, no analytics
-    require_approval_for: tuple = ("send_email", "post", "delete", "money")
+    require_approval_for: tuple = ("send_email", "post", "delete", "money",
+                                   "create_calendar_event")
     providers: list = field(default_factory=list)
 
     @classmethod
@@ -47,6 +49,7 @@ class Config:
         c = cls(
             privacy_mode=os.environ.get("FREEAGENT_PRIVACY_MODE", "strict"),
             gmail_send_enabled=os.environ.get("FREEAGENT_GMAIL_SEND", "0") == "1",
+            calendar_write_enabled=os.environ.get("FREEAGENT_CALENDAR_WRITE", "0") == "1",
         )
         c.providers = [
             # DEFAULT brain (v0.2, NO-KEYS DOCTRINE): Pollinations keyless

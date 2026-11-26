@@ -17,7 +17,7 @@ by plain code here, never by asking the model to behave.
   against sandbox state before accepting them.
 """
 import json, os
-from . import browsertools, gittools, sandbox, videotools
+from . import browsertools, gittools, mailtools, sandbox, videotools
 from .tools import search_tool
 
 _RUNTIME_CONTEXT = {}
@@ -237,6 +237,47 @@ TOOL_SCHEMAS = [
             "text": {"type": "string"}},
             "required": ["text"]}}},
     {"type": "function", "function": {
+        "name": "gmail_search",
+        "description": "Search Lille's connected Gmail (read-only) and list matching messages: id, date, from, subject, snippet — all redacted host-side (codes, emails, card numbers stripped before you see them). If the result is GMAIL_NOT_CONNECTED, Gmail is not set up on this host: finish and report the one setup step it names — never ask the user to fetch or paste mail contents.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Gmail search query, e.g. 'from:agentwarehack.com discord'"},
+            "max_results": {"type": "integer", "description": "Max messages, default 10, cap 20"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "gmail_read",
+        "description": "Read one Gmail message by id (from gmail_search). You receive the headers, a redacted 500-char body snippet (the only shape of mail content that may reach a model — one-time codes are stripped), and any plain links extracted host-side from the redacted body (invite links survive; credential/reset links are dropped). GMAIL_NOT_CONNECTED means the same setup step as gmail_search.",
+        "parameters": {"type": "object", "properties": {
+            "message_id": {"type": "string"}}, "required": ["message_id"]}}},
+    {"type": "function", "function": {
+        "name": "gmail_send",
+        "description": "Send an email from the connected Gmail account. DISABLED BY DEFAULT and gated three times: the host config flag FREEAGENT_GMAIL_SEND=1, a per-send approval from a host approval hook, and the connected token carrying the gmail.send scope. Expect a Sentinel denial unless the host has deliberately enabled all three — a denial is the correct outcome, not an error to work around.",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "string"},
+            "subject": {"type": "string"},
+            "body": {"type": "string"}},
+            "required": ["to", "subject", "body"]}}},
+    {"type": "function", "function": {
+        "name": "calendar_list",
+        "description": "List upcoming events on the connected primary Google Calendar (read-only): id, start, end, summary, location — text fields redacted host-side. If the result is CALENDAR_NOT_CONNECTED, report the one setup step it names and finish — never ask the user to paste calendar contents.",
+        "parameters": {"type": "object", "properties": {
+            "days": {"type": "integer", "description": "Window ahead in days, default 7, cap 31"},
+            "max_results": {"type": "integer", "description": "Max events, default 20, cap 50"}}}}},
+    {"type": "function", "function": {
+        "name": "calendar_get",
+        "description": "Read one calendar event by id (from calendar_list), including a redacted description snippet.",
+        "parameters": {"type": "object", "properties": {
+            "event_id": {"type": "string"}}, "required": ["event_id"]}}},
+    {"type": "function", "function": {
+        "name": "calendar_create",
+        "description": "Create an event on the connected primary calendar. DISABLED BY DEFAULT and gated three times: the host config flag FREEAGENT_CALENDAR_WRITE=1, a per-create approval from a host approval hook, and the connected token carrying the calendar.events scope. Expect a Sentinel denial unless the host has deliberately enabled all three.",
+        "parameters": {"type": "object", "properties": {
+            "summary": {"type": "string"},
+            "start": {"type": "string", "description": "ISO 8601 date-time, e.g. 2026-11-27T18:00:00Z"},
+            "end": {"type": "string", "description": "ISO 8601 date-time"},
+            "description": {"type": "string"},
+            "location": {"type": "string"}},
+            "required": ["summary", "start", "end"]}}},
+    {"type": "function", "function": {
         "name": FINISH,
         "description": "Declare the task complete. List any output files you claim to have produced in 'outputs' — they are verified to exist before the task is accepted as done.",
         "parameters": {"type": "object", "properties": {
@@ -294,6 +335,29 @@ def args_summary(name, args):
         return f"chars={len(str(args.get('text', '')))} text={str(args.get('text', ''))[:60]!r}"
     if name == "x_search":
         return f"query={str(args.get('query', ''))[:60]!r}"
+    if name == "gmail_search":
+        # The query itself can contain an email address — redact
+        # before it can reach a summary, trace or log.
+        from .redact import redact as _redact
+        return f"query={_redact(str(args.get('query', '')))[:80]!r}"
+    if name == "gmail_read":
+        return f"message_id={str(args.get('message_id', ''))[:40]!r}"
+    if name == "gmail_send":
+        # Recipient domain + sizes only — never the address, the
+        # subject text or the body (approvals.py discipline).
+        to = str(args.get("to", ""))
+        domain = to.rsplit("@", 1)[-1] if "@" in to else "(no domain)"
+        return (f"to_domain={domain} "
+                f"subject_chars={len(str(args.get('subject', '')))} "
+                f"body_chars={len(str(args.get('body', '')))}")
+    if name == "calendar_list":
+        return f"days={args.get('days', 7)}"
+    if name == "calendar_get":
+        return f"event_id={str(args.get('event_id', ''))[:40]!r}"
+    if name == "calendar_create":
+        return (f"summary_chars={len(str(args.get('summary', '')))} "
+                f"start={str(args.get('start', ''))[:30]!r} "
+                f"end={str(args.get('end', ''))[:30]!r}")
     if name == FINISH:
         return f"outputs={args.get('outputs', [])!r}"
     return json.dumps({k: (str(v)[:80]) for k, v in args.items()})[:200]
@@ -418,6 +482,39 @@ class Sentinel:
             key = str(args.get("key") or args.get("vault_key") or "")
             if not _re3.match(r"^[A-Za-z0-9_.-]{1,64}$", key):
                 return False, "vault key names must match [A-Za-z0-9_.-]{1,64}"
+        if name == "gmail_send":
+            # Write gate (v0.13, SECURITY.md): Gmail send is
+            # DISABLED by default. Two deterministic conditions
+            # here — the host config flag (loop injects it from
+            # Config as spec_context gmail_send_enabled, set only
+            # by FREEAGENT_GMAIL_SEND=1 on the host) AND a real
+            # host approval hook: the default allow-all hook can
+            # never approve a send. The handler adds the third
+            # gate (the token must carry the gmail.send scope).
+            if not self.spec_context.get("gmail_send_enabled"):
+                return False, ("Gmail send is disabled by default "
+                               "(host flag FREEAGENT_GMAIL_SEND is "
+                               "not 1) — enabling it is the user's "
+                               "decision on the host, never the "
+                               "model's")
+            if self.approver is default_approver:
+                return False, ("Gmail send needs a host approval "
+                               "hook that approves this specific "
+                               "send; the default hook cannot "
+                               "approve sends")
+        if name == "calendar_create":
+            if not self.spec_context.get("calendar_write_enabled"):
+                return False, ("Calendar create is disabled by "
+                               "default (host flag "
+                               "FREEAGENT_CALENDAR_WRITE is not 1) "
+                               "— enabling it is the user's "
+                               "decision on the host, never the "
+                               "model's")
+            if self.approver is default_approver:
+                return False, ("Calendar create needs a host "
+                               "approval hook that approves this "
+                               "specific event; the default hook "
+                               "cannot approve writes")
         if name == "git_push":
             branch = str(args.get("branch", ""))
             authorised = self.spec_context.get("push_branches", [])
@@ -583,6 +680,24 @@ def _h_x_search(task_dir, args):
 def _h_x_post(task_dir, args):
     return browsertools.x_post(task_dir, args)
 
+def _h_gmail_search(task_dir, args):
+    return mailtools.gmail_search(task_dir, args, _RUNTIME_CONTEXT)
+
+def _h_gmail_read(task_dir, args):
+    return mailtools.gmail_read(task_dir, args, _RUNTIME_CONTEXT)
+
+def _h_gmail_send(task_dir, args):
+    return mailtools.gmail_send(task_dir, args, _RUNTIME_CONTEXT)
+
+def _h_calendar_list(task_dir, args):
+    return mailtools.calendar_list(task_dir, args, _RUNTIME_CONTEXT)
+
+def _h_calendar_get(task_dir, args):
+    return mailtools.calendar_get(task_dir, args, _RUNTIME_CONTEXT)
+
+def _h_calendar_create(task_dir, args):
+    return mailtools.calendar_create(task_dir, args, _RUNTIME_CONTEXT)
+
 # Tool groups for per-task schema subsetting. The keyless
 # anonymous endpoint rejects oversized request bodies (HTTP 413,
 # measured live in the v0.8 proof: the full 32-tool schema set is
@@ -605,6 +720,8 @@ X_TOOLS = ("x_session_status", "x_read_feed", "x_search", "x_post")
 VIDEO_TOOLS = ("capture_walkthrough", "render_card", "narrate",
                "assemble_video", "verify_video")
 SWEEP_TOOLS = ("sweep",)
+MAIL_TOOLS = ("gmail_search", "gmail_read", "gmail_send")
+CALENDAR_TOOLS = ("calendar_list", "calendar_get", "calendar_create")
 
 
 def schemas_for(names):
@@ -677,6 +794,12 @@ HANDLERS = {
     "x_read_feed": _h_x_read_feed,
     "x_search": _h_x_search,
     "x_post": _h_x_post,
+    "gmail_search": _h_gmail_search,
+    "gmail_read": _h_gmail_read,
+    "gmail_send": _h_gmail_send,
+    "calendar_list": _h_calendar_list,
+    "calendar_get": _h_calendar_get,
+    "calendar_create": _h_calendar_create,
 }
 
 def execute(name, args, task_dir):
