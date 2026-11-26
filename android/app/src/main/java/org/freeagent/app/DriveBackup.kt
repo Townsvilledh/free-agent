@@ -113,7 +113,7 @@ object DriveBackup {
                     .put("parents", org.json.JSONArray().put("appDataFolder"))
                     .toString()
                 val body = MultipartBody.Builder()
-                    .setType("multipart/related")
+                    .setType("multipart/related".toMediaType())
                     .addPart(
                         MultipartBody.Part.createFormData(
                             "metadata", null,

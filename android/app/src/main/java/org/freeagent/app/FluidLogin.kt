@@ -93,9 +93,9 @@ object FluidLogin {
             // sources): SessionRequestResponse is a data class
             // wrapping a sealed JsonRpcResponse.
             when (val result = response.result) {
-                is Sign.Model.SessionRequestResponse.JsonRpcResult ->
+                is Sign.Model.JsonRpcResponse.JsonRpcResult ->
                     signCallbacks.remove(result.id)?.invoke(result.result, null)
-                is Sign.Model.SessionRequestResponse.JsonRpcError ->
+                is Sign.Model.JsonRpcResponse.JsonRpcError ->
                     signCallbacks.remove(result.id)?.invoke(
                         null, result.message.ifEmpty { "Signing was refused." }
                     )

@@ -101,7 +101,7 @@ class ChatStore(context: Context) {
     }
 
     @Synchronized
-    fun appendMessage(chatId: String, role: String, content: String, display: String?): Boolean {
+    fun appendMessage(chatId: String, role: String, content: String, display: String? = null): Boolean {
         val root = root()
         val ok = ChatData.appendMessage(
             root, chatId, role, content, display, System.currentTimeMillis()
