@@ -89,8 +89,18 @@ class BrowserActivity : AppCompatActivity() {
                     "Handed back — Lille is resuming the task.",
                     Toast.LENGTH_LONG
                 ).show()
+                finish()
+                return
             }
         }
+        // Not parked: the button used to just close the screen,
+        // which reads as dead. Say plainly there is nothing to
+        // hand back (v0.10 distribution walk).
+        Toast.makeText(
+            this,
+            "Nothing to hand back — this task isn't waiting on a human step.",
+            Toast.LENGTH_LONG
+        ).show()
         finish()
     }
 

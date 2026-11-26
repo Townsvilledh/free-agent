@@ -2,9 +2,10 @@
 
 ![Lille mascot](assets/lille-mascot-jacket.webp)
 
-**Lille** is an open-source, **completely-free-stack** autonomous agent for
-one user (Ethuram), built 2026-11-23. It is **not** Muse, not affiliated
-with Meta, and not an exact clone of anything. It aims at the same *jobs*:
+**Lille** is an open-source, **completely-free-stack** autonomous agent,
+begun 2026-11-23 for Ethuram and shared publicly from v0.10. It is
+**not** Muse, not affiliated with Meta, and not an exact clone of
+anything. It aims at the same *jobs*:
 chat with long-term memory, browse the web, use tools, read Gmail
 (read-only first), run scheduled jobs, and act from a phone. **APK-first**:
 the product is an Android app for Ethuram's Galaxy A12 (design in APP.md),
@@ -15,6 +16,25 @@ built for free by GitHub Actions and installed from a direct APK download
 > `free-agent`, and the Python package / Android applicationId keep the
 > `freeagent` name — renaming those would break the build and the
 > download links for no user benefit.
+
+## Install (Android)
+
+One tap, on your phone:
+
+**https://raw.githubusercontent.com/Townsvilledh/free-agent/apk/app-debug.apk**
+
+Allow "install unknown apps" for your browser/Files when Android
+asks. No Play Store, no fee, no account, **no API key — ever**.
+
+**One requirement, up front: a Fluid name.** From v0.10 Lille
+opens with a login — your **Fluid username** (LOGIN.md). You
+type the name, Lille prints a WalletConnect code, you paste it
+into Fluid (More → WalletConnect) and approve, and Lille opens
+once the connected wallet proves it owns the name. No Fluid
+yet? The login screen links you to
+https://fluidwallet.dpdns.org — create a wallet and claim a
+name there first. After the first connection Lille remembers
+you; the login returns only if the session expires.
 
 ## The free stack
 | Layer | Choice | Cost |
@@ -34,6 +54,13 @@ built for free by GitHub Actions and installed from a direct APK download
   roughly 45s between requests per IP, `402` + `Retry-After` beyond that,
   best-effort with no uptime guarantee. The app queues/retries and the
   router falls through — but it will never feel like a paid tier.
+- The text brain has exactly **one** genuinely keyless route today
+  (Pollinations); every other text route in ROUTES.md needs your OWN
+  free key. So on-device, a busy brain is handled by pacing +
+  escalating waits + automatic retry — "she thinks a little longer" —
+  not by falling through to a second free route that doesn't exist.
+  Search is better off: three keyless routes (DuckDuckGo Instant →
+  Wikipedia → Open Library), walked in that order.
 - Keyed free tiers are **capped and changeable**: AgentRouter releases
   premium-model quota in daily batches (a `402` means the batch is gone
   until the next one); Groq free has per-model daily token caps. The

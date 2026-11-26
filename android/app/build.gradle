@@ -11,8 +11,12 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 11
-        versionName "0.9.2"
+        versionCode 12
+        versionName "0.10.0"
+        // The WalletConnect SDK (v0.10) takes the app past one
+        // dex; minSdk 29 (ART) runs multidex natively, this just
+        // lets Gradle emit it.
+        multiDexEnabled true
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]
@@ -70,6 +74,15 @@ dependencies {
     // HTTP to the free provider APIs (keyless Pollinations by default;
     // optional personal AgentRouter / Groq keys if the user adds their own)
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // v0.10: WalletConnect dapp side of the Fluid login gate
+    // (LOGIN.md) — the official Kotlin SDK. sign 2.21.0 is the
+    // last WalletConnect-branded release; it is built against
+    // Kotlin stdlib 1.8.21, so it compiles cleanly under this
+    // project's Kotlin 1.9.24 (the Reown-branded 1.6.x line is
+    // built against Kotlin 2.4 metadata). android-core is the
+    // version sign 2.21.0's own POM pairs it with.
+    implementation "com.walletconnect:android-core:1.23.0"
+    implementation "com.walletconnect:sign:2.21.0"
     // JVM unit tests (task state machine — pure Kotlin, no device needed)
     testImplementation "junit:junit:4.13.2"
     // Real org.json for JVM unit tests: android.jar's copy is a stub

@@ -62,9 +62,7 @@ class MainActivity : AppCompatActivity() {
             "steps the user did not give you; if something is unknown, say " +
             "so or label it clearly as an assumption. Give only safe, " +
             "standard-practice advice."
-        private const val RATE_LIMIT_WAIT_SECONDS = 45L
         private const val MAX_HISTORY = 20
-        private const val MAX_AUTO_RETRIES = 3
         // v0.2.1 smart recovery: stream continuations + one refusal reframe.
         private const val MAX_CONTINUATIONS = 3
         private const val REFUSAL_NOTE =
@@ -103,6 +101,18 @@ class MainActivity : AppCompatActivity() {
      *  rate limit, this holds the wall-clock time it recovers. */
     private var cooldownUntilMs = 0L
 
+    /** v0.10 rate-limit adjustment (Fallback Law, chat path):
+     *  BrainPacing arithmetic, same as the task engine (v0.9.1).
+     *  Chat is a live session, so the stamps live in memory —
+     *  the durable task runner persists its own copies. */
+    private var lastBrainCallAtMs = 0L
+    private var consecutiveRateLimits = 0
+
+    /** The verified Fluid identity behind this session (v0.10
+     *  gate), for the greeting line. Null only if the gate let
+     *  the app open with an uncheckable session state. */
+    private var fluidIdentity: FluidIdentityStore.Identity? = null
+
     private val pickAttachment =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) onAttachmentPicked(uri)
@@ -110,6 +120,28 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // v0.10 Fluid login gate (LOGIN.md) — the gate guards
+        // the UI only: background workers (TaskWorker,
+        // ProactiveWorker) never pass through here and never
+        // consult login state, so a logged-out app still runs
+        // its durable tasks. An approval that landed while no
+        // screen was alive is reconciled first.
+        val identityStore = FluidIdentityStore(this)
+        FluidLogin.init(this)
+        FluidLogin.reconcilePending(identityStore)
+        fluidIdentity = identityStore.load()
+        val decision = FluidGate.decide(
+            fluidIdentity?.username, FluidLogin.sessionStateFor(identityStore)
+        )
+        if (decision != FluidGate.Decision.OPEN) {
+            startActivity(
+                android.content.Intent(this, LoginActivity::class.java)
+            )
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_main)
 
         transcript = findViewById(R.id.transcript)
@@ -137,6 +169,9 @@ class MainActivity : AppCompatActivity() {
         appendLine(
             "Lille",
             "Ready — free keyless brain, no account, no API key needed. " +
+                (fluidIdentity?.let {
+                    "Connected with your Fluid name @${it.username}. "
+                } ?: "") +
                 "Optional: your OWN AgentRouter/Groq key can be added later in Settings " +
                 "(encrypted vault) — never required, never shared."
         )
@@ -206,12 +241,42 @@ class MainActivity : AppCompatActivity() {
     /**
      * Fallback-law mirror (see ROUTES.md): on a rate limit the route
      * cools down and the SAME task auto-continues after the wait —
-     * the user never re-sends. After MAX_AUTO_RETRIES the app says so
-     * plainly instead of dying silently.
+     * the user never re-sends.
+     *
+     * v0.10 rate-limit adjustment: EVERY brain call from chat —
+     * first asks, continuations, reframes, retries — passes the
+     * BrainPacing gate first (the same arithmetic the task
+     * engine got in v0.9.1): a minimum interval between calls,
+     * Retry-After honoured, escalating cooldowns on consecutive
+     * 402/429. While the one keyless text route is merely busy,
+     * the behaviour is "she thinks a little longer" — the call
+     * waits and fires when the route allows; there is no retry
+     * cap and no error wall for a busy route. (Honest count:
+     * exactly ONE keyless text route exists today — see
+     * ROUTES.md — so pacing + queueing is its resilience.)
      */
     private fun askBrain(userText: String, attempt: Int) {
         askBrain(userText, attempt, reframed = false, carry = "", continuations = 0,
                  historyText = userText)
+    }
+
+    /** The pacing gate: hold the call until the free route's
+     *  minimum interval has passed, then hand over to the call
+     *  itself. The wait is silent thinking time, never an error. */
+    private fun askBrain(userText: String, attempt: Int, reframed: Boolean,
+                         carry: String, continuations: Int, historyText: String) {
+        val remaining = BrainPacing.remainingIntervalMs(
+            lastBrainCallAtMs, System.currentTimeMillis()
+        )
+        if (remaining > 0) {
+            busy = true
+            setInputEnabled(false)
+            mainHandler.postDelayed({
+                askBrainNow(userText, attempt, reframed, carry, continuations, historyText)
+            }, remaining)
+            return
+        }
+        askBrainNow(userText, attempt, reframed, carry, continuations, historyText)
     }
 
     /**
@@ -226,8 +291,8 @@ class MainActivity : AppCompatActivity() {
      *   harmful requests are never reframed; second refusals are
      *   delivered plainly with a suggested manual rephrase.
      */
-    private fun askBrain(userText: String, attempt: Int, reframed: Boolean,
-                         carry: String, continuations: Int, historyText: String) {
+    private fun askBrainNow(userText: String, attempt: Int, reframed: Boolean,
+                            carry: String, continuations: Int, historyText: String) {
         busy = true
         setInputEnabled(false)
         if (carry.isEmpty()) appendLine("Lille", "…thinking")
@@ -249,6 +314,7 @@ class MainActivity : AppCompatActivity() {
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
+        lastBrainCallAtMs = System.currentTimeMillis()
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 mainHandler.post {
@@ -320,6 +386,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 val full = stitch(carry, chunk)
                 mainHandler.post {
+                    if (code == 200) {
+                        // First success ends any rate-limit streak.
+                        consecutiveRateLimits =
+                            BrainPacing.nextCounter(consecutiveRateLimits, code)
+                    }
                     when {
                         code == 200 && dropped && full.isNotEmpty() &&
                             continuations < MAX_CONTINUATIONS -> {
@@ -346,24 +417,38 @@ class MainActivity : AppCompatActivity() {
                                 }
                             )
                         }
-                        (code == 402 || code == 429) && attempt < MAX_AUTO_RETRIES -> {
-                            val wait = retryAfter ?: RATE_LIMIT_WAIT_SECONDS
-                            cooldownUntilMs = System.currentTimeMillis() + wait * 1000
-                            replaceCurrentReply("The free brain is rate-limited right now (anonymous tier). Route cooling down — your task is queued and continues automatically in about ${wait}s. No need to re-send.")
+                        (code == 402 || code == 429) -> {
+                            // Busy route, not a failure: escalate the
+                            // cooldown (Retry-After wins when larger),
+                            // keep the SAME message queued, and fire
+                            // again when the route allows. No cap on
+                            // attempts — she thinks a little longer,
+                            // she never hits an error wall for this.
+                            val waitMs = BrainPacing.cooldownMs(
+                                retryAfter, consecutiveRateLimits
+                            )
+                            consecutiveRateLimits = BrainPacing.nextCounter(
+                                consecutiveRateLimits, code
+                            )
+                            cooldownUntilMs = System.currentTimeMillis() + waitMs
+                            replaceCurrentReply(
+                                "The free brain is busy right now — its anonymous " +
+                                    "tier rate-limits. Your message is queued and " +
+                                    "Lille continues automatically in about " +
+                                    "${BrainPacing.describeWait(waitMs)}. No need " +
+                                    "to re-send; nothing is sent anywhere else."
+                            )
                             mainHandler.postDelayed({
                                 // Auto-continue the SAME task after cooldown;
                                 // askBrain re-enters with busy still true.
                                 askBrain(userText, attempt + 1, reframed, "", 0, historyText)
-                            }, wait * 1000)
+                            }, waitMs)
                         }
                         else -> {
                             busy = false
                             setInputEnabled(true)
                             replaceCurrentReply(
-                                if (code == 402 || code == 429)
-                                    "All free routes are still cooling down after several automatic retries. Your message is safe — wait a few minutes and send it again; nothing was routed anywhere else."
-                                else
-                                    "The free brain returned an error (HTTP $code). It's a best-effort free service — try again shortly."
+                                "The free brain returned an error (HTTP $code). It's a best-effort free service — try again shortly."
                             )
                         }
                     }

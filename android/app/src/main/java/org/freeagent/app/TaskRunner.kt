@@ -469,14 +469,31 @@ class TaskRunner(private val context: Context) {
         else "error: no such note: ${args.optString("path")}"
     }
 
-    /** Keyless search, first route of the core chain (DDG Instant Answers). */
+    /**
+     * Keyless search — the core chain's order (routes.py),
+     * walked until a route serves: DuckDuckGo Instant Answers,
+     * then Wikipedia, then Open Library (v0.10; before this the
+     * device stopped at route 1, and DDG Instant answers many
+     * queries with nothing). The result names its route.
+     */
     private fun webSearch(query: String): String {
+        ddgInstant(query)?.let { return "[search route: duckduckgo-instant]\n$it" }
+        wikipediaSearch(query)?.let { return "[search route: wikipedia]\n$it" }
+        openLibrarySearch(query)?.let { return "[search route: openlibrary]\n$it" }
+        return "No result found for that query on any keyless search route " +
+            "(DuckDuckGo Instant, Wikipedia, Open Library)."
+    }
+
+    /** Route 1: DDG Instant Answers. Null = no instant answer
+     *  (normal for this API) or the route is unreachable — the
+     *  chain falls through either way. */
+    private fun ddgInstant(query: String): String? {
         val url = "https://api.duckduckgo.com/?q=" +
             URLEncoder.encode(query, "UTF-8") + "&format=json&no_html=1"
         val request = Request.Builder().url(url).get().build()
         return try {
             client.newCall(request).execute().use { response ->
-                if (response.code != 200) return "No result (HTTP ${response.code})."
+                if (response.code != 200) return null
                 val data = JSONObject(response.body?.string() ?: "{}")
                 val abstract = data.optString("AbstractText", "")
                 if (abstract.isNotEmpty()) return abstract.take(1500)
@@ -485,10 +502,40 @@ class TaskRunner(private val context: Context) {
                     val first = topics.getJSONObject(0).optString("Text", "")
                     if (first.isNotEmpty()) return first.take(1500)
                 }
-                "No instant answer found for that query."
+                null
             }
-        } catch (e: IOException) {
-            "error: search route unreachable (${e.message})"
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Route 2: Wikipedia OpenSearch (keyless). */
+    private fun wikipediaSearch(query: String): String? {
+        val url = "https://en.wikipedia.org/w/api.php?action=opensearch&search=" +
+            URLEncoder.encode(query, "UTF-8") + "&limit=3&namespace=0&format=json"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (response.code != 200) return null
+                SearchChain.parseWikipediaOpenSearch(response.body?.string() ?: "")
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Route 3: Open Library search (keyless, books-shaped). */
+    private fun openLibrarySearch(query: String): String? {
+        val url = "https://openlibrary.org/search.json?q=" +
+            URLEncoder.encode(query, "UTF-8") + "&limit=3"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (response.code != 200) return null
+                SearchChain.parseOpenLibrary(response.body?.string() ?: "")
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 

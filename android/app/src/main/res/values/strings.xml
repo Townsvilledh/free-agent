@@ -21,4 +21,15 @@
     <string name="share">Share</string>
     <string name="hand_back">Done — hand back to Lille</string>
     <string name="close_browser">Close (stay parked)</string>
+    <!-- v0.10: Fluid login gate (LOGIN.md) -->
+    <string name="fluid_tagline">Lille is free. She runs on your Fluid name.</string>
+    <string name="fluid_explain">Type your Fluid username, connect your Fluid wallet, and Lille opens — the connected wallet must be the one that owns the name. No password, no API key: your Fluid name is your login.</string>
+    <string name="fluid_name_hint">Your Fluid username</string>
+    <string name="fluid_connect">Connect with Fluid</string>
+    <string name="fluid_pairing_steps">1. Copy the code below.\n2. Open Fluid → More → WalletConnect.\n3. Paste the code and approve.</string>
+    <string name="fluid_copy_code">Copy code</string>
+    <string name="fluid_waiting">Waiting for your approval in Fluid…</string>
+    <string name="fluid_cancel">Cancel</string>
+    <string name="fluid_get">New to Fluid? Get Fluid and create your name</string>
+    <string name="disconnect_fluid">Disconnect Fluid name</string>
 </resources>

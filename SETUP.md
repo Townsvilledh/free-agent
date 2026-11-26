@@ -1,8 +1,15 @@
-# SETUP.md — for Ethuram (phone-first, $0 all the way)
+# SETUP.md — phone-first, $0 all the way
 
-**You need NO API key. Nothing to sign up for, nothing to collect.**
-FreeAgent v0.2 runs on free public **keyless** endpoints out of the box
-(see KEYLESS.md). Just install the APK (step 1) and chat.
+**You need NO API key. Nothing to collect, nothing to buy.**
+Lille runs on free public **keyless** endpoints out of the box
+(see KEYLESS.md). Install the APK (step 1), connect your Fluid
+name (step 2), and chat.
+
+**One thing you DO need: a Fluid username.** Lille's login is
+your Fluid name (LOGIN.md) — if you don't have one yet, the
+app's login screen links you to Fluid to create a wallet and
+claim a name first. That is the only "account" Lille will ever
+ask for, and it isn't Lille's account — it's yours, in Fluid.
 
 **Golden rule for the optional keys below: never paste any key into a
 chat — not this one, not any AI.** A personal key, if you ever add
@@ -13,20 +20,27 @@ GitHub Actions builds the APK and runs the clockwork, Cloudflare
 Workers can relay. Oracle is an *optional* extra at the end.
 
 ## 1. Get the APK (built free by GitHub Actions)
-1. This repo lives in a **public** GitHub repo (public = free,
-   unlimited Actions minutes; it is open source anyway). Nothing
-   secret is ever committed — that is what makes public safe.
-2. Push the repo → open the repo on your phone → **Actions** tab →
-   the **build-apk** run → download the `freeagent-debug-apk`
-   artifact. (Later, signed builds will be attached to **Releases**.)
-3. Install the APK on your A12 (allow "install unknown apps" for your
-   browser/Files when Android asks). No Play Store, no fee, no SDK.
+Open this link on your phone and install what downloads:
 
-## 2. Chat — that's it, you're set up
-Open the app and talk to it. The keyless brain answers with no
-account. Expect free-tier manners: about one request at a time and
-up to ~45s between answers on the anonymous tier — the app queues
-and retries automatically when rate-limited.
+**https://raw.githubusercontent.com/Townsvilledh/free-agent/apk/app-debug.apk**
+
+Allow "install unknown apps" for your browser/Files when Android
+asks. No Play Store, no fee, no SDK. Every build since v0.9.2
+carries the same signing certificate (SIGNING.md), so updates
+install over the top — your tasks, sessions and vault survive
+them; you never uninstall to update again.
+
+## 2. Connect your Fluid name — then chat
+First open shows the login (LOGIN.md): type your Fluid
+username → copy the WalletConnect code Lille prints → in
+**Fluid → More → WalletConnect** paste it and approve → Lille
+opens when the connected wallet proves it owns the name. She
+remembers the connection; you only redo this if the session
+expires. Then just talk to her. The keyless brain needs no
+account — expect free-tier manners: about one request at a time
+and up to ~45s between answers on the anonymous tier; the app
+paces itself and retries automatically when rate-limited, so a
+busy route means she thinks a little longer, not an error.
 
 ## 3. OPTIONAL: your own free keys (skip this — the app works without it)
 Only if YOU want higher limits or stronger models, with YOUR OWN free
@@ -35,9 +49,13 @@ accounts (nobody will ever ask you for these — see KEYLESS.md):
 - AgentRouter: agentrouter.org → sign in → Console → Tokens → create.
   (Premium models come in daily batches; the daily login check-in
   refills free credit.)
-Then, in the app: **Settings → Vault** → unlock → add the key. Stored
-with Android Keystore encryption (EncryptedSharedPreferences), never
-leaves the phone except to its own provider, excluded from backups.
+Honest status: the in-app key vault UI is **planned, not yet
+shipped** — today personal keys activate only in the Python core
+(env vars, below). When the app UI lands, keys will be stored
+with Android Keystore encryption (EncryptedSharedPreferences),
+never leave the phone except to their own provider, and be
+excluded from backups. Until then, the app is keyless-only —
+which is the point: it works fully without any key.
 **Never** put Gmail tokens, passwords, or session cookies in GitHub
 Secrets for this project — the Actions jobs need no secrets at all in
 the keyless design.

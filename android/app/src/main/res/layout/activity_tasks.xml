@@ -37,6 +37,12 @@
         android:layout_height="wrap_content"
         android:text="@string/create_x_task" />
 
+    <Button
+        android:id="@+id/disconnectFluidButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/disconnect_fluid" />
+
     <ListView
         android:id="@+id/taskList"
         android:layout_width="match_parent"

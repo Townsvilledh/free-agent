@@ -69,7 +69,10 @@ class TasksActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.createTaskButton).setOnClickListener {
             val text = input.text.toString().trim()
-            if (text.isEmpty()) return@setOnClickListener
+            if (text.isEmpty()) {
+                Toast.makeText(this, "Describe the task first.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             val task = store.create(text)
             selectedId = task.optString("id")
             input.text.clear()
@@ -78,7 +81,7 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.runTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val state = store.get(id)?.optString("state") ?: return@setOnClickListener
             if (state == TaskStates.FAILED) store.update(id, TaskStates.QUEUED)
             TaskWorker.enqueue(this, id)
@@ -86,7 +89,7 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.pauseTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val state = store.get(id)?.optString("state") ?: return@setOnClickListener
             if (TaskStates.canTransition(state, TaskStates.PAUSED)) {
                 store.update(id, TaskStates.PAUSED)
@@ -94,14 +97,14 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.resumeTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val state = store.get(id)?.optString("state") ?: return@setOnClickListener
             if (state == TaskStates.FAILED) store.update(id, TaskStates.QUEUED)
             TaskWorker.enqueue(this, id)
             refresh()
         }
         findViewById<Button>(R.id.cancelTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val state = store.get(id)?.optString("state") ?: return@setOnClickListener
             if (TaskStates.canTransition(state, TaskStates.CANCELLED)) {
                 store.update(id, TaskStates.CANCELLED)
@@ -110,6 +113,22 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.refreshTasksButton).setOnClickListener { refresh() }
+        findViewById<Button>(R.id.disconnectFluidButton).setOnClickListener {
+            // v0.10 (LOGIN.md): end the WalletConnect session and
+            // forget the verified Fluid identity, so the login
+            // gate can be re-tested from scratch at next launch.
+            // Background tasks are NOT touched — the gate guards
+            // the UI only, never the workers.
+            val identityStore = FluidIdentityStore(this)
+            FluidLogin.init(this)
+            FluidLogin.disconnectSessions(identityStore, forgetIdentity = true)
+            Toast.makeText(
+                this,
+                "Fluid name disconnected — Lille will ask for a fresh " +
+                    "connection next time she opens.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
         findViewById<Button>(R.id.createXTaskButton).setOnClickListener {
             val existing = store.all().firstOrNull {
                 it.optString("title") == XAccountTask.TITLE &&
@@ -133,19 +152,19 @@ class TasksActivity : AppCompatActivity() {
             refresh()
         }
         findViewById<Button>(R.id.openBrowserButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             startActivity(
                 Intent(this, BrowserActivity::class.java)
                     .putExtra(BrowserActivity.EXTRA_TASK_ID, id)
             )
         }
         findViewById<Button>(R.id.reportTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val task = store.get(id) ?: return@setOnClickListener
             detail.text = reportFor(task)
         }
         findViewById<Button>(R.id.shareTaskButton).setOnClickListener {
-            val id = selectedId ?: return@setOnClickListener
+            val id = selectedOrToast() ?: return@setOnClickListener
             val task = store.get(id) ?: return@setOnClickListener
             val send = Intent(Intent.ACTION_SEND)
                 .setType("text/plain")
@@ -187,6 +206,20 @@ class TasksActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+    }
+
+    /** Action buttons act on the selected task; with nothing
+     *  selected they used to swallow the tap silently, which
+     *  reads as a dead button to a first-time user (v0.10
+     *  distribution walk). Now they say what to do. */
+    private fun selectedOrToast(): String? {
+        val id = selectedId
+        if (id == null) {
+            Toast.makeText(
+                this, "Tap a task in the list first.", Toast.LENGTH_SHORT
+            ).show()
+        }
+        return id
     }
 
     private fun refresh() {

@@ -32,6 +32,12 @@
             </intent-filter>
         </activity>
 
+        <!-- v0.10: Fluid login gate (LOGIN.md) — MainActivity
+             redirects here whenever the gate says LOGIN -->
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
+
         <!-- v0.4: durable background tasks screen -->
         <activity
             android:name=".TasksActivity"
