@@ -209,6 +209,24 @@ class WalletPromptTest {
     }
 
     @Test
+    fun fromFluidOnBitcoinOrSolanaAsksInsteadOfSpendingHers() {
+        // The union rule (consolidation): "from fluid" rides
+        // the EVM-only session, so on the Bitcoin/Solana
+        // families it must ASK — never silently fall back to
+        // spending her own companion funds.
+        val btc = WalletPrompt.parse(
+            "send 0.001 BTC to " +
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4 from fluid"
+        )
+        assertTrue(btc is WalletPrompt.Result.Ambiguous)
+        val sol = WalletPrompt.parse(
+            "send 5 USDC to " +
+                "11111111111111111111111111111111 on solana from fluid"
+        )
+        assertTrue(sol is WalletPrompt.Result.Ambiguous)
+    }
+
+    @Test
     fun ordinaryChatIsNotWallet() {
         assertEquals(
             WalletPrompt.Result.NotWallet,
