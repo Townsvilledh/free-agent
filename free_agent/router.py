@@ -60,6 +60,38 @@ class AllProvidersFailed(RuntimeError):
 def _fmt_ts(ts):
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S UTC")
 
+def _with_tool_catalogue(messages, tools):
+    """Render the tool catalogue as TEXT and append it to the
+    system message — for raw-completion routes (AI Horde) that
+    never see the API `tools` parameter. The loop's text protocol
+    (one fenced JSON block per reply) is how such a route calls
+    tools; it can only call tools it has been told about. Native
+    routes are never sent this (they get the real parameter)."""
+    if not tools:
+        return messages
+    lines = ["",
+             "TOOLS AVAILABLE ON THIS ROUTE (no native tool calls "
+             "here — call a tool by replying with exactly one fenced "
+             "JSON block: {\"tool\": \"<name>\", \"args\": {...}}):"]
+    for t in tools:
+        fn = (t or {}).get("function") or {}
+        name = fn.get("name", "?")
+        desc = " ".join(str(fn.get("description", "")).split())[:160]
+        props = ((fn.get("parameters") or {}).get("properties") or {})
+        arglist = ", ".join(props.keys())
+        lines.append(f"- {name}({arglist}) — {desc}")
+    extra = "\n".join(lines)
+    out, done = [], False
+    for m in messages:
+        m = dict(m)
+        if not done and m.get("role") == "system":
+            m["content"] = str(m.get("content", "")) + "\n" + extra
+            done = True
+        out.append(m)
+    if not done:
+        out.insert(0, {"role": "system", "content": extra.strip()})
+    return out
+
 class Router:
     def __init__(self, config, transport=None, audit=None, clock=None, stream_transport=None):
         self.config = config
@@ -247,7 +279,7 @@ class Router:
         }
         body = json.dumps({
             "prompt": prompt,
-            "params": {"max_length": 512, "temperature": 0.7,
+            "params": {"max_length": 1024, "temperature": 0.7,
                        "stop_sequence": ["\nUser:"]},
             "models": [],
             "slow_workers": True,
@@ -331,12 +363,6 @@ class Router:
         for p in self.config.providers:
             if not p.enabled or not p.models:
                 continue
-            if getattr(p, "kind", "openai") == "horde":
-                # Horde is raw-completion only: it cannot honour
-                # the tool-call protocol, so the loop path never
-                # routes through it (v0.12).
-                self.audit.append(RouteEvent(p.name, category, "skipped-no-toolcalls"))
-                continue
             if private and not p.trusted_for_private and not override_privacy:
                 self.audit.append(RouteEvent(p.name, category, "skipped-privacy"))
                 continue
@@ -349,7 +375,24 @@ class Router:
                 self.audit.append(RouteEvent(p.name, category, "cooldown-skip"))
                 unlock_times.append(unlock)
                 continue
-            status, message, retry_after = self.raw_transport(p, messages, tools)
+            if getattr(p, "kind", "openai") == "horde":
+                # Raw-completion route: it cannot honour NATIVE
+                # tool calls, but the loop's text protocol (one
+                # fenced JSON block per reply, parsed by the loop)
+                # runs fine over plain completions — so the loop
+                # path routes through it as the fallback of last
+                # resort, with the tool catalogue rendered as text
+                # (the route never sees the API tools parameter).
+                # Wired 2026-11-26 after the keyless primary hit
+                # its hard 100-replies/day cap (402 FREE_LIMIT)
+                # and the loop path had NO second route at all.
+                status, text, retry_after = self.horde_transport(
+                    p, _with_tool_catalogue(messages, tools))
+                message = {"role": "assistant", "content": text} \
+                    if status == 200 and text else None
+            else:
+                status, message, retry_after = self.raw_transport(
+                    p, messages, tools)
             if status == 200 and message is not None and (
                     message.get("content") or message.get("tool_calls")):
                 self.cooldowns.pop(p.name, None)

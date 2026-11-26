@@ -345,8 +345,10 @@ class TestVault(unittest.TestCase):
 
 class TestHordeRoute(unittest.TestCase):
     """v0.12: AI Horde is the keyless fallback of last resort
-    for CHAT (live-verified 2026-11-26), and is never used on
-    the tool-call path — it cannot honour the protocol."""
+    for CHAT (live-verified 2026-11-26). It cannot honour
+    NATIVE tool calls; since the 2026-11-26 loop-path fix it
+    also serves the tool-call path via the loop's fenced-JSON
+    text protocol (catalogue rendered as text)."""
 
     def _cfg(self):
         poll = ProviderCfg("keyless-pollinations",
@@ -372,23 +374,54 @@ class TestHordeRoute(unittest.TestCase):
         self.assertEqual(seen, [("chat", "keyless-pollinations"),
                                 ("horde", "ai-horde")])
 
-    def test_complete_never_routes_through_horde(self):
+    def test_complete_routes_through_horde_via_text_protocol(self):
+        # The loop path's last resort (2026-11-26 fix): when the
+        # native route is capped, complete() falls through to
+        # Horde with the tool catalogue rendered as text, and the
+        # raw completion comes back as the message content — the
+        # loop parses its fenced JSON into a tool call.
+        seen = {}
         def raw(p, messages, tools=None):
             return (402, None, None)
         def horde_transport(p, messages):
-            raise AssertionError("horde must not serve tool calls")
+            seen["messages"] = messages
+            return (200, '```json\n{"tool": "render_card", '
+                         '"args": {}}\n```', None)
+        r = Router(self._cfg(), transport=lambda p, m: (402, "", None))
+        r.raw_transport = raw
+        r.horde_transport = horde_transport
+        tools = [{"type": "function", "function": {
+            "name": "render_card", "description": "Render a card.",
+            "parameters": {"type": "object",
+                           "properties": {"out": {"type": "string"}}}}}]
+        out = r.complete([{"role": "system", "content": "You are Lille."},
+                          {"role": "user", "content": "do a task"}],
+                         tools=tools)
+        self.assertEqual(out["provider"], "ai-horde")
+        self.assertIn("render_card", out["message"]["content"])
+        # The catalogue reached the raw-completion route as text,
+        # appended to the system message.
+        sys_msgs = [m["content"] for m in seen["messages"]
+                    if m.get("role") == "system"]
+        self.assertTrue(any("render_card(out)" in c for c in sys_msgs))
+
+    def test_complete_horde_failure_still_queues_honestly(self):
+        def raw(p, messages, tools=None):
+            return (402, None, None)
+        def horde_transport(p, messages):
+            return (503, "", None)
         r = Router(self._cfg(), transport=lambda p, m: (402, "", None))
         r.raw_transport = raw
         r.horde_transport = horde_transport
         out = r.complete([{"role": "user", "content": "do a task"}],
                          tools=[{"type": "function",
                                   "function": {"name": "x"}}])
-        # Pollinations is merely cooling down, so the honest
-        # ending is the queued result — reached WITHOUT ever
-        # touching the Horde transport.
+        # Both routes cooling down -> the honest queued result,
+        # with Horde attempted (not skipped) on the way.
         self.assertTrue(out.get("queued"))
         events = [(e.provider, e.outcome) for e in r.audit]
-        self.assertIn(("ai-horde", "skipped-no-toolcalls"), events)
+        self.assertIn(("ai-horde", "http-503"), events)
+        self.assertNotIn(("ai-horde", "skipped-no-toolcalls"), events)
 
     def test_repeated_failures_escalate_the_cooldown(self):
         # v0.12 route health: a route that keeps failing is

@@ -49,7 +49,7 @@ the wait, and a plain all-routes-down message after its retries.
 | # | Route | Key | Known public limits | Status |
 |---|---|---|---|---|
 | 1 | Pollinations (keyless) | none | ~1 concurrent, ~45s between requests per IP; **hard cap 100 replies/day per IP** (402 FREE_LIMIT, resets 00:00 UTC — live re-confirmed 2026-11-26); on shared/carrier IPs the cap is shared with strangers; best-effort | **live** |
-| 2 | AI Horde (keyless) | none (public anonymous key) | Queue-based community compute: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, **no tool calls** (router skips it on the complete() path) | **live (v0.12)** — fallback of last resort, chat only |
+| 2 | AI Horde (keyless) | none (public anonymous key) | Queue-based community compute: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, **no native tool calls** (since the 2026-11-26 loop-path fix it also serves complete() via the loop's fenced-JSON text protocol, catalogue rendered as text) | **live (v0.12)** — fallback of last resort: chat, and the tool-call path via the text protocol |
 | 3 | AgentRouter | own key (optional) | Premium models in daily batch quotas (402 when a batch is gone); DeepSeek-class effectively unlimited | stub — enabled only with the user's own key |
 | 4 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | stub — own key only |
 | 5 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | stub |

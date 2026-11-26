@@ -23,13 +23,15 @@ ROUTE_TABLES = {
         ("keyless-pollinations", "live", "none"),
         # v0.12: second genuinely-keyless route, live-verified
         # 2026-11-26. Slow community queue — fallback of last
-        # resort for CHAT only (no tool-call support; the router
-        # skips it on the complete() path). The v0.12 EXHAUSTIVE
-        # HUNT live-tested ~45 keyless candidates (three rounds
-        # of real completion calls); these two are the only ones
-        # that answered keyless. Every other verdict — refused /
-        # needs-key / dead / broken / challenge-walled — is
-        # recorded in ROUTES.md.
+        # resort. It has no NATIVE tool-call support; since the
+        # 2026-11-26 loop-path fix it also serves complete()
+        # via the loop's fenced-JSON text protocol, with the
+        # tool catalogue rendered as text (router.py). The
+        # v0.12 EXHAUSTIVE HUNT live-tested ~45 keyless
+        # candidates (three rounds of real completion calls);
+        # these two are the only ones that answered keyless.
+        # Every other verdict — refused / needs-key / dead /
+        # broken / challenge-walled — is recorded in ROUTES.md.
         ("ai-horde", "live", "none"),
         ("agentrouter", "stub", "own-key"),
         ("groq", "stub", "own-key"),

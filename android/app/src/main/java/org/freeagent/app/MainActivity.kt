@@ -620,7 +620,7 @@ class MainActivity : AppCompatActivity() {
                                         "I've prepared it: " +
                                             "${prepared.amountDisplay} " +
                                             "${prepared.tokenSymbol} to " +
-                                            "${prepared.toLabel} on " +
+                                            "${prepared.recipientLabel} on " +
                                             (WalletGate.chainByKey(prepared.chainKey)?.label
                                                 ?: prepared.chainKey) +
                                             ". Approving only happens on the " +

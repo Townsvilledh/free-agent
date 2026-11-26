@@ -59,7 +59,8 @@ class WalletEngine(context: Context) {
     // once, so one fetch serves the whole prepare.
     @Volatile
     private var priceCacheAt = 0L
-    @Volatile
+    // All engine work runs on the single executor thread, so
+    // the cache map needs no volatility of its own.
     private val priceCache = mutableMapOf<String, PriceChain.Price>()
 
     data class AssetBalance(
