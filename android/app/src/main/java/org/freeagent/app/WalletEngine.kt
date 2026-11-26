@@ -394,7 +394,7 @@ class WalletEngine(context: Context) {
         val from = Evm.toChecksumAddress(identity.address.removePrefix("0x"))
         val (recipient, recipientLabel) =
             resolveRecipient(intent.targetRaw, intent.targetIsName)
-        val price = priceFor(token.priceId)
+        val price = prices.priceFor(token.priceId)
         val amountRaw = computeAmountRaw(
             token, intent.amountText, intent.usdAmountText, price
         )
