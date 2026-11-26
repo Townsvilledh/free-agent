@@ -179,6 +179,28 @@ class TaskRunner(private val context: Context) {
                 TaskStates.PAUSED -> return TaskStates.PAUSED
             }
 
+            // Brain-call pacing (v0.9.1, BrainPacing): the keyless
+            // anonymous tier tolerates roughly one call per ~45 s
+            // per IP. Firing calls back-to-back trips 402/429 and
+            // the run stalls in waiting_route (proven live
+            // 2026-11-26: steps frozen at 3). The last-call
+            // timestamp lives in the task record, so the interval
+            // survives process death and worker retries; a call
+            // that would come early becomes a pacing wait instead.
+            // Pre-0.9.1 records have no lastBrainCallAt — it
+            // defaults to 0, which BrainPacing reads as "call now".
+            val paceMs = BrainPacing.remainingIntervalMs(
+                fresh.optLong("lastBrainCallAt", 0L),
+                System.currentTimeMillis()
+            )
+            if (paceMs > 0L) {
+                return wait(id, TaskStates.WAITING_ROUTE,
+                    BrainPacing.pacingNote(paceMs), paceMs)
+            }
+            store.update(id) {
+                it.put("lastBrainCallAt", System.currentTimeMillis())
+            }
+
             val reply: JSONObject
             try {
                 reply = callModel(messages)
@@ -188,9 +210,26 @@ class TaskRunner(private val context: Context) {
             }
             val httpCode = reply.optInt("http", 200)
             if (httpCode == 402 || httpCode == 429) {
-                val waitMs = (reply.optLong("retryAfterSec", 45L)) * 1000L
+                // Escalating cooldown (v0.9.1): 60 s × 2^streak,
+                // a larger Retry-After wins, capped at 15 min.
+                // The streak persists in the record and resets on
+                // the first HTTP 200 (below).
+                val streak = fresh.optInt("consecutiveRateLimits", 0)
+                val waitMs = BrainPacing.cooldownMs(
+                    if (reply.has("retryAfterSec"))
+                        reply.optLong("retryAfterSec") else null,
+                    streak
+                )
+                store.update(id) {
+                    it.put("consecutiveRateLimits",
+                        BrainPacing.nextCounter(streak, httpCode))
+                }
                 return wait(id, TaskStates.WAITING_ROUTE,
-                    "Free route rate-limited — task is waiting, not failed.", waitMs)
+                    BrainPacing.rateLimitNote(waitMs), waitMs)
+            }
+            if (fresh.optInt("consecutiveRateLimits", 0) != 0) {
+                // First success after a rate-limit streak: reset.
+                store.update(id) { it.put("consecutiveRateLimits", 0) }
             }
             if (httpCode != 200) {
                 store.update(id, TaskStates.FAILED) {

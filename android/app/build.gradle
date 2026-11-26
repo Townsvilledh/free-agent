@@ -11,8 +11,8 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 9
-        versionName "0.9.0"
+        versionCode 10
+        versionName "0.9.1"
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]

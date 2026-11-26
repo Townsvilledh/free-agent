@@ -174,6 +174,39 @@ the lane's first live exercise is Ethuram starting that task,
 and the acceptance test's verdict comes from that run's graded
 report — not from anything claimed here.
 
+## Brain pacing on the device lane (v0.9.1)
+
+The first live run (2026-11-26) exposed a stall: the task sat
+at steps=3 in `waiting_route` across repeated checks, her
+browser parked on the mailbox homepage. Diagnosis (verified in
+`TaskRunner.kt`): the step loop fired brain calls back-to-back
+with **no pacing between successful calls** — browser actions
+paced themselves, brain calls did not — and the keyless
+anonymous tier tolerates roughly one call per ~45 s per IP
+(the host loop only works with `--pace 50`). She tripped
+402/429 within her first steps, and the old recovery waited
+only Retry-After-or-45 s, so each wake-up could re-trip the
+tier instantly: 429 → wait → 429, steps frozen.
+
+The fix (`BrainPacing.kt`, pure + JVM-pinned, wired into the
+runner):
+
+- **50 s minimum interval** between a task's brain calls,
+  enforced from `lastBrainCallAt` persisted in the task
+  record — it survives process death and worker retries. A
+  call that would come early becomes a `waiting_route` pacing
+  wait for the remainder, stated plainly in the task note.
+- **Escalating cooldown** on 402/429: 60 s × 2^(consecutive
+  rate limits), a larger Retry-After wins, capped at 15 min.
+  The streak counter (`consecutiveRateLimits`, also persisted)
+  resets on the first HTTP 200.
+- **Compatibility:** both fields are additive. A pre-0.9.1
+  record lacks them; they default to 0 ("never called",
+  "no streak"), so the in-flight task on Ethuram's phone
+  resumes from its existing checkpoint (steps=3, her WebView
+  session untouched) after an in-place update. Pinned by
+  `BrainPacingTest.oldShapeRecordDefaultsCleanly`.
+
 ## X lane tools
 
 Thin wrappers over the browser tools, x.com allowlisted:
