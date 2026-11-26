@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -11,6 +12,12 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import android.util.Size
 import android.view.Gravity
 import android.view.View
@@ -88,7 +95,13 @@ class MainActivity : AppCompatActivity() {
             "honest about your limits. Never invent features, facts, or " +
             "steps the user did not give you; if something is unknown, say " +
             "so or label it clearly as an assumption. Give only safe, " +
-            "standard-practice advice."
+            "standard-practice advice. In chat you cannot perform " +
+            "actions: nothing you say here does anything by itself. " +
+            "Never claim to have done, created, fetched, submitted or " +
+            "completed anything you did not actually do through a tool " +
+            "in a task. When the user gives you a job in chat, say you " +
+            "are starting it and what happens next, in the present " +
+            "tense — never narrate a finished result."
         private const val MAX_HISTORY = 20
         // v0.2.1 smart recovery: stream continuations + one refusal reframe.
         private const val MAX_CONTINUATIONS = 3
@@ -439,7 +452,7 @@ class MainActivity : AppCompatActivity() {
             val start = userBubbles.size - waiting
             for (i in 0 until waiting) {
                 val (bubble, display) = userBubbles[start + i]
-                bubble.text = display + "\n· " + ChatQueue.badge(i + 1)
+                bubble.text = styledText(display + "\n· " + ChatQueue.badge(i + 1))
                 queuedBubbles.addLast(bubble to display)
             }
         }
@@ -596,7 +609,7 @@ class MainActivity : AppCompatActivity() {
             askBrain(chatId, outgoing, attempt = 0)
         } else {
             queuedBubbles.addLast(bubble to display)
-            bubble.text = display + "\n· " + ChatQueue.badge(position)
+            bubble.text = styledText(display + "\n· " + ChatQueue.badge(position))
         }
         updateComposerState()
     }
@@ -760,7 +773,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (chatId == renderedChatId) {
             val entry = if (queuedBubbles.isEmpty()) null else queuedBubbles.removeFirst()
-            entry?.let { (bubble, display) -> bubble.text = display }
+            entry?.let { (bubble, display) -> bubble.text = styledText(display) }
         }
         askBrain(chatId, next, attempt = 0)
         if (chatId == activeChatId) updateComposerState()
@@ -1643,11 +1656,50 @@ class MainActivity : AppCompatActivity() {
         if (!uiAlive || chatId != renderedChatId) return
         val bubble = liveBubble
         if (bubble != null && bubble.parent === transcript) {
-            bubble.text = text
+            bubble.text = styledText(text)
             scrollToBottom()
         } else {
             liveBubble = appendLine("Lille", text)
         }
+    }
+
+    /** Chat markdown (v0.12.3): the pure [ChatMarkdown]
+     *  renderer strips the model's raw markers (`**`, `##`,
+     *  backticks) and this turns its spans into Android styles.
+     *  The rendered text stays the full readable text, so the
+     *  v0.12.2 long-press selection copies clean text. A
+     *  message without markdown comes back byte-identical. */
+    private fun styledText(raw: String): CharSequence {
+        val rendered = ChatMarkdown.render(raw)
+        if (rendered.spans.isEmpty()) return rendered.text
+        val sb = SpannableStringBuilder(rendered.text)
+        for (span in rendered.spans) {
+            val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            when (span.style) {
+                ChatMarkdown.Style.BOLD ->
+                    sb.setSpan(StyleSpan(Typeface.BOLD), span.start, span.end, flags)
+                ChatMarkdown.Style.ITALIC ->
+                    sb.setSpan(StyleSpan(Typeface.ITALIC), span.start, span.end, flags)
+                ChatMarkdown.Style.CODE, ChatMarkdown.Style.CODE_BLOCK -> {
+                    sb.setSpan(TypefaceSpan("monospace"), span.start, span.end, flags)
+                    sb.setSpan(
+                        BackgroundColorSpan(Color.argb(45, 128, 128, 128)),
+                        span.start, span.end, flags
+                    )
+                }
+                ChatMarkdown.Style.HEADING -> {
+                    sb.setSpan(StyleSpan(Typeface.BOLD), span.start, span.end, flags)
+                    val scale = when (span.level) {
+                        1 -> 1.30f
+                        2 -> 1.18f
+                        3 -> 1.10f
+                        else -> 1.05f
+                    }
+                    sb.setSpan(RelativeSizeSpan(scale), span.start, span.end, flags)
+                }
+            }
+        }
+        return sb
     }
 
     /** One message, one bubble (v0.10 UI polish): Lille's are
@@ -1656,7 +1708,7 @@ class MainActivity : AppCompatActivity() {
      *  the orange for contrast. */
     private fun appendLine(who: String, text: String): TextView {
         val bubble = TextView(this)
-        bubble.text = text
+        bubble.text = styledText(text)
         // v0.12.2: chat text must be copyable — a programmatic
         // TextView is NOT selectable by default (the XML ones
         // carry android:textIsSelectable), so without this line

@@ -28,6 +28,22 @@ GROUNDING_RULE = (
     "standard practice."
 )
 
+# Chat honesty (v0.12.3) — a chat reply performs no actions.
+# Born of a live failure: on a community fallback route the
+# model answered a hackathon brief by narrating a fully
+# completed submission (repo created, test pack fetched, form
+# submitted) that never happened. In chat there are no tools;
+# work happens in tasks, and only a task's verified finish may
+# be reported as done.
+CHAT_HONESTY_RULE = (
+    "Chat honesty: in chat you cannot perform actions — nothing you "
+    "say here does anything by itself. Never claim to have done, "
+    "created, fetched, submitted or completed anything you did not "
+    "actually do through a tool in a task. When the user gives you "
+    "a job in chat, say you are starting it and what happens next, "
+    "in the present tense — never narrate a finished result."
+)
+
 def load_memory(base):
     parts = []
     for name in MEMORY_FILES:
@@ -42,7 +58,8 @@ class Agent:
         self.system = load_memory(memory_dir)
 
     def _system_content(self):
-        return (self.system + "\n\n" + GROUNDING_RULE) if self.system else GROUNDING_RULE
+        rules = GROUNDING_RULE + "\n\n" + CHAT_HONESTY_RULE
+        return (self.system + "\n\n" + rules) if self.system else rules
 
     def chat(self, user_text, private=False, category="public", override_privacy=False):
         messages = [{"role": "system", "content": self._system_content()},

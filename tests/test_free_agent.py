@@ -573,5 +573,30 @@ class TestOwnKeyRoutes(unittest.TestCase):
         for name in self.OWN_KEY_ENVS.values():
             self.assertEqual(own[name], "own-key", name)
 
+class TestChatHonestyRule(unittest.TestCase):
+    """v0.12.3: the core system content must carry the chat
+    honesty rule next to the grounding rule — in chat the model
+    performs no actions and must never narrate finished work
+    it did not do through a tool in a task."""
+
+    def _content(self):
+        from free_agent.agent import Agent
+        agent = Agent(cfg_with([]), memory_dir=tempfile.mkdtemp())
+        return agent._system_content()
+
+    def test_system_content_carries_both_rules(self):
+        content = self._content()
+        self.assertIn("Grounding: never invent features, facts, or steps", content)
+        self.assertIn("Chat honesty: in chat you cannot perform actions", content)
+
+    def test_honesty_rule_forbids_claiming_undone_work(self):
+        content = self._content()
+        self.assertIn(
+            "Never claim to have done, created, fetched, submitted or "
+            "completed anything you did not actually do through a tool "
+            "in a task", content)
+        self.assertIn("never narrate a finished result", content)
+
+
 if __name__ == "__main__":
     unittest.main()
