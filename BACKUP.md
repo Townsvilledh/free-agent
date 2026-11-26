@@ -106,6 +106,18 @@ reported separately — until then, a non-test user's backup
 still works fully via the folder layer and file export;
 Drive is simply not offered to them by Google.
 
+**Correction (2026-11-26): the consent screen is now
+published — status "In production."** The paragraph above
+was written before the publish step completed. Later the
+same day, the consent screen for project `lille-515912` was
+published (homepage and PRIVACY.md URLs supplied), so Drive
+sync is no longer limited to test users — any user can
+consent. No verification has been submitted, so the app
+remains **unverified**: two caveats stand until verification
+is submitted and approved — a **100-user cap**, and a
+possible **"unverified app" warning** shown by Google
+during consent.
+
 ### Turning Drive on — the exact console steps (for Muse/owner)
 
 1. Go to <https://console.cloud.google.com> and create (or
