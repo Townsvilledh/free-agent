@@ -3,6 +3,23 @@ plugins {
     id "org.jetbrains.kotlin.android"
 }
 
+// X identity kit (v0.10.1, XLANE.md "Hers alone"): Lille's own
+// X identity (handles, bio, DOB, mailbox ladder) is injected
+// at build time from the CI environment — the official
+// workflow populates it from the repo's Actions secrets
+// (LILLE_X_KIT_*), the same mechanism as the signing key.
+// The values never live in this source tree: without the
+// environment (local dev, forks) they default to EMPTY, the
+// build is hollow, and the owner-gated X-account task reports
+// itself unavailable. Values are escaped into Java string
+// literals for the generated BuildConfig.
+def lilleKitField = { String envName ->
+    def v = (System.getenv(envName) ?: "")
+        .replace("\\", "\\\\").replace("\"", "\\\"")
+        .replace("\n", "\\n").replace("\r", "")
+    return "\"${v}\""
+}
+
 android {
     namespace "org.freeagent.app"
     compileSdk 34
@@ -20,6 +37,11 @@ android {
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]
+        // Identity kit injection (see lilleKitField above).
+        buildConfigField "String", "X_KIT_HANDLES", lilleKitField("LILLE_X_KIT_HANDLES")
+        buildConfigField "String", "X_KIT_BIO", lilleKitField("LILLE_X_KIT_BIO")
+        buildConfigField "String", "X_KIT_DOB", lilleKitField("LILLE_X_KIT_DOB")
+        buildConfigField "String", "X_KIT_MAILBOXES", lilleKitField("LILLE_X_KIT_MAILBOXES")
     }
 
     // Stable signing line (v0.9.2+, see SIGNING.md): when the build
@@ -57,7 +79,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { viewBinding true }
+    buildFeatures { viewBinding true; buildConfig true }
 }
 
 dependencies {

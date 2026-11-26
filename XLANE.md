@@ -205,6 +205,48 @@ itself. Management and posting tasks for her account
 likewise run from the owner's instance — her page is run
 from the one place her creator actually is.
 
+**The identity kit lives in build secrets, not in the
+repo.** The kit (handle preference list, bio, date of
+birth, mailbox ladder) is her personal identity, so from
+v0.10.1 it is not carried in the public source at all — not
+in `XAccountTask`, not in the spec. It is injected at build
+time: the workflow passes the repo's Actions secrets
+(`LILLE_X_KIT_HANDLES`, `LILLE_X_KIT_BIO`, `LILLE_X_KIT_DOB`,
+`LILLE_X_KIT_MAILBOXES`) through the build environment into
+Gradle, which writes them into the app's `BuildConfig`
+(`XIdentityKit.fromBuildConfig`) — the same mechanism as
+the stable signing key. The packaged task interpolates the
+kit into its task text at creation. Consequences, honestly:
+the official build carries the kit, still behind the owner
+gate above; a build from plain source (local dev, a fork)
+is **hollow** — the kit fields are empty, and creating her
+task records it in a FAILED "owner configuration missing"
+state that never runs, instead of falling back to any
+baked-in defaults. Tests use fixture kits injected the same
+way (`XIdentityKit.fromRaw`), never the real values. The
+v0.8 spec in `specs/` was redacted to match (dated note in
+the file); the kit values do remain in this repo's *git
+history* up to the v0.10.1 commit — removing them from
+history would be a separate, deliberate rewrite.
+
+**The counterpart, for everyone: "Connect my X account."**
+The same release adds a packaged Tasks-screen task that is
+deliberately NOT owner-gated (`XConnectTask`). It connects
+the *user's own* X account: Lille opens X's login flow in
+her WebView session, then parks via a planned user handoff
+(`browser_handoff` — honoured only on tasks whose record
+carries the `userHandoff` flag, so it is a packaged task's
+design, never a model improvisation; wall parks still
+require an observed challenge). The user types their own
+credentials into the parked session themselves — Lille
+never sees, types, asks for, or stores their password —
+and on handback she verifies with `x_session_status` and
+reports "Connected as @handle" from the recorded evidence,
+or an honest not-connected state. The session persists in
+her WebView storage like any lane session. Posting from a
+connected user account stays approval-gated (`account:
+user` + `post approved: yes`), unchanged.
+
 ## Brain pacing on the device lane (v0.9.1)
 
 The first live run (2026-11-26) exposed a stall: the task sat

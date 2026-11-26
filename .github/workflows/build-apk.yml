@@ -91,6 +91,13 @@ jobs:
           LILLE_KEYSTORE_PASSWORD: ${{ secrets.LILLE_KEYSTORE_PASSWORD }}
           LILLE_KEY_ALIAS: ${{ secrets.LILLE_KEY_ALIAS }}
           LILLE_KEY_PASSWORD: ${{ secrets.LILLE_KEY_PASSWORD }}
+          # X identity kit (v0.10.1): injected into BuildConfig by
+          # Gradle from these env vars. Absent (forks) -> empty ->
+          # the owner-gated X-account task is unavailable there.
+          LILLE_X_KIT_HANDLES: ${{ secrets.LILLE_X_KIT_HANDLES }}
+          LILLE_X_KIT_BIO: ${{ secrets.LILLE_X_KIT_BIO }}
+          LILLE_X_KIT_DOB: ${{ secrets.LILLE_X_KIT_DOB }}
+          LILLE_X_KIT_MAILBOXES: ${{ secrets.LILLE_X_KIT_MAILBOXES }}
         run: gradle assembleDebug --stacktrace
 
       - name: Upload APK artifact

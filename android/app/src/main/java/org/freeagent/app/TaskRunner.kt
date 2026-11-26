@@ -67,7 +67,7 @@ class TaskRunner(private val context: Context) {
             "```json\n{\"tool\": \"browser_open\", \"args\": {\"url\": \"https://example.com\"}}\n```\n" +
             "Tools: browser_open{url}, browser_read{}, browser_click{ref or text}, browser_type{ref,text}, " +
             "browser_type_secret{ref,vault_key}, browser_upload{ref,path}, browser_screenshot{name}, " +
-            "browser_wait{seconds or text,timeout}, vault_gen_secret{key}, " +
+            "browser_wait{seconds or text,timeout}, browser_handoff{step}, vault_gen_secret{key}, " +
             "vault_record_account{site,username,vault_key}, x_session_status{}, x_read_feed{count}, " +
             "x_search{query,count}, x_post{text}, write_note{path,content}, read_note{path}, " +
             "finish{summary}. Work from browser_read's element refs — refs are reassigned on every read, " +
@@ -76,7 +76,12 @@ class TaskRunner(private val context: Context) {
             "with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only " +
             "wall (CAPTCHA, an emailed code you cannot read, a phone demand): do NOT try to solve, bypass, " +
             "or route around that wall itself — if the task names another legitimate route, take it; " +
-            "otherwise call finish naming that exact wall. Never invent tool results."
+            "otherwise call finish naming that exact wall. browser_handoff{step} hands your browser to " +
+            "the user for a step the TASK ITSELF names (e.g. signing in with their OWN account): it is " +
+            "honoured only on tasks that carry a user step — the task text will say so. Call it, then " +
+            "finish, and the task parks until the user hands back. Never use it for work you can do " +
+            "yourself, and never ask the user for a password: passwords are typed by the user in the " +
+            "parked session, never by you. Never invent tool results."
         private val CODE_HINTS = listOf(
             "python", "run code", "execute code", "compile", "build an app",
             "build the app", "create an apk", "make an apk", "script that runs",
@@ -156,20 +161,30 @@ class TaskRunner(private val context: Context) {
         if (browserTask && wall != null && handedBackAt > task.optLong("wallAt", 0L) &&
             task.optLong("wallResumeNoted", 0L) < handedBackAt
         ) {
-            messages.put(JSONObject().put("role", "user").put("content",
-                "Ethuram has completed the human check in your browser session " +
-                    "(wall was: ${wall.optString("kind")} on " +
-                    "${wall.optString("domain")}). Continue the task now: " +
-                    "browser_read the page and carry on from where you stopped."))
+            // A planned user handoff (v0.10.1) resumes with its
+            // own note: the user acted themselves in her session
+            // — she verifies from the page, never from assumption.
+            val resumeContent =
+                if (wall.optString("kind") == UserHandoff.WALL_KIND) {
+                    UserHandoff.resumeNote(wall.optString("domain"))
+                } else {
+                    "Ethuram has completed the human check in your browser session " +
+                        "(wall was: ${wall.optString("kind")} on " +
+                        "${wall.optString("domain")}). Continue the task now: " +
+                        "browser_read the page and carry on from where you stopped."
+                }
+            messages.put(JSONObject().put("role", "user").put("content", resumeContent))
             store.update(id) {
                 it.put("wallResumeNoted", handedBackAt)
                 it.remove("wall")
+                it.remove("handoffStep")
             }
             checkpoint(id, messages, task.optInt("steps", 0))
         }
         var stepsDone = task.optInt("steps", 0)
         val maxSteps = if (browserTask) BROWSER_MAX_STEPS else MAX_STEPS
         var lastChallenge: BrowserPerception.Challenge? = null
+        var pendingHandoffStep: String? = null
 
         while (stepsDone < maxSteps) {
             // Honour pause/cancel that landed while we were working.
@@ -270,6 +285,19 @@ class TaskRunner(private val context: Context) {
                     // not complete (the wall is Ethuram's step).
                     return park(id, lastChallenge, messages, stepsDone)
                 }
+                if (browserTask && pendingHandoffStep != null) {
+                    // She asked to hand the browser to the user
+                    // for the task's own named step (v0.10.1):
+                    // park as a user step, not a wall.
+                    return park(
+                        id,
+                        BrowserPerception.Challenge(
+                            UserHandoff.WALL_KIND, pendingHandoffStep!!
+                        ),
+                        messages, stepsDone,
+                        stepOverride = pendingHandoffStep
+                    )
+                }
                 store.update(id, TaskStates.COMPLETED) {
                     it.put("summary", args.optString("summary", "Done."))
                     it.put("steps", stepsDone)
@@ -284,6 +312,15 @@ class TaskRunner(private val context: Context) {
             }
             if (browserTask) {
                 lastChallenge = trackChallenge(name, observation, lastChallenge)
+                if (UserHandoff.isHandoffObservation(observation)) {
+                    // The handler recorded the cleaned step on
+                    // the task record; read it back from the
+                    // store (the local task copy is stale here).
+                    pendingHandoffStep = store.get(id)
+                        ?.optString("handoffStep")
+                        ?.ifEmpty { null }
+                        ?: UserHandoff.cleanStep("", "the site")
+                }
             }
             messages.put(JSONObject().put("role", "user")
                 .put("content", "Tool result ($name): $observation"))
@@ -293,6 +330,16 @@ class TaskRunner(private val context: Context) {
 
         if (browserTask && lastChallenge != null) {
             return park(id, lastChallenge, messages, stepsDone)
+        }
+        if (browserTask && pendingHandoffStep != null) {
+            return park(
+                id,
+                BrowserPerception.Challenge(
+                    UserHandoff.WALL_KIND, pendingHandoffStep!!
+                ),
+                messages, stepsDone,
+                stepOverride = pendingHandoffStep
+            )
         }
         store.update(id, TaskStates.PAUSED) {
             it.put("note", "Step budget ($maxSteps) reached — resume to continue.")
@@ -326,10 +373,16 @@ class TaskRunner(private val context: Context) {
     /** Park the task at the observed wall: record the wall + the
      *  ONE named step + a screenshot, checkpoint, notify. The
      *  WebView session itself stays exactly where it stopped —
-     *  BrowserActivity re-parents it for the human step. */
+     *  BrowserActivity re-parents it for the human step.
+     *
+     *  With [stepOverride] (v0.10.1) the park is a planned USER
+     *  HANDOFF instead: challenge.kind is UserHandoff.WALL_KIND,
+     *  the step shown is the task's own named step, and the
+     *  record is flagged userHandoffDone so reports can grade
+     *  "the user signed in themselves" from evidence. */
     private fun park(
         id: String, challenge: BrowserPerception.Challenge,
-        messages: JSONArray, steps: Int
+        messages: JSONArray, steps: Int, stepOverride: String? = null
     ): String {
         val domain = BrowserPerception.domainOf(BrowserSession.currentUrl())
             .ifEmpty { "the site" }
@@ -341,9 +394,21 @@ class TaskRunner(private val context: Context) {
         } catch (e: Exception) {
             // A missing screenshot never blocks the park itself.
         }
-        val stepText = "Complete the human verification on $domain in " +
-            "Lille's browser: tap 'Open Lille's browser', pass the check, " +
-            "then tap 'Done — hand back to Lille'. She resumes by herself."
+        val isUserStep = challenge.kind == UserHandoff.WALL_KIND
+        val stepText = stepOverride
+            ?: if (isUserStep) {
+                UserHandoff.cleanStep("", domain)
+            } else {
+                "Complete the human verification on $domain in " +
+                    "Lille's browser: tap 'Open Lille's browser', pass the check, " +
+                    "then tap 'Done — hand back to Lille'. She resumes by herself."
+            }
+        val noteText = if (isUserStep) {
+            "Parked for your step on $domain — Lille needs you (one step)."
+        } else {
+            "Parked at a human-only wall on $domain — " +
+                "Lille needs you (one step)."
+        }
         store.update(id, TaskStates.PARKED_AT_WALL) {
             it.put("wall", JSONObject()
                 .put("domain", domain)
@@ -357,8 +422,8 @@ class TaskRunner(private val context: Context) {
             it.put("wallAt", System.currentTimeMillis())
             it.put("messages", messages)
             it.put("steps", steps)
-            it.put("note", "Parked at a human-only wall on $domain — " +
-                "Lille needs you (one step).")
+            it.put("note", noteText)
+            if (isUserStep) it.put("userHandoffDone", true)
         }
         WallNotify.notifyParked(context, id, stepText)
         return TaskStates.PARKED_AT_WALL
@@ -717,6 +782,31 @@ class TaskRunner(private val context: Context) {
                         )
                     }
                     BrowserPerception.formatLite(state, "WAIT_OK")
+                }
+                UserHandoff.TOOL -> {
+                    // Planned user step (v0.10.1): honoured ONLY
+                    // on tasks whose packaged record carries the
+                    // userHandoff flag — never on model request
+                    // alone. The cleaned step is recorded on the
+                    // task; the run loop sees the observation and
+                    // parks at finish.
+                    if (!UserHandoff.mayHandoff(task.optBoolean("userHandoff"))) {
+                        "error: this task has no user step — the user " +
+                            "never types in this task. Continue it yourself."
+                    } else {
+                        val domain = BrowserPerception.domainOf(
+                            BrowserSession.currentUrl()
+                        ).ifEmpty { "the site" }
+                        val step = UserHandoff.cleanStep(
+                            args.optString("step"), domain
+                        )
+                        store.update(id) { it.put("handoffStep", step) }
+                        UserHandoff.OBSERVATION_PREFIX + " — the step " +
+                            "is recorded. Call finish now: the task " +
+                            "parks, the user takes the step in your " +
+                            "browser session, and you resume after " +
+                            "handback."
+                    }
                 }
                 "vault_gen_secret" -> {
                     val key = args.optString("key")

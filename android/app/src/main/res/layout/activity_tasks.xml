@@ -38,6 +38,19 @@
         android:text="@string/create_x_task" />
 
     <Button
+        android:id="@+id/connectXTaskButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/connect_x_task" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/connect_x_hint"
+        android:textSize="12sp"
+        android:paddingBottom="8dp" />
+
+    <Button
         android:id="@+id/disconnectFluidButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

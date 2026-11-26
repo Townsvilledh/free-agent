@@ -10,11 +10,11 @@ import org.json.JSONObject
  *
  * This is the v0.8 acceptance spec
  * (specs/2026-11-25-lille-x-account.md) carried into the app:
- * the same identity kit, the same hard rules the host runs
- * taught (mailbox discipline, one patient submit, the
- * legal-link trap, form discipline), the same pass/fail
- * criteria — graded from the task record's evidence fields
- * (xHandle, firstPostUrl, state) in the spec report view.
+ * the same hard rules the host runs taught (mailbox
+ * discipline, one patient submit, the legal-link trap, form
+ * discipline), the same pass/fail criteria — graded from the
+ * task record's evidence fields (xHandle, firstPostUrl,
+ * state) in the spec report view.
  *
  * The differences from the host spec are the lane's, and they
  * are the point: the browser is the phone's real WebView
@@ -24,13 +24,28 @@ import org.json.JSONObject
  * "Lille needs you" card hands Ethuram the check inside her
  * session — one tap from him, then she resumes and finishes
  * alone. Nobody creates the account for her.
+ *
+ * The IDENTITY KIT is not in this file (v0.10.1, XLANE.md
+ * "Hers alone"): handles, bio, DOB and the mailbox ladder are
+ * her personal identity, injected at build time via
+ * XIdentityKit (BuildConfig ← CI secrets) and interpolated
+ * into the task text by [taskText]. A build without the kit
+ * (source build, local dev, a fork) is hollow: [create]
+ * records the task in an honest FAILED "owner configuration
+ * missing" state and it never runs.
  */
 object XAccountTask {
 
     const val TITLE = "Lille: create my X account"
 
-    val DOMAINS = listOf("x.com", "guerrillamail.com", "maildrop.cc",
-        "emailnator.com")
+    /** The note/summary prefix of a hollow-build record —
+     *  the honest unavailable state. */
+    const val UNAVAILABLE_NOTE =
+        "Owner configuration missing: this build carries no X " +
+            "identity kit (the kit is injected only into the " +
+            "official build, from build secrets), so Lille's own " +
+            "X-account task cannot run here. Her account is " +
+            "created and managed from the owner's instance."
 
     val CRITERIA = listOf(
         "Lille's X account exists: x_session_status verifies a live session as her handle on x.com",
@@ -40,7 +55,16 @@ object XAccountTask {
         "Her first post is live with a status URL on x.com"
     )
 
-    const val TASK_TEXT: String =
+    /** The signup's domain allowlist: X itself plus the kit's
+     *  mailbox providers, in route order. */
+    fun domains(kit: XIdentityKit): List<String> =
+        listOf("x.com") + kit.mailboxes
+
+    /** The full task text with the identity kit interpolated.
+     *  The hard rules are the v0.8 lessons, unchanged; only the
+     *  kit values (handles, bio, DOB, mailbox ladder) come
+     *  from [kit] — they exist nowhere in this source tree. */
+    fun taskText(kit: XIdentityKit): String =
         "Create your OWN X account, Lille — an account that is yours, in your name, " +
         "which you will use to promote yourself and Fluid. This is a formal acceptance " +
         "test: it passes only when the account is live with your profile set, your " +
@@ -48,16 +72,14 @@ object XAccountTask {
         "your first post is live with a URL.\n\n" +
         "IDENTITY KIT\n" +
         "- Display name: Lille\n" +
-        "- Handle, try in order: LilleAgent, AskLille, LilleByFluid, LilleOnFluid, " +
-        "LilleAI. If all are taken, keep trying close variants (suffix HQ, an " +
+        "- Handle, try in order: ${kit.handles.joinToString(", ")}. If all are taken, keep trying close variants (suffix HQ, an " +
         "underscore, or similar) until one is accepted — a taken handle is a route " +
         "change, not a wall.\n" +
-        "- Bio: Lille — free, open-source autonomous agent, building in public at " +
-        "$0. I promote Fluid, the open-source non-custodial wallet for everyone.\n" +
+        "- Bio: ${kit.bio}\n" +
         "- Avatar: your mascot jacket image — call browser_upload with path " +
         "\"asset:lille-mascot-jacket.webp\" and the profile-picture file input's ref " +
         "when the flow offers one (or afterwards via Edit profile).\n" +
-        "- Date of birth, if asked: 1 January 2000.\n" +
+        "- Date of birth, if asked: ${kit.dob}.\n" +
         "- First post (your own words, this shape): introduce yourself as Lille, a " +
         "free open-source autonomous agent; say you build in public and run at $0; " +
         "say you are here to share what you are building and to promote Fluid, the " +
@@ -67,10 +89,13 @@ object XAccountTask {
         "or the X signup). Do NOT write notes or plan files before the account exists.\n" +
         "- The signup entry point is https://x.com/i/flow/signup (if X shows a " +
         "different entry, follow the site's own Sign up / Create account path).\n" +
-        "- THE ADDRESS MUST COME OFF A MAILBOX PAGE: open maildrop.cc, type ONLY a " +
-        "short name (e.g. lilleagent) into the box — NOT a full address — click Go, " +
-        "and let the inbox page load. Your address is that name @maildrop.cc. Read it " +
-        "off the inbox page. Never invent or reconstruct an address from memory.\n" +
+        "- THE ADDRESS MUST COME OFF A MAILBOX PAGE: open your first mailbox " +
+        "provider (see EMAIL below). If it offers a name-box inbox, type ONLY a " +
+        "short name (your display name, lowercase — NOT a full address) into the " +
+        "box, click Go, and let the inbox page load; your address is that name at " +
+        "the provider's domain. If the provider instead generates an address for " +
+        "you, take the one it shows. Either way, read the address off the " +
+        "provider's page. Never invent or reconstruct an address from memory.\n" +
         "- ONE PATIENT SUBMIT: after both fields are filled on one page instance, " +
         "click Continue ONCE, then browser_wait 30 and browser_read. The flow's " +
         "answer can take that long; clicking again or re-typing during the wait " +
@@ -84,7 +109,7 @@ object XAccountTask {
         "you typed): browser_type the email into the email input, " +
         "browser_type_secret the password into the input marked SECRET, then " +
         "browser_read, then ONE click on the (submit button). The email field wants " +
-        "the mailbox ADDRESS (e.g. name@maildrop.cc), not a username.\n" +
+        "the mailbox ADDRESS (the one you read off the mailbox page), not a username.\n" +
         "- THE LEGAL-LINK TRAP: directly under the email/password fields sit three " +
         "LINKS — Terms of Service, Privacy Policy, Cookie Use. Clicking one ABANDONS " +
         "the signup. NEVER click a link whose text or href mentions Terms, Privacy, " +
@@ -99,12 +124,11 @@ object XAccountTask {
         "browser_type. After the account exists, call vault_record_account " +
         "(site x.com, username = your final handle, vault_key x_password).\n" +
         "- EMAIL: X needs an email address and will send a verification code. " +
-        "Routes, in order — exhaust them before calling anything a wall: " +
-        "(1) emailnator.com FIRST (its Gmail addresses are the one route never yet " +
-        "carried to a submit), then maildrop.cc, then guerrillamail.com. Take the " +
-        "address the page gives you, use it for the X signup, then read the " +
-        "verification code from that same inbox and enter it on X. Reading a code " +
-        "from a mailbox you can open in the browser is normal work. " +
+        "The mailbox providers, in this exact order — exhaust each before " +
+        "calling anything a wall: ${kit.mailboxes.joinToString(", then ")}. " +
+        "Take the address the page gives you, use it for the X signup, then read " +
+        "the verification code from that same inbox and enter it on X. Reading a " +
+        "code from a mailbox you can open in the browser is normal work. " +
         "(2) If X rejects a mailbox's domain, try the next provider. " +
         "(3) If a provider itself walls you, move to the next one. " +
         "(4) The mailbox and the X flow are pages in ONE browser: after X accepts " +
@@ -132,15 +156,41 @@ object XAccountTask {
         "post with x_post, and finish with a summary naming your handle and the " +
         "first post's URL."
 
+    /** True when [task] is a hollow-build record — created by
+     *  [create] in a build without the identity kit. */
+    fun isUnavailableRecord(task: JSONObject): Boolean =
+        task.optString("note").startsWith("Owner configuration missing")
+
     /** Create the packaged task in the store (queued, lane=device,
      *  kind=browser, identity kit as the task text, criteria for
-     *  the report view). Returns the task record. */
+     *  the report view). Returns the task record.
+     *
+     *  Hollow build (no kit injected): the record is created
+     *  already FAILED with the owner-configuration-missing note
+     *  and is never enqueued — the task reports itself
+     *  unavailable instead of running with baked-in defaults. */
     fun create(context: Context): JSONObject {
         val store = TaskStore(context)
-        val task = store.create(TASK_TEXT)
+        val kit = XIdentityKit.fromBuildConfig()
+        if (!kit.isPresent()) {
+            val task = store.create(
+                "Lille: create my X account — unavailable in this " +
+                    "build (owner configuration missing)."
+            )
+            val id = task.optString("id")
+            store.update(id, TaskStates.FAILED) {
+                it.put("title", TITLE)
+                it.put("kind", "browser")
+                it.put("lane", "device")
+                it.put("note", UNAVAILABLE_NOTE)
+                it.put("summary", UNAVAILABLE_NOTE)
+            }
+            return store.get(id) ?: task
+        }
+        val task = store.create(taskText(kit))
         val id = task.optString("id")
         val domains = JSONArray()
-        DOMAINS.forEach { domains.put(it) }
+        domains(kit).forEach { domains.put(it) }
         val criteria = JSONArray()
         CRITERIA.forEach { criteria.put(it) }
         store.update(id) {
@@ -163,6 +213,8 @@ object XAccountTask {
         val handle = task.optString("xHandle")
         val postUrl = task.optString("firstPostUrl")
         val status = when {
+            isUnavailableRecord(task) ->
+                "UNAVAILABLE — owner configuration missing in this build"
             state == TaskStates.COMPLETED && handle.isNotEmpty() &&
                 postUrl.isNotEmpty() -> "PASS (graded from recorded evidence)"
             state == TaskStates.PARKED_AT_WALL ->

@@ -16,6 +16,8 @@
     <string name="cancel_task">Cancel</string>
     <string name="refresh">Refresh</string>
     <string name="create_x_task">Lille: create my X account</string>
+    <string name="connect_x_task">Connect my X account</string>
+    <string name="connect_x_hint">Lille will open X and wait — you log in yourself, in her browser, then hand back. She never sees your password.</string>
     <string name="open_browser">Open Lille\'s browser</string>
     <string name="report">Report</string>
     <string name="share">Share</string>

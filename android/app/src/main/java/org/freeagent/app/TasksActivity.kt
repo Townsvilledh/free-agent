@@ -34,6 +34,11 @@ import org.json.JSONObject
  *   Fluid login identity is the owner's — for everyone else it is
  *   simply absent, and the task cannot be created from the UI
  *   (XLANE.md, "Hers alone").
+ * - "Connect my X account" — the counterpart, for EVERY user
+ *   (v0.10.1, XConnectTask): she opens X's login flow in her
+ *   browser and parks for the user's OWN sign-in step — the
+ *   user types their own credentials in her session; she
+ *   never sees their password. Not owner-gated.
  * - Report / Share — the graded spec report for a task
  *   (XAccountTask.reportFor for packaged tasks), readable here
  *   and shareable out of the app.
@@ -145,19 +150,68 @@ class TasksActivity : AppCompatActivity() {
                 it.optString("title") == XAccountTask.TITLE &&
                     !TaskStates.isTerminal(it.optString("state"))
             }
+            val unavailable = store.all().firstOrNull {
+                it.optString("title") == XAccountTask.TITLE &&
+                    XAccountTask.isUnavailableRecord(it)
+            }
+            when {
+                existing != null -> {
+                    selectedId = existing.optString("id")
+                    Toast.makeText(this,
+                        "Her X-account task is already on the list — tap RUN if it is queued.",
+                        Toast.LENGTH_LONG).show()
+                }
+                unavailable != null -> {
+                    // Hollow build (no identity kit injected):
+                    // the record already reports itself; don't
+                    // stack duplicates.
+                    selectedId = unavailable.optString("id")
+                    Toast.makeText(this,
+                        "Owner configuration missing in this build — her " +
+                            "X-account task can't run here. Her account is " +
+                            "created from the owner's instance.",
+                        Toast.LENGTH_LONG).show()
+                }
+                else -> {
+                    val task = XAccountTask.create(this)
+                    selectedId = task.optString("id")
+                    if (XAccountTask.isUnavailableRecord(task)) {
+                        Toast.makeText(this,
+                            "Owner configuration missing in this build — her " +
+                                "X-account task can't run here. Her account is " +
+                                "created from the owner's instance.",
+                            Toast.LENGTH_LONG).show()
+                    } else {
+                        TaskWorker.enqueue(this, selectedId!!)
+                        Toast.makeText(this,
+                            "Lille is on it — she is creating her X account in her own " +
+                                "browser on this phone. If X asks for a human check, a " +
+                                "'Lille needs you' card will appear here.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            refresh()
+        }
+        findViewById<Button>(R.id.connectXTaskButton).setOnClickListener {
+            // For EVERY user (v0.10.1) — deliberately not
+            // owner-gated: this connects the USER's own X
+            // account, with the user signing in themselves in
+            // her parked browser session.
+            val existing = store.all().firstOrNull {
+                it.optString("title") == XConnectTask.TITLE &&
+                    !TaskStates.isTerminal(it.optString("state"))
+            }
             if (existing != null) {
                 selectedId = existing.optString("id")
                 Toast.makeText(this,
-                    "Her X-account task is already on the list — tap RUN if it is queued.",
+                    "Your X connect task is already on the list — tap RUN if it is queued.",
                     Toast.LENGTH_LONG).show()
             } else {
-                val task = XAccountTask.create(this)
+                val task = XConnectTask.create(this)
                 selectedId = task.optString("id")
                 TaskWorker.enqueue(this, selectedId!!)
-                Toast.makeText(this,
-                    "Lille is on it — she is creating her X account in her own " +
-                        "browser on this phone. If X asks for a human check, a " +
-                        "'Lille needs you' card will appear here.",
+                Toast.makeText(this, XConnectTask.PLAIN_COPY,
                     Toast.LENGTH_LONG).show()
             }
             refresh()
@@ -339,6 +393,9 @@ class TasksActivity : AppCompatActivity() {
      *  packaged tasks (criteria + recorded evidence), a plain
      *  state report for the rest. */
     private fun reportFor(task: JSONObject): String {
+        if (task.optString("title") == XConnectTask.TITLE) {
+            return XConnectTask.reportFor(task)
+        }
         if (task.has("criteria")) return XAccountTask.reportFor(task)
         return buildString {
             append("LILLE — TASK REPORT\n")
@@ -415,9 +472,15 @@ class TasksActivity : AppCompatActivity() {
                 if (TaskStates.isParked(task.optString("state"))) {
                     append("\n⚠ LILLE NEEDS YOU — one step:\n")
                     append("${task.optString("wallStep")}\n")
-                    append("Wall: ${task.optString("wallKind")} on " +
-                        "${task.optString("wallDomain")} — " +
-                        "${task.optString("wallDetail")}\n")
+                    if (task.optString("wallKind") == UserHandoff.WALL_KIND) {
+                        append("Your step (planned handoff — not a wall): " +
+                            "yours to take in her session on " +
+                            "${task.optString("wallDomain")}.\n")
+                    } else {
+                        append("Wall: ${task.optString("wallKind")} on " +
+                            "${task.optString("wallDomain")} — " +
+                            "${task.optString("wallDetail")}\n")
+                    }
                     append("Tap 'Open Lille's browser' to take the step in " +
                         "her session.\n")
                 }
