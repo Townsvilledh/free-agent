@@ -11,14 +11,38 @@ android {
         applicationId "org.freeagent.app"
         minSdk 29          // Android 10 — the Galaxy A12's floor
         targetSdk 34
-        versionCode 10
-        versionName "0.9.1"
+        versionCode 11
+        versionName "0.9.2"
         // AppAuth's RedirectUriReceiverActivity declares its redirect
         // scheme via this placeholder; the manifest merger fails without it.
         manifestPlaceholders = [appAuthRedirectScheme: "org.freeagent.app"]
     }
 
+    // Stable signing line (v0.9.2+, see SIGNING.md): when the build
+    // environment provides LILLE_KEYSTORE_FILE (CI decodes it from the
+    // LILLE_KEYSTORE_B64 Actions secret), the debug build is signed
+    // with Lille's dedicated keystore, so every release carries the
+    // SAME certificate and installs OVER the previous version.
+    // Without it (local dev, fork PRs) Gradle's default debug key is
+    // used, exactly as before.
+    signingConfigs {
+        if (System.getenv("LILLE_KEYSTORE_FILE")) {
+            lille {
+                storeFile file(System.getenv("LILLE_KEYSTORE_FILE"))
+                storePassword System.getenv("LILLE_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("LILLE_KEY_ALIAS") ?: "lille"
+                keyPassword System.getenv("LILLE_KEY_PASSWORD")
+                storeType "PKCS12"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (System.getenv("LILLE_KEYSTORE_FILE")) {
+                signingConfig signingConfigs.lille
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"

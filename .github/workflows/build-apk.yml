@@ -2,9 +2,17 @@ name: build-apk
 
 # Builds the FreeAgent debug APK for free on a public-repo runner
 # (Java + Android SDK are preinstalled on ubuntu-latest), and runs the
-# Python core tests in the same workflow. No secrets are used here:
-# debug builds sign with the standard debug key. Release signing with
-# Ethuram's own keystore (kept in the vault) is a later, opt-in step.
+# Python core tests in the same workflow.
+#
+# Signing (v0.9.2+, see SIGNING.md): the APK is signed with Lille's
+# dedicated keystore, restored below from the LILLE_KEYSTORE_B64
+# Actions secret, so every build carries the SAME certificate and
+# installs OVER the installed app. (Before v0.9.2 each run signed
+# with the runner's fresh throwaway debug key, which forced a full
+# uninstall — and a data wipe — on every update.) When the secret is
+# unavailable (e.g. a fork PR), the build falls back to the runner's
+# debug key and says so in the log. A production release key remains
+# a later, opt-in step.
 
 on:
   push:
@@ -67,8 +75,22 @@ jobs:
         working-directory: android
         run: gradle testDebugUnitTest --stacktrace
 
+      - name: Restore Lille signing keystore (stable signing line)
+        run: |
+          if [ -n "${{ secrets.LILLE_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.LILLE_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/lille-signing.p12"
+            echo "LILLE_KEYSTORE_FILE=$RUNNER_TEMP/lille-signing.p12" >> "$GITHUB_ENV"
+            echo "Keystore restored — this APK carries the stable Lille signing certificate."
+          else
+            echo "No LILLE_KEYSTORE_B64 secret available (e.g. fork PR) — falling back to the runner's throwaway debug key; this build will NOT install over a stable-line build."
+          fi
+
       - name: Build debug APK
         working-directory: android
+        env:
+          LILLE_KEYSTORE_PASSWORD: ${{ secrets.LILLE_KEYSTORE_PASSWORD }}
+          LILLE_KEY_ALIAS: ${{ secrets.LILLE_KEY_ALIAS }}
+          LILLE_KEY_PASSWORD: ${{ secrets.LILLE_KEY_PASSWORD }}
         run: gradle assembleDebug --stacktrace
 
       - name: Upload APK artifact

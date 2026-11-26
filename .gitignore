@@ -11,3 +11,8 @@ logs/
 *.log
 __pycache__/
 .venv/
+
+# Signing material must never be committed (see SIGNING.md)
+*.keystore
+*.p12
+*.jks
