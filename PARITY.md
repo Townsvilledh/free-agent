@@ -54,3 +54,4 @@ is current as of the consolidated final release (v1.0).*
 file in the same commit series, and any capability a user asks
 about that is missing here gets added — the map being
 incomplete is itself a gap.*
+| 38 | Reply-to-message + long-press menu | Long-press any bubble: reactions row (👍 ❤️ 😂 😮 😢 🙏 + more) over Reply / Copy / Select / Share. Reply carries the quote visibly, in the store (rides backup), and as the model's marked referent; a fragment reply + quote classifies as the job it means. Reactions: one per message, tap-again clears, stored on the record. | v1.0.1 |

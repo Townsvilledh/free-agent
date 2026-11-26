@@ -101,11 +101,25 @@ class ChatStore(context: Context) {
     }
 
     @Synchronized
-    fun appendMessage(chatId: String, role: String, content: String, display: String? = null): Boolean {
+    fun appendMessage(
+        chatId: String, role: String, content: String,
+        display: String? = null,
+        quoteRole: String? = null, quoteText: String? = null
+    ): Boolean {
         val root = root()
         val ok = ChatData.appendMessage(
-            root, chatId, role, content, display, System.currentTimeMillis()
+            root, chatId, role, content, display,
+            System.currentTimeMillis(), quoteRole, quoteText
         )
+        if (ok) writeRoot(root)
+        return ok
+    }
+
+    /** v1.0.1: set/clear a message reaction (long-press menu). */
+    @Synchronized
+    fun setReaction(chatId: String, index: Int, emoji: String?): Boolean {
+        val root = root()
+        val ok = ChatData.setReaction(root, chatId, index, emoji)
         if (ok) writeRoot(root)
         return ok
     }

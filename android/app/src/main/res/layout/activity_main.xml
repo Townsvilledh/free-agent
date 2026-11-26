@@ -202,6 +202,31 @@
             android:text="@string/remove" />
     </LinearLayout>
 
+    <!-- Reply quote bar (v1.0.1): while composing a reply,
+         the quoted message shows here with a cancel control. -->
+    <LinearLayout
+        android:id="@+id/quoteBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingTop="8dp"
+        android:paddingBottom="4dp"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/quoteBarText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#F5EFE7"
+            android:textSize="13sp" />
+        <Button
+            android:id="@+id/clearQuoteButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/remove" />
+    </LinearLayout>
+
     <!-- Composer: pill field with integrated icon buttons.
          Touch targets are 48dp; contentDescriptions carry the
          words the buttons used to wear. -->

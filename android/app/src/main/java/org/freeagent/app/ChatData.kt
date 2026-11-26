@@ -121,7 +121,9 @@ object ChatData {
         role: String,
         content: String,
         display: String?,
-        now: Long
+        now: Long,
+        quoteRole: String? = null,
+        quoteText: String? = null
     ): Boolean {
         val chat = findChat(root, chatId) ?: return false
         val messages = chat.optJSONArray("messages") ?: JSONArray().also {
@@ -131,11 +133,32 @@ object ChatData {
             .put("role", role)
             .put("content", content)
         if (display != null && display != content) msg.put("display", display)
+        // v1.0.1 reply-to-message: the quote rides the record.
+        if (quoteRole != null && !quoteText.isNullOrEmpty()) {
+            ReplyQuote.attach(msg, quoteRole, quoteText)
+        }
         messages.put(msg)
         chat.put("updatedAt", now)
         if (role == "user" && chat.optString("title") == DEFAULT_TITLE) {
             chat.put("title", autoTitle(content))
         }
+        return true
+    }
+
+    /**
+     * Set or clear (emoji == null) the reaction on the message
+     * at [index] in a chat. False when the chat or the index
+     * does not exist. v1.0.1 long-press menu.
+     */
+    fun setReaction(
+        root: JSONObject, chatId: String, index: Int, emoji: String?
+    ): Boolean {
+        val chat = findChat(root, chatId) ?: return false
+        val messages = chat.optJSONArray("messages") ?: return false
+        if (index < 0 || index >= messages.length()) return false
+        val msg = messages.getJSONObject(index)
+        if (emoji.isNullOrEmpty()) msg.remove(ReplyQuote.REACTION_FIELD)
+        else msg.put(ReplyQuote.REACTION_FIELD, emoji)
         return true
     }
 

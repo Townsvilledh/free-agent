@@ -1,6 +1,7 @@
 package org.freeagent.app
 
 import org.json.JSONObject
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test

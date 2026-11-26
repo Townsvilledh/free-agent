@@ -1,5 +1,8 @@
 package org.freeagent.app
 
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -31,6 +34,7 @@ import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import okhttp3.Call
@@ -192,6 +196,8 @@ class MainActivity : AppCompatActivity() {
      *  (replayed) bubbles never become it. */
     private var liveBubble: TextView? = null
     private lateinit var attachmentBar: View
+    private lateinit var quoteBar: View
+    private lateinit var quoteBarText: TextView
     private lateinit var attachmentThumb: ImageView
     private lateinit var attachmentName: TextView
 
@@ -245,6 +251,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Currently picked attachment (uri + display name + mime), or null. */
     private var pendingAttachment: Triple<Uri, String, String?>? = null
+    // v1.0.1 reply-to-message: the pending quote — (quoted
+    // role, snippet) set from the long-press menu's Reply.
+    private var pendingQuote: Pair<String, String>? = null
 
     private var defaultHint: CharSequence = ""
 
@@ -378,6 +387,8 @@ class MainActivity : AppCompatActivity() {
         attachmentBar = findViewById(R.id.attachmentBar)
         attachmentThumb = findViewById(R.id.attachmentThumb)
         attachmentName = findViewById(R.id.attachmentName)
+        quoteBar = findViewById(R.id.quoteBar)
+        quoteBarText = findViewById(R.id.quoteBarText)
 
         chatStore = ChatStore(this)
         BackupWorker.schedule(this)
@@ -427,6 +438,7 @@ class MainActivity : AppCompatActivity() {
             pickAttachment.launch(arrayOf("image/*", "*/*"))
         }
         findViewById<Button>(R.id.clearAttachmentButton).setOnClickListener { clearAttachment() }
+        findViewById<Button>(R.id.clearQuoteButton).setOnClickListener { clearPendingQuote() }
 
         uiAlive = true
         activeChatId = chatStore.ensureActiveChat()
@@ -550,11 +562,22 @@ class MainActivity : AppCompatActivity() {
         val flight = flights[chatId]
         val waiting = flight?.queue?.waitingCount ?: 0
         val userBubbles = mutableListOf<Pair<TextView, String>>()
-        for (m in messages) {
+        for ((index, m) in messages.withIndex()) {
             val role = m.optString("role")
             val display = if (m.has("display")) m.optString("display")
                 else m.optString("content")
-            val bubble = appendLine(if (role == "user") "You" else "Lille", display)
+            // v1.0.1: the stored reaction shows under the
+            // bubble's text; the long-press menu (reactions,
+            // Reply / Copy / Select / Share) hangs off every
+            // stored bubble, his and hers alike.
+            val reaction = ReplyQuote.reaction(m)
+            val shown = if (reaction != null) display + "\n" + reaction
+                else display
+            val bubble = appendLine(if (role == "user") "You" else "Lille", shown)
+            bubble.setOnLongClickListener {
+                showMessageMenu(chatId, index, role, display, bubble)
+                true
+            }
             if (role == "user") userBubbles.add(bubble to display)
         }
         if (waiting > 0 && userBubbles.size >= waiting) {
@@ -660,6 +683,149 @@ class MainActivity : AppCompatActivity() {
         attachmentThumb.setImageBitmap(null)
     }
 
+    // ---------- message menu: reactions + reply (v1.0.1) ----
+
+    private fun clearPendingQuote() {
+        pendingQuote = null
+        quoteBar.visibility = View.GONE
+    }
+
+    private fun setPendingQuote(role: String, quotedText: String) {
+        val snip = ReplyQuote.snippet(quotedText)
+        pendingQuote = role to snip
+        quoteBarText.text = ReplyQuote.quoteBlock(role, snip)
+        quoteBar.visibility = View.VISIBLE
+        input.requestFocus()
+    }
+
+    /**
+     * The long-press message menu, patterned on the Muse
+     * chat: a reactions row (with "+" for more) over Reply /
+     * Copy / Select / Share. Applies to any stored bubble.
+     * Reactions toggle on the record (MessageActions' rule)
+     * and persist via the store — restart- and backup-safe.
+     */
+    private fun showMessageMenu(
+        chatId: String, index: Int, role: String,
+        display: String, bubble: TextView
+    ) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 16, 24, 8)
+        }
+        val dialog = AlertDialog.Builder(this).setView(root).create()
+        fun reactionRow(emojis: List<String>, withPlus: Boolean) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            for (emoji in emojis) {
+                row.addView(Button(this).apply {
+                    text = emoji
+                    setOnClickListener {
+                        dialog.dismiss()
+                        applyReaction(chatId, index, emoji, bubble, display)
+                    }
+                })
+            }
+            if (withPlus) {
+                row.addView(Button(this).apply {
+                    text = "+"
+                    setOnClickListener {
+                        dialog.dismiss()
+                        showMoreReactions(chatId, index, bubble, display)
+                    }
+                })
+            }
+            root.addView(row)
+        }
+        reactionRow(MessageActions.REACTIONS, withPlus = true)
+        for (item in MessageActions.ITEMS) {
+            root.addView(Button(this).apply {
+                text = item.title
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                setOnClickListener {
+                    dialog.dismiss()
+                    when (item) {
+                        MessageActions.Item.REPLY ->
+                            setPendingQuote(role, display)
+                        MessageActions.Item.COPY -> {
+                            val cm = getSystemService(
+                                Context.CLIPBOARD_SERVICE
+                            ) as ClipboardManager
+                            cm.setPrimaryClip(
+                                ClipData.newPlainText("Lille message", display)
+                            )
+                            Toast.makeText(
+                                this@MainActivity, "Copied",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        MessageActions.Item.SELECT -> {
+                            bubble.setTextIsSelectable(true)
+                            bubble.requestFocus()
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Drag the handles to select text",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        MessageActions.Item.SHARE -> {
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, display)
+                            }
+                            startActivity(
+                                Intent.createChooser(send, "Share message")
+                            )
+                        }
+                    }
+                }
+            })
+        }
+        dialog.show()
+    }
+
+    private fun showMoreReactions(
+        chatId: String, index: Int, bubble: TextView, display: String
+    ) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 16, 24, 8)
+        }
+        val dialog = AlertDialog.Builder(this).setView(root).create()
+        MessageActions.MORE_REACTIONS.chunked(4).forEach { chunk ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            for (emoji in chunk) {
+                row.addView(Button(this).apply {
+                    text = emoji
+                    setOnClickListener {
+                        dialog.dismiss()
+                        applyReaction(chatId, index, emoji, bubble, display)
+                    }
+                })
+            }
+            root.addView(row)
+        }
+        dialog.show()
+    }
+
+    private fun applyReaction(
+        chatId: String, index: Int, emoji: String,
+        bubble: TextView, display: String
+    ) {
+        val current = ChatData.messages(chatStore.root(), chatId)
+            .getOrNull(index)?.let { ReplyQuote.reaction(it) }
+        val next = MessageActions.toggleReaction(current, emoji)
+        if (chatStore.setReaction(chatId, index, next)) {
+            renderedMtime = chatStore.lastModified()
+            bubble.text = styledText(
+                if (next != null) display + "\n" + next else display
+            )
+        }
+    }
+
     // ---------- chat ----------
 
     /**
@@ -684,22 +850,35 @@ class MainActivity : AppCompatActivity() {
         // state is cleared below, but whether this message
         // carried a file is part of what it means.
         val hadAttachment = pendingAttachment != null
+        // v1.0.1 reply-to-message: the pending quote rides
+        // this send — visibly on the bubble, in the store,
+        // and as marked context in what the model (or a task
+        // born from this reply) receives.
+        val quote = pendingQuote
 
         var outgoing = raw
-        val display = pendingAttachment?.let { (_, name, mime) ->
+        var display = pendingAttachment?.let { (_, name, mime) ->
             val note = "[Attached file: $name (${mime ?: "unknown type"}). " +
                 "Note: in this version the attachment is recorded by name only — " +
                 "full file/image understanding is a next step, so do not claim to have seen its contents.]"
             outgoing = if (outgoing.isEmpty()) note else "$outgoing\n$note"
             (if (raw.isEmpty()) "" else "$raw ") + "[attachment: $name]"
         } ?: raw
+        if (quote != null) {
+            display = ReplyQuote.displayText(quote.first, quote.second, display)
+            outgoing = ReplyQuote.markedContent(quote.first, quote.second, outgoing)
+        }
         val bubble = appendLine("You", display)
-        chatStore.appendMessage(chatId, "user", outgoing, display)
+        chatStore.appendMessage(
+            chatId, "user", outgoing, display,
+            quoteRole = quote?.first, quoteText = quote?.second
+        )
         renderedMtime = chatStore.lastModified()
         BackupManager.requestBackup(this)
 
         input.text.clear()
         clearAttachment()
+        clearPendingQuote()
 
         // v0.12 — WALLET PROMPTS (WALLET.md): money moves
         // only through the deterministic parser, never
@@ -758,8 +937,13 @@ class MainActivity : AppCompatActivity() {
         // exists — and the engine's graded reports land back
         // in this thread (ChatTaskReporter). An ambiguous ask
         // gets ONE short question, never a guess.
+        // A quoted reply is classified on its full marked
+        // form: fragment + quote = the job input (the quote
+        // is part of what the user is asking about). Unquoted
+        // messages classify exactly as before, on raw.
+        val jdText = if (quote != null) outgoing else raw
         when (val jd = JobDetect.classify(
-            raw, ChatData.messages(chatStore.root(), chatId),
+            jdText, ChatData.messages(chatStore.root(), chatId),
             hasAttachment = hadAttachment
         )) {
             is JobDetect.Outcome.StartTask -> {
@@ -769,7 +953,7 @@ class MainActivity : AppCompatActivity() {
                 // question was about, recovered from the thread.
                 startChatTask(
                     chatId,
-                    if (jd.instruction == raw) outgoing else jd.instruction
+                    if (jd.instruction == jdText) outgoing else jd.instruction
                 )
                 return
             }
