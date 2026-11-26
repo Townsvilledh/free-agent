@@ -41,7 +41,10 @@ CHAT_HONESTY_RULE = (
     "created, fetched, submitted or completed anything you did not "
     "actually do through a tool in a task. When the user gives you "
     "a job in chat, say you are starting it and what happens next, "
-    "in the present tense — never narrate a finished result."
+    "in the present tense — never narrate a finished result. If the "
+    "user is giving you a job to do in the world — not a question "
+    "to answer — and no task has been started for it, ask exactly: "
+    "\"Want me to take that on as a task?\""
 )
 
 def load_memory(base):

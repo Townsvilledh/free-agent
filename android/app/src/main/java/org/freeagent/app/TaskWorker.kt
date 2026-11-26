@@ -39,6 +39,11 @@ class TaskWorker(context: Context, params: WorkerParameters) :
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
         setForeground(createForegroundInfo(taskId))
         val finalState = TaskRunner(applicationContext).runTask(taskId)
+        // v0.13: a task born in a chat reports its settled
+        // state back INTO that chat (graded, deduplicated by
+        // ChatTaskLink). Waiting states compose nothing — the
+        // retry below is their whole story.
+        ChatTaskReporter(applicationContext).deliver(taskId, finalState)
         return if (TaskStates.isWaiting(finalState)) Result.retry() else Result.success()
     }
 

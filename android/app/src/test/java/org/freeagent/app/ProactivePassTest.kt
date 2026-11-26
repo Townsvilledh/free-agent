@@ -127,6 +127,34 @@ class ProactivePassTest {
     }
 
     @Test
+    fun chatBornTaskSettlesSilentlyHere() {
+        // v0.13: a chat-born task reports into its chat via
+        // ChatTaskReporter — the away-report must NOT also
+        // fire, and the pickup is still retired.
+        val data = MemData()
+        var taskState = TaskStates.QUEUED
+        val task = JSONObject()
+            .put("id", "task-chat").put("text", "do the chat thing")
+            .put("summary", "").put("note", "")
+            .put(ChatTaskLink.ORIGIN_FIELD, "chat-1")
+        val pass = ProactivePass(
+            data,
+            tasks = {
+                task.put("state", taskState)
+                listOf(task)
+            },
+            fetch = { 200 to "" }, now = { now }
+        )
+        assertEquals(listOf("task-chat"), pass.run().pickupTaskIds)
+        taskState = TaskStates.COMPLETED
+        task.put("summary", "done in chat")
+        val s = pass.run()
+        assertEquals(0, s.reportsWritten)
+        assertEquals(0, data.rpts.size)
+        assertTrue(data.pcks.isEmpty())
+    }
+
+    @Test
     fun fetchErrorLeavesCommitmentOpen() {
         val data = MemData()
         data.cmts.add(watch("url:https://x.test/down"))

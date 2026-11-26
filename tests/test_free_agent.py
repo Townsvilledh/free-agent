@@ -597,6 +597,12 @@ class TestChatHonestyRule(unittest.TestCase):
             "in a task", content)
         self.assertIn("never narrate a finished result", content)
 
+    def test_honesty_rule_carries_the_task_question(self):
+        # v0.13 mirror of the app prompt: a job the deterministic
+        # layer missed is met with the one clarifying question.
+        content = self._content()
+        self.assertIn("Want me to take that on as a task?", content)
+
 
 if __name__ == "__main__":
     unittest.main()

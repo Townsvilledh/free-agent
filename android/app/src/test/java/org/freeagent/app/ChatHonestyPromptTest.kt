@@ -70,4 +70,17 @@ class ChatHonestyPromptTest {
         assertTrue(prompt.contains("say you are starting it and what happens next"))
         assertTrue(prompt.contains("never narrate a finished result"))
     }
+
+    /** v0.13: when the model itself judges a message to be a
+     *  job the deterministic layer missed, it must ask the
+     *  one contractual question — JobDetect resolves the
+     *  user's "yes" from the thread by that exact wording. */
+    @Test
+    fun chatPromptCarriesTheTaskQuestion() {
+        assertTrue(
+            normalisedPrompt().contains(
+                "Want me to take that on as a task?"
+            )
+        )
+    }
 }
