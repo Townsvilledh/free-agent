@@ -19,13 +19,16 @@ import java.util.concurrent.TimeUnit
  * This is the full Drive REST path (find / download / create /
  * update) over plain HTTPS with the OAuth access token the
  * Backup screen obtains after the user's Google consent. It
- * is gated by BuildConfig.DRIVE_ENABLED, which stays FALSE
- * until the Google Cloud OAuth client for this app exists
- * (package + the stable signing certificate's fingerprint,
- * registered in Ethuram's own Cloud project — BACKUP.md lists
- * the exact console steps). With the flag off, every entry
- * point reports Disabled and no Google sign-in is ever
- * attempted.
+ * is gated by BuildConfig.DRIVE_ENABLED. Since v0.11.1 the
+ * Google Cloud OAuth client for this app exists (package +
+ * the stable signing certificate's fingerprint, registered
+ * in Ethuram's own Cloud project `lille-515912` — BACKUP.md
+ * records the registration) and the shipped build carries
+ * the flag TRUE. No client ID is wired anywhere: Android
+ * sign-in is matched by package + certificate fingerprint,
+ * and the token comes from GoogleAuthUtil by account. With
+ * the flag off (forks, local builds), every entry point
+ * reports Disabled and no Google sign-in is ever attempted.
  *
  * All calls are blocking — callers run them off the UI thread.
  */

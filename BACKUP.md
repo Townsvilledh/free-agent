@@ -76,11 +76,35 @@ exists, its size, and when it changed. What Google cannot see:
 anything inside it. There is no Lille server in this design —
 your Drive, your folder, your wallet.
 
-**Status: shipped DISABLED-BY-CONFIG.** The full code path
-(Google sign-in, appDataFolder find/download/create/update) is
-in the app behind `BuildConfig.DRIVE_ENABLED`, which is false
-until the OAuth client below exists. The app says so plainly on
-the backup screen; folder + file backups work fully today.
+**Status (v0.11.0): shipped DISABLED-BY-CONFIG.** The full
+code path (Google sign-in, appDataFolder find/download/
+create/update) is in the app behind
+`BuildConfig.DRIVE_ENABLED`, which was false until the OAuth
+client below existed. In v0.11.0 the app said so plainly on
+the backup screen; folder + file backups worked fully.
+
+**Status (v0.11.1, 2026-11-26): Drive layer ENABLED.** The
+console steps below were completed in the owner's own Google
+account (project `lille-515912`, Drive API on, Android OAuth
+client registered for `org.freeagent.app` + the stable
+signing cert's SHA-1), the repo variable
+`LILLE_DRIVE_ENABLED=true` is set, and the shipped v0.11.1
+build carries `DRIVE_ENABLED=true`. No client ID value is
+wired into the app: on Android, Google matches the sign-in by
+package name + signing-certificate fingerprint, and the app
+requests only the `drive.appdata` scope — no server auth
+code, no ID token, no secret anywhere.
+
+**What "Testing" means for users today.** The project's
+OAuth consent screen is in Google's **Testing** status. In
+plain words: Drive sync works only for Google accounts the
+owner has added as **test users** on the consent screen (the
+owner is being added); everyone else's Drive sign-in is
+refused by Google until the consent screen is **published**.
+Publishing is a separate step, and its outcome will be
+reported separately — until then, a non-test user's backup
+still works fully via the folder layer and file export;
+Drive is simply not offered to them by Google.
 
 ### Turning Drive on — the exact console steps (for Muse/owner)
 
