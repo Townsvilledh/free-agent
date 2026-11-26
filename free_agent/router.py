@@ -45,6 +45,21 @@ from . import recovery
 FALLBACK_STATUSES = {402, 429, 503}
 MAX_STREAM_CONTINUATIONS = 3
 
+# Groq's edge rejects the default Python urllib User-Agent with an
+# HTTP 403 (live-verified 2026-11-26 via the hostkeys bridge: a valid
+# credential 403'd with the default UA and succeeded with this one).
+# The custom.groq connector helper sets the identical browser UA for
+# the same reason. Scoped to the Groq provider ONLY — every other
+# provider's headers are unchanged.
+GROQ_USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def _apply_provider_headers(req, provider):
+    """Per-provider request headers. Today: Groq's browser UA only."""
+    if provider.name == "groq":
+        req.add_header("User-Agent", GROQ_USER_AGENT)
+
 @dataclass
 class RouteEvent:
     provider: str
@@ -129,6 +144,7 @@ class Router:
         url = provider.base_url.rstrip("/") + provider.chat_path
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
+        _apply_provider_headers(req, provider)
         key = provider.key()
         if key:
             req.add_header("Authorization", "Bearer " + key)
@@ -166,6 +182,7 @@ class Router:
         url = provider.base_url.rstrip("/") + provider.chat_path
         req = urllib.request.Request(url, data=body, method="POST")
         req.add_header("Content-Type", "application/json")
+        _apply_provider_headers(req, provider)
         key = provider.key()
         if key:
             req.add_header("Authorization", "Bearer " + key)
@@ -335,6 +352,7 @@ class Router:
         url = provider.base_url.rstrip("/") + provider.chat_path
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
+        _apply_provider_headers(req, provider)
         key = provider.key()
         if key:
             req.add_header("Authorization", "Bearer " + key)
