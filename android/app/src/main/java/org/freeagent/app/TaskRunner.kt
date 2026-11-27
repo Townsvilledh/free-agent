@@ -1460,7 +1460,10 @@ class TaskRunner(private val context: Context) {
                 val model = vault.getSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY)
                     ?.ifBlank { null } ?: OwnKeyRoutes.LAN_DEFAULT_MODEL
                 attempt(route.key) {
-                    callOpenAi(chatUrl(base), model, null, messages)
+                    callOpenAi(
+                        base.trimEnd('/') + "/chat/completions",
+                        model, null, messages
+                    )
                 }?.let { return it }
                 continue
             }
