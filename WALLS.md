@@ -368,6 +368,37 @@ Priority = how often the wall blocks real work.
   browser-session surfaces for both (her v0.8 browser, later the
   on-device lane), so "checked" stops depending on keyless HTTP.
 
+### W25. Mostro's Cashu dispute half does not route — the escrow dependency's missing lifecycle — class I
+- **Evidence:** Fresh live re-test, 2026-11-19
+  (`~/workspace/research_notes/mostro-cashu-dispute-20261119/report.md`;
+  harness repo Townsvilledh/mostro-cashu-dispute-harness): on
+  released mostrod 0.20.2 the Cashu 2-of-3 lock routes
+  (`CashuEscrowLocked` received, order `cec8fa71-…`, 32,768 test
+  sats, local Nutshell mint), but every post-lock action —
+  `dispute`, `fiat-sent`, `release`, `cancel`,
+  `admin-take-dispute`, `admin-settle` — is refused `CantDo
+  invalid_action`, and `Action::CashuPmSignature` (defined in
+  mostro-core 0.17.4) is never emitted. mostro `main` (commit
+  `265121f`) still carries a test asserting the block; Track D
+  exists only as `docs/cashu/05-track-d-dispute.md`. The daemon's
+  book shows the order `active` forever — a silent failure
+  dressed as a live trade. The 2-of-3 shape itself passes every
+  attack (operator alone / + stranger / either party alone all
+  rejected by the mint, code 11000; buyer redeemed in full with
+  the daemon down) — the wall is the missing dispute path alone,
+  and it gates Lubrica's escrow leg (five-point bar, point 2).
+- **Lille solution — TO BUILD (owned task, tasked 2026-11-27):**
+  the Mostro dispute task pack —
+  `~/workspace/goals/lubrica-fluid-s-routing-plug/files/lille-mostro-dispute-task.md`
+  (PARITY.md row 54). Reproduce the battery, trace the messages
+  to the exact break point, classify it (protocol gap /
+  implementation bug / configuration), and close it with the
+  acceptance test: a dispute opened and resolved end to end on a
+  test environment with the message trail captured — or a
+  proven, evidence-backed verdict that 0.20.2 cannot do it and
+  the version/change that can. Test environments only, no
+  mainnet funds.
+
 ---
 
 ## TikTok — her next acceptance task (after the X test)
