@@ -226,6 +226,9 @@ object ChatOutputGuard {
         if (statusDenial(prose)) {
             return Verdict.Rejected("status-denial")
         }
+        if (askBack(prose)) {
+            return Verdict.Rejected("ask-back")
+        }
         if (selfDenial(prose)) {
             return Verdict.Rejected("identity-denial")
         }
@@ -310,6 +313,94 @@ object ChatOutputGuard {
                 .split(Regex("[^a-z0-9'\\-]+"))
                 .map { it.trim('\'') }
             if (words.any { it in STATUS_OBJECT_WORDS }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * ASK-BACK (v1.0.9, born of the 2026-11-27 14:29
+     * screenshot): asked which account was signed in,
+     * the brain — quoting a stale stamp — outsourced
+     * the reading to the user: "you can verify which
+     * account is active by checking the profile icon or
+     * the URL @username in the browser yourself. Let me
+     * know once you've confirmed the handle, and I can
+     * continue…" A fact the app itself can read (the
+     * signed-in identity, the browser's page, a task's
+     * state) is never the user's homework: she reads
+     * it, or a check is already running and she says
+     * so. Structural shapes, sentence-local, every one
+     * bound to an OWN-STATE object word (account,
+     * handle, profile, sign-in, browser, page, task,
+     * status, session…):
+     *  - "let me know once/when you've confirmed /
+     *    checked / verified …" (the report-back frame);
+     *  - "you can verify / check / confirm … <object>"
+     *    (the do-it-yourself frame);
+     *  - a sentence-opening imperative "check / verify
+     *    / confirm … <object>";
+     *  - "tell me which / what / whether … <object>".
+     * The object binding is the precision: asks for
+     * genuinely-HIS inputs carry none of these shapes —
+     * the parked sign-in instructions ("sign in with
+     * your own X account, then tap Done"), an approval
+     * ("say approve and I'll post it"), a preference
+     * ("let me know if you'd like the summary
+     * shorter"), and world-fact asks ("let me know once
+     * you've checked the price on the exchange" — no
+     * own-state object) all pass.
+     */
+    private val ASK_BACK_OBJECT_WORDS = setOf(
+        "account", "accounts", "handle", "profile",
+        "profiles", "logged", "login", "sign-in",
+        "signin", "signed", "browser", "page", "task",
+        "tasks", "status", "session"
+    )
+
+    private val ASK_BACK_REPORT_RE = Regex(
+        "\\blet me know\\b[^.!?\\n]{0,40}?" +
+            "\\byou'?ve\\s+(confirmed|checked|verified|" +
+            "signed|logged)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val ASK_BACK_YOU_CAN_RE = Regex(
+        "\\byou can\\s+(verify|check|confirm)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val ASK_BACK_TELL_ME_RE = Regex(
+        "\\btell me\\s+(which|what|whether|if)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val ASK_BACK_IMPERATIVE_RE = Regex(
+        "^\\s*(please\\s+)?(check|verify|confirm)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun askBack(prose: String): Boolean {
+        for (sentence in prose.split(Regex("(?<=[.!?])\\s+|\\n+"))) {
+            val words = sentence.lowercase()
+                .split(Regex("[^a-z0-9'\\-]+"))
+                .map { it.trim('\'') }
+            val hasObject = words.any {
+                it in ASK_BACK_OBJECT_WORDS
+            }
+            if (ASK_BACK_REPORT_RE.containsMatchIn(sentence) &&
+                (hasObject || ASK_BACK_REPORT_RE.find(sentence)
+                    ?.groupValues?.getOrNull(1) in
+                    setOf("signed", "logged"))
+            ) {
+                return true
+            }
+            if (hasObject &&
+                (ASK_BACK_YOU_CAN_RE.containsMatchIn(sentence) ||
+                    ASK_BACK_TELL_ME_RE.containsMatchIn(sentence) ||
+                    ASK_BACK_IMPERATIVE_RE.containsMatchIn(sentence))
+            ) {
                 return true
             }
         }

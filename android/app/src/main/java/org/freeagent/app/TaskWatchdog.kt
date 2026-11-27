@@ -84,4 +84,26 @@ object TaskWatchdog {
      *  states — the states a user pass can actually move. */
     fun runNowOffered(state: String): Boolean =
         TaskStates.isWaiting(state)
+
+    /** Identity re-checks owed (v1.0.9): records whose
+     *  latest identity read could not conclude
+     *  (SessionIdentity's unreadable mark is the latest
+     *  word) and whose unreadable rest has expired —
+     *  the watchdog retries the READ on its own, so an
+     *  unreadable page never leaves the sign-in unknown
+     *  forever. Terminal, archived and killed records
+     *  are never re-read: their sign-in is history, and
+     *  a killed task stays killed. */
+    fun identityRecheckIds(
+        tasks: List<JSONObject>, nowMs: Long
+    ): List<String> =
+        tasks.filter {
+            !TaskStates.isTerminal(it.optString("state")) &&
+                !TaskControl.isArchived(it) &&
+                !TaskControl.wasKilled(it) &&
+                SessionIdentity.unreadableReason(it) != null &&
+                nowMs - it.optLong(
+                    SessionIdentity.UNREADABLE_AT_FIELD, 0L
+                ) >= SessionIdentity.UNREADABLE_RETRY_MS
+        }.map { it.optString("id") }.filter { it.isNotEmpty() }
 }

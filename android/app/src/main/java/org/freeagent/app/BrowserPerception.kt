@@ -229,6 +229,130 @@ object BrowserPerception {
             "  return nav ? ('text:' + (nav.innerText || '').replace(/\\s+/g, ' ')) : null;\n" +
             "})())"
 
+    /** X lane: open the account menu (v1.0.9) — the
+     *  scripted reveal for a signed-in page whose handle
+     *  is not in the tree: tap the account-switcher
+     *  button, or the profile tab (which lands on the
+     *  profile page, whose URL and switcher then name
+     *  the handle). Fixed script; the model never
+     *  writes JS. */
+    val X_OPEN_ACCOUNT_MENU_JS: String =
+        "(() => { const b = document.querySelector('[data-testid=\"SideNav_AccountSwitcher_Button\"]') " +
+            "|| document.querySelector('a[data-testid=\"AppTabBar_Profile_Link\"]'); " +
+            "if (!b) return 'missing'; b.click(); return 'clicked'; })()"
+
+    /** What a page can tell the identity read (v1.0.9):
+     *  the handle is right there, the session is real
+     *  but the handle sits behind the account menu, the
+     *  page is a signed-out page, or the page says
+     *  nothing either way. The read must CONCLUDE —
+     *  signed in as a handle, or signed out — and only
+     *  the last shape may end a read unconcluded, as an
+     *  explicit UNREADABLE with this shape as its
+     *  reason's evidence. */
+    enum class XIdentityShape {
+        HANDLE_IN_TREE, HANDLE_BEHIND_MENU, SIGNED_OUT, UNREADABLE
+    }
+
+    private val HANDLE_RE = Regex("^[A-Za-z0-9_]{1,15}$")
+
+    /** A bare profile path ("/LilleAgent") as a handle;
+     *  null for anything longer or not handle-shaped. */
+    private fun profilePathHandle(path: String): String? {
+        val seg = path.trim().trimEnd('/').removePrefix("/")
+        if (seg.isEmpty() || seg.contains("/")) return null
+        return if (HANDLE_RE.matches(seg)) seg else null
+    }
+
+    /** The handle a bare profile URL names
+     *  ("https://x.com/LilleAgent") — the reveal the
+     *  profile-tab tap produces. Reserved first
+     *  segments (home, settings…) are not handles. */
+    fun xHandleFromProfileUrl(url: String): String? {
+        val domain = domainOf(url)
+        if (domain != "x.com" && !domain.endsWith(".x.com")) {
+            return null
+        }
+        val path = url.substringAfter("x.com", "")
+            .substringBefore("?").substringBefore("#")
+        val seg = path.trim().trimEnd('/').removePrefix("/")
+            .substringBefore("/")
+        if (seg.isEmpty() || seg.lowercase() in
+            setOf(
+                "home", "explore", "notifications", "messages",
+                "i", "settings", "compose", "search", "login",
+                "signup", "bookmarks", "lists", "hashtag"
+            )
+        ) {
+            return null
+        }
+        return if (HANDLE_RE.matches(seg)) seg else null
+    }
+
+    /** The signed-in handle from a collected page's own
+     *  elements: the profile tab's href, or the account
+     *  switcher's text. The same testimony X_HANDLE_JS
+     *  reads live, judged from the snapshot — so the
+     *  shape logic is pinnable against fixture states. */
+    fun xHandleFromState(state: PageState): String? {
+        for (el in state.elements) {
+            when (el.testid) {
+                "AppTabBar_Profile_Link" ->
+                    profilePathHandle(el.href)?.let { return it }
+                "SideNav_AccountSwitcher_Button" -> {
+                    val m = Regex("@([A-Za-z0-9_]{1,15})")
+                        .find(el.text)
+                    if (m != null) return m.groupValues[1]
+                }
+            }
+        }
+        return null
+    }
+
+    /** Signed-in chrome: the furniture only a live
+     *  session renders (compose, the profile tab, the
+     *  account switcher). */
+    fun xSignedInChrome(state: PageState): Boolean =
+        state.elements.any { el ->
+            el.testid == "SideNav_NewTweet_Button" ||
+                el.testid == "AppTabBar_Profile_Link" ||
+                el.testid == "SideNav_AccountSwitcher_Button" ||
+                el.href == "/compose/post" ||
+                el.href == "/compose/tweet"
+        }
+
+    /** Signed-out chrome: the login/signup doors a
+     *  signed-out page renders. */
+    fun xSignedOutChrome(state: PageState): Boolean =
+        state.elements.any { el ->
+            el.href.contains("/i/flow/login") ||
+                el.href.contains("/i/flow/signup") ||
+                el.href == "/login" || el.href == "/signup" ||
+                ((el.tag == "a" || el.role == "button") &&
+                    (el.text.equals("Log in", ignoreCase = true) ||
+                        el.text.equals("Sign up", ignoreCase = true)))
+        }
+
+    /** Judge a collected page for the identity read:
+     *  [handle] is the read's handle evidence (the live
+     *  X_HANDLE_JS value, or [xHandleFromState]) when
+     *  either found one. A signed-in page with no
+     *  handle in the tree is HANDLE_BEHIND_MENU — the
+     *  read's next step, never a signed-out conclusion:
+     *  on 2026-11-27 exactly that page (a signed-in
+     *  home feed whose handle sits behind the avatar)
+     *  was stamped signed OUT, and the stale stamp was
+     *  later quoted as fact. */
+    fun xIdentityShape(
+        state: PageState, handle: String?
+    ): XIdentityShape = when {
+        handle != null -> XIdentityShape.HANDLE_IN_TREE
+        xSignedOutChrome(state) && !xSignedInChrome(state) ->
+            XIdentityShape.SIGNED_OUT
+        xSignedInChrome(state) -> XIdentityShape.HANDLE_BEHIND_MENU
+        else -> XIdentityShape.UNREADABLE
+    }
+
     /** X lane: timeline/search articles — same extraction as the
      *  host lane's _EXTRACT_ARTICLES. */
     fun xArticlesJs(count: Int): String =

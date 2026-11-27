@@ -43,7 +43,14 @@ object StateSheet {
         /** The accounts registry's summary lines
          *  (AccountsRegistry.summaryLines) — the accounts
          *  she holds, whose they are, which is active. */
-        val accountsLines: List<String> = emptyList()
+        val accountsLines: List<String> = emptyList(),
+        /** The live session's last-activity marker
+         *  (v1.0.9) — the freshness rule's input beside
+         *  the records' takeover/handback stamps: an
+         *  identity stamp older than the browser's last
+         *  activity is rendered as BEING RE-CHECKED,
+         *  never stated as the current sign-in. */
+        val browserActivityAt: Long = 0L
     )
 
     /** How many task lines the sheet carries — the
@@ -73,13 +80,16 @@ object StateSheet {
                 "verify or confirm your own task status, " +
                 "browser or login state — the facts are here."
         )
-        val lines = taskLines(tasks, now)
+        val activity = SessionIdentity.lastBrowserActivity(
+            tasks, facts.browserActivityAt
+        )
+        val lines = taskLines(tasks, now, activity)
         if (lines.isEmpty()) {
             out.append("\n- No tasks on record right now.")
         } else {
             for (line in lines) out.append("\n").append(line)
         }
-        browserLine(tasks, facts)?.let {
+        browserLine(tasks, facts, activity)?.let {
             out.append("\n").append(it)
         }
         out.append("\n").append(xLine(facts))
@@ -110,7 +120,7 @@ object StateSheet {
      *  finish that doesn't stand (FinishGate), and the
      *  browser's identity stamp (SessionIdentity). */
     fun taskLines(
-        tasks: List<JSONObject>, now: Long
+        tasks: List<JSONObject>, now: Long, activityAt: Long = 0L
     ): List<String> {
         val visible = tasks.filter { !TaskControl.isArchived(it) }
         val live = visible.filter {
@@ -123,7 +133,9 @@ object StateSheet {
                 now - it.optLong("updatedAt", 0L) <= TERMINAL_WINDOW_MS
         }.sortedByDescending { it.optLong("updatedAt", 0L) }
         val picked = (live + recentDone).take(MAX_TASKS)
-        val lines = picked.map { task -> taskLine(task) }.toMutableList()
+        val lines = picked.map { task ->
+            taskLine(task, activityAt)
+        }.toMutableList()
         val hidden = visible.size - picked.size
         if (hidden > 0) {
             lines.add("- …and $hidden more task(s) on record.")
@@ -132,7 +144,9 @@ object StateSheet {
     }
 
     /** One task's fact line. */
-    fun taskLine(task: JSONObject): String {
+    fun taskLine(
+        task: JSONObject, activityAt: Long = 0L
+    ): String {
         val out = StringBuilder()
         out.append("- Task “")
             .append(TaskTransparency.titleFor(task)).append("”: ")
@@ -170,11 +184,42 @@ object StateSheet {
                     "finish was reopened because $discrepancy."
             )
         }
-        // The identity stamp, when this task's lane read it.
-        if (SessionIdentity.checked(task)) {
+        // The identity stamp, when this task's lane read
+        // it — under the v1.0.9 freshness rule: a stamp
+        // older than the browser's last activity is NOT
+        // current fact (it is being re-checked), and an
+        // unreadable latest read replaces the stamp's
+        // claim outright. Neither may be quoted as the
+        // sign-in now.
+        val unreadable = SessionIdentity.unreadableReason(task)
+        if (unreadable != null) {
+            out.append(
+                " The latest sign-in check couldn't read " +
+                    "the page ($unreadable) — a re-check " +
+                    "is running; no older sign-in state " +
+                    "is current."
+            )
+        } else if (SessionIdentity.checked(task)) {
             val signed = SessionIdentity.signedInAs(task)
             val at = SessionIdentity.checkedLabel(task)
-            if (signed != null) {
+            if (SessionIdentity.stampStale(task, activityAt)) {
+                out.append(
+                    " Browser sign-in is being re-checked: " +
+                        "the last read said "
+                )
+                out.append(
+                    if (signed != null) {
+                        "signed in as @$signed"
+                    } else {
+                        "signed out"
+                    }
+                )
+                if (at != null) out.append(" (checked $at)")
+                out.append(
+                    ", but the browser has moved since, " +
+                        "so that is not the current state."
+                )
+            } else if (signed != null) {
                 out.append(" Browser signed in as @$signed")
                 if (at != null) out.append(" (checked $at)")
                 out.append(".")
@@ -197,17 +242,28 @@ object StateSheet {
     }
 
     /** The browser's resting page + the freshest
-     *  identity stamp across the records, when either is
+     *  identity read across the records, when either is
      *  known. The resting page is session state the glue
-     *  reads; the stamp is record state — the freshest
-     *  stamp is the browser's current identity as far as
-     *  her records know. */
+     *  reads; the read is record state — under the
+     *  v1.0.9 freshness rule the freshest read is the
+     *  browser's current identity ONLY when it postdates
+     *  the browser's last activity; a stale read renders
+     *  as being re-checked, and an unreadable latest
+     *  read renders as unknown — neither is stated as
+     *  the sign-in. */
     fun browserLine(
-        tasks: List<JSONObject>, facts: Facts
+        tasks: List<JSONObject>, facts: Facts,
+        activityAt: Long = 0L
     ): String? {
         val freshest = tasks
-            .filter { SessionIdentity.checked(it) }
-            .maxByOrNull { it.optLong(SessionIdentity.AT_FIELD, 0L) }
+            .filter {
+                SessionIdentity.checked(it) ||
+                    SessionIdentity.unreadableReason(it) != null
+            }
+            .maxByOrNull { SessionIdentity.concludedAt(it) }
+        val unreadable = freshest?.let {
+            SessionIdentity.unreadableReason(it)
+        }
         val signed = freshest?.let { SessionIdentity.signedInAs(it) }
         val checkedAt = freshest?.let { SessionIdentity.checkedLabel(it) }
         if (facts.browserUrl.isEmpty() && freshest == null) {
@@ -221,25 +277,59 @@ object StateSheet {
             }
         }
         if (freshest != null) {
-            if (signed != null) {
-                out.append(
-                    if (facts.browserUrl.isNotEmpty()) {
-                        "; it is signed in as @$signed"
-                    } else {
-                        " is signed in as @$signed"
-                    }
-                )
+            val sep = if (facts.browserUrl.isNotEmpty()) {
+                "; "
             } else {
-                out.append(
-                    if (facts.browserUrl.isNotEmpty()) {
-                        "; it is signed out"
-                    } else {
-                        " is signed out"
-                    }
-                )
+                " "
             }
-            if (checkedAt != null) {
-                out.append(" (checked $checkedAt)")
+            when {
+                unreadable != null -> out.append(sep).append(
+                    "its sign-in couldn't be read at the " +
+                        "latest check ($unreadable) — a " +
+                        "re-check is running, and no older " +
+                        "sign-in state is current"
+                )
+                SessionIdentity.stampStale(freshest, activityAt) ->
+                    out.append(sep).append(
+                        "its sign-in is being re-checked — " +
+                            "the last read (" +
+                            (if (signed != null) {
+                                "signed in as @$signed"
+                            } else {
+                                "signed out"
+                            }) +
+                            (if (checkedAt != null) {
+                                ", checked $checkedAt"
+                            } else {
+                                ""
+                            }) +
+                            ") predates the latest browser " +
+                            "activity, so it is not current"
+                    )
+                signed != null -> {
+                    out.append(sep).append(
+                        if (facts.browserUrl.isNotEmpty()) {
+                            "it is signed in as @$signed"
+                        } else {
+                            "is signed in as @$signed"
+                        }
+                    )
+                    if (checkedAt != null) {
+                        out.append(" (checked $checkedAt)")
+                    }
+                }
+                else -> {
+                    out.append(sep).append(
+                        if (facts.browserUrl.isNotEmpty()) {
+                            "it is signed out"
+                        } else {
+                            "is signed out"
+                        }
+                    )
+                    if (checkedAt != null) {
+                        out.append(" (checked $checkedAt)")
+                    }
+                }
             }
         }
         out.append(".")

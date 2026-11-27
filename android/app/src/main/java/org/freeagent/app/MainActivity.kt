@@ -1309,30 +1309,61 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // LOGIN STATE FROM THE STAMP (v1.0.8): "already
-        // logged in", "am I logged in", "is she signed
-        // in" — answered from the record's identity
-        // stamp (the handle the lane read off the page,
-        // and when), never from the messages and never
-        // from the brain. On 2026-11-27 he signed in
-        // himself in her panel, handed back, said
-        // "already logged in" — and the brain answered
-        // "I can't tell from here whether you're logged
-        // in." The stamp is the page's own testimony;
-        // this family reads it. Checked before the
-        // state-question family: the login assertion is
-        // the more specific shape.
+        // LOGIN STATE + WHICH-ACCOUNT, UNDER THE
+        // FRESHNESS RULE (v1.0.8 family, v1.0.9 rule):
+        // "already logged in", "am I logged in", "which
+        // x account is logged in", "what x profile is
+        // logged in now" — answered from the record's
+        // identity stamp, never from the messages and
+        // never from the brain — and ONLY from a stamp
+        // that postdates the browser lane's last
+        // activity. On 2026-11-27 14:29 he asked "which
+        // x account is logged in" (a phrasing no family
+        // caught) while her panel sat open on a
+        // signed-in feed, and the brain quoted a stale
+        // signed-OUT stamp as fact and asked him to
+        // check himself. Now: the which-account family
+        // resolves deterministically too, and a stamp
+        // that fails the freshness rule is never quoted
+        // — a live re-read runs first (stamped as a
+        // re-check request and enqueued), the verifying
+        // line answers for now, and the verified answer
+        // completes it in this chat from the record.
+        // Checked before the state-question family: the
+        // login shapes are the more specific ones.
         if (!hadAttachment) {
-            val loginTask = StatusProbe.loginTaskFor(
-                raw, TaskStore(this).all(), chatId
+            val allForLogin = TaskStore(this).all()
+            val whichTask = StatusProbe.whichAccountTaskFor(
+                raw, allForLogin, chatId
+            )
+            val loginTask = whichTask ?: StatusProbe.loginTaskFor(
+                raw, allForLogin, chatId
             )
             if (loginTask != null) {
-                appendAssistantMessage(
-                    chatId,
-                    StatusProbe.loginAnswerFor(
-                        loginTask, System.currentTimeMillis()
-                    )
+                val activity = SessionIdentity.lastBrowserActivity(
+                    allForLogin, BrowserSession.lastActivityAt
                 )
+                if (SessionIdentity.needsLiveRead(loginTask, activity)) {
+                    requestIdentityRecheck(loginTask, chatId)
+                    appendAssistantMessage(
+                        chatId,
+                        StatusProbe.verifyingIdentityLine(loginTask)
+                    )
+                } else if (whichTask != null) {
+                    appendAssistantMessage(
+                        chatId,
+                        StatusProbe.whichAccountAnswerFor(
+                            loginTask, System.currentTimeMillis()
+                        )
+                    )
+                } else {
+                    appendAssistantMessage(
+                        chatId,
+                        StatusProbe.loginAnswerFor(
+                            loginTask, System.currentTimeMillis()
+                        )
+                    )
+                }
                 return
             }
         }
@@ -1341,8 +1372,32 @@ class MainActivity : AppCompatActivity() {
         // accounts do you have", "what accounts are
         // connected" — answered from the accounts
         // registry (every verified sign-in, whose it is,
-        // which is active), never from the brain.
+        // which is active), never from the brain. Under
+        // the v1.0.9 freshness rule the registry's
+        // active mark is only as good as the freshest
+        // read behind it: when that read is stale, a
+        // re-check is requested first (it syncs the
+        // registry when it lands), and the list itself
+        // — durable record, not live state — answers
+        // now.
         if (!hadAttachment && StatusProbe.isAccountsQuestion(raw)) {
+            val allForAccounts = TaskStore(this).all()
+            val freshestIdentity = allForAccounts
+                .filter {
+                    SessionIdentity.checked(it) ||
+                        SessionIdentity.unreadableReason(it) != null
+                }
+                .maxByOrNull { SessionIdentity.concludedAt(it) }
+            if (freshestIdentity != null &&
+                SessionIdentity.needsLiveRead(
+                    freshestIdentity,
+                    SessionIdentity.lastBrowserActivity(
+                        allForAccounts, BrowserSession.lastActivityAt
+                    )
+                )
+            ) {
+                requestIdentityRecheck(freshestIdentity, "")
+            }
             appendAssistantMessage(
                 chatId,
                 AccountsRegistry.answerFor(
@@ -2374,6 +2429,15 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     store.update(id, TaskStates.PAUSED) {
                         it.put("browserTakeover", true)
+                        // Browser activity (v1.0.9): the
+                        // takeover start is activity the
+                        // identity stamp must postdate —
+                        // from this moment any older stamp
+                        // is stale by construction.
+                        it.put(
+                            SessionIdentity.TAKEOVER_AT_FIELD,
+                            System.currentTimeMillis()
+                        )
                         it.put(
                             "note",
                             "You took the browser over in the chat — " +
@@ -2942,7 +3006,8 @@ class MainActivity : AppCompatActivity() {
                 walletFamilies = facts.walletFamilies,
                 accountsLines = AccountsRegistry.summaryLines(
                     AccountRegistryStore(this).root()
-                )
+                ),
+                browserActivityAt = BrowserSession.lastActivityAt
             ),
             System.currentTimeMillis()
         )
@@ -3004,6 +3069,11 @@ class MainActivity : AppCompatActivity() {
             // question about her work, discrepancy and
             // identity stamp included.
             "status-denial" -> statusDenialFallback(chatId)
+            // Ask-back (v1.0.9): she asked him to check a
+            // fact she can read herself — the fallback is
+            // the same record answer; the facts are hers
+            // to state, not his to fetch.
+            "ask-back" -> statusDenialFallback(chatId)
             else -> ChatOutputGuard.PLAIN_LINE
         }
         if (!flight.guardRetried) {
@@ -3015,7 +3085,8 @@ class MainActivity : AppCompatActivity() {
                 flight.guardRetried = true
                 if (reason == "capability-denial" ||
                     reason == "identity-denial" ||
-                    reason == "status-denial"
+                    reason == "status-denial" ||
+                    reason == "ask-back"
                 ) {
                     flight.guardReassert = true
                 }
@@ -3024,6 +3095,32 @@ class MainActivity : AppCompatActivity() {
             }
         }
         deliverChatAnswer(chatId, historyText, fallback)
+    }
+
+    /** Stamp + enqueue a live identity re-check for a
+     *  record (v1.0.9): the freshness rule's trigger.
+     *  The request is stamped once (a second question
+     *  while one is owed doesn't stack requests — the
+     *  first read answers both), the re-check job runs
+     *  under its own WorkManager name so it never
+     *  replaces the task's own pending run, and the
+     *  verified answer lands in [chatId] when the read
+     *  concludes (empty chatId = heal the record only). */
+    private fun requestIdentityRecheck(
+        task: org.json.JSONObject, chatId: String
+    ) {
+        val id = task.optString("id")
+        if (id.isEmpty()) return
+        if (!SessionIdentity.recheckRequested(task)) {
+            TaskStore(this).update(id) {
+                it.put(
+                    SessionIdentity.RECHECK_AT_FIELD,
+                    System.currentTimeMillis()
+                )
+                it.put(SessionIdentity.RECHECK_CHAT_FIELD, chatId)
+            }
+        }
+        TaskWorker.enqueueIdentityRecheck(this, id)
     }
 
     /** The status-denial fallback (v1.0.8): this chat's

@@ -51,12 +51,137 @@ object SessionIdentity {
     /** When a handback's verification last ran. */
     const val HANDBACK_VERIFIED_FIELD = "handbackVerifiedAt"
 
+    /** The reason the latest identity read could NOT
+     *  conclude (v1.0.9): the page showed neither a
+     *  readable handle nor a sign-in form, or the
+     *  account menu opened without one. A read that
+     *  can't conclude stamps THIS — never a recycled
+     *  signed-in/signed-out claim. */
+    const val UNREADABLE_FIELD = "identityUnreadable"
+
+    /** When the unreadable read happened. */
+    const val UNREADABLE_AT_FIELD = "identityUnreadableAt"
+
+    /** A live re-check request (v1.0.9): stamped by the
+     *  chat when a login/which-account answer needs a
+     *  fresh read, served by the runner's recheck pass.
+     *  A concluded read (stamp or unreadable) at a later
+     *  time satisfies it. */
+    const val RECHECK_AT_FIELD = "identityRecheckAt"
+
+    /** The chat a re-check's verified answer lands in. */
+    const val RECHECK_CHAT_FIELD = "identityRecheckChat"
+
+    /** When the user last took the browser over in the
+     *  panel (v1.0.9) — browser activity the identity
+     *  stamp must postdate to be quoted as current. */
+    const val TAKEOVER_AT_FIELD = "takeoverAt"
+
+    /** How long an unreadable conclusion rests before
+     *  the watchdog retries the read on its own. */
+    const val UNREADABLE_RETRY_MS = 300_000L
+
     /** Write the stamp: [handle] null = the page showed
-     *  signed OUT (an explicit read, recorded as such). */
+     *  signed OUT (an explicit read, recorded as such).
+     *  A concluded read supersedes an unreadable mark
+     *  and satisfies a pending re-check request. */
     fun stamp(task: JSONObject, handle: String?, now: Long) {
         task.put(AS_FIELD, handle ?: "")
         task.put(AT_FIELD, now)
+        task.remove(UNREADABLE_FIELD)
+        task.remove(UNREADABLE_AT_FIELD)
+        task.remove(RECHECK_AT_FIELD)
     }
+
+    /** Stamp a read that could NOT conclude: the
+     *  identity stamp itself is left untouched (its age
+     *  is exactly why it may not be quoted), and this
+     *  mark — newer than the stamp — is the record's
+     *  current truth about the sign-in: unknown, being
+     *  re-checked. Satisfies a re-check request (the
+     *  request asked for a read; this WAS the read). */
+    fun stampUnreadable(task: JSONObject, reason: String, now: Long) {
+        task.put(UNREADABLE_FIELD, reason)
+        task.put(UNREADABLE_AT_FIELD, now)
+        task.remove(RECHECK_AT_FIELD)
+    }
+
+    /** The unreadable reason when the unreadable mark is
+     *  the record's LATEST identity event (newer than
+     *  the identity stamp); null when a concluded read
+     *  is the latest word. */
+    fun unreadableReason(task: JSONObject): String? {
+        val at = task.optLong(UNREADABLE_AT_FIELD, 0L)
+        if (at <= 0L || at < task.optLong(AT_FIELD, 0L)) return null
+        return task.optString(UNREADABLE_FIELD)
+            .ifEmpty { "the page didn't show the sign-in" }
+    }
+
+    /** When the identity was last READ, whichever way
+     *  the read landed (a conclusion or an unreadable). */
+    fun concludedAt(task: JSONObject): Long = maxOf(
+        task.optLong(AT_FIELD, 0L),
+        task.optLong(UNREADABLE_AT_FIELD, 0L)
+    )
+
+    /** True when a re-check was requested after the
+     *  last read landed — the request is still owed. */
+    fun recheckRequested(task: JSONObject): Boolean {
+        val at = task.optLong(RECHECK_AT_FIELD, 0L)
+        return at > 0L && at > concludedAt(task)
+    }
+
+    // ---------- freshness (v1.0.9) ----------
+
+    /**
+     * THE FRESHNESS RULE (v1.0.9, born of the 2026-11-27
+     * 14:29 screenshot): asked "which x account is
+     * logged in", she quoted a stamp that read signed
+     * OUT — while her own browser panel sat open on a
+     * signed-in home feed, because he had signed in
+     * during a takeover after the stamp was written.
+     * A stamp is quotable as current ONLY when it
+     * postdates the browser lane's last activity: page
+     * changes (the session's own marker), takeover
+     * starts, and handbacks. Anything older is history,
+     * and the answer must come from a fresh read.
+     */
+
+    /** The browser lane's last activity across the
+     *  records plus the live session's marker: the
+     *  newest of every handback, every takeover start,
+     *  and the session's last page activity. */
+    fun lastBrowserActivity(
+        tasks: List<JSONObject>, sessionActivityAt: Long
+    ): Long {
+        var latest = sessionActivityAt
+        for (t in tasks) {
+            latest = maxOf(latest, t.optLong("handedBackAt", 0L))
+            latest = maxOf(latest, t.optLong(TAKEOVER_AT_FIELD, 0L))
+        }
+        return latest
+    }
+
+    /** True when the record's identity stamp predates
+     *  the browser lane's last activity — the browser
+     *  has moved since the read, so the stamp is not
+     *  current fact. */
+    fun stampStale(task: JSONObject, lastActivityAt: Long): Boolean =
+        checked(task) &&
+            task.optLong(AT_FIELD, 0L) < lastActivityAt
+
+    /** True when a login-state answer for this record
+     *  must come from a LIVE read, not the stamp: never
+     *  read, stamp older than the browser's last
+     *  activity, a handback verification still pending,
+     *  the latest read unreadable, or a re-check already
+     *  requested and still owed. */
+    fun needsLiveRead(task: JSONObject, lastActivityAt: Long): Boolean =
+        !checked(task) ||
+            stampStale(task, lastActivityAt) ||
+            handbackPending(task) ||
+            unreadableReason(task) != null ||
+            recheckRequested(task)
 
     /** The stamped handle, or null when the stamp says
      *  signed out OR was never written — tell them apart
@@ -157,6 +282,32 @@ object SessionIdentity {
             "profile is set. If it is NOT yours, do not " +
             "act as it: sign out first, then begin your " +
             "signup signed out."
+
+    /** The model-facing instruction when a lane-start
+     *  read could not conclude (v1.0.9): no account may
+     *  be acted under until a read concludes — an
+     *  unreadable page is not a signed-out page and not
+     *  a signed-in one. */
+    fun unreadableInstruction(reason: String): String =
+        "IDENTITY CHECK: the sign-in read just now could " +
+            "not read the page ($reason). Do not act as " +
+            "any account and do not assume the sign-in " +
+            "either way — a re-check runs on its own, and " +
+            "the next read decides."
+
+    /** The deterministic line a handback's verification
+     *  lands when the read could not conclude (v1.0.9):
+     *  the step came back, the check ran, the page
+     *  wouldn't say — and the re-check is already owed,
+     *  so nobody has to ask again. */
+    fun handbackUnreadableLine(task: JSONObject, reason: String): String {
+        val title = TaskTransparency.titleFor(task)
+        return "She checked the browser as it came back, " +
+            "and the sign-in couldn't be read from the " +
+            "page ($reason). “$title” isn't acting on any " +
+            "account until a read concludes — the check " +
+            "retries on its own."
+    }
 
     // ---------- the handback announcement ----------
 

@@ -630,6 +630,124 @@ object StatusProbe {
         }
     }
 
+    // ---------- the which-account family (v1.0.9) ----------
+
+    /**
+     * THE WHICH-ACCOUNT FAMILY (v1.0.9, born of the
+     * 2026-11-27 14:29 screenshot): "which x account is
+     * logged in" fell to the BRAIN — neither the login
+     * family (its closed vocabulary has no "which") nor
+     * the accounts question (no "logged") caught it —
+     * and the brain answered from a stale stamp, in the
+     * wrong direction, and asked him to check himself.
+     * Interrogatives naming the account/profile/handle
+     * AND a sign-in state now resolve deterministically
+     * like the rest of the state family, and the caller
+     * runs SessionIdentity's freshness rule before the
+     * answer: a stale stamp triggers the live re-read
+     * and the verifying line, never a quotation.
+     */
+
+    // Lazy: LOGIN_VOCAB is declared with the login
+    // family below; the union is computed on first use,
+    // after the object is fully initialised.
+    private val WHICH_ACCOUNT_VOCAB: Set<String> by lazy {
+        LOGIN_VOCAB + setOf(
+            "which", "active", "current", "currently",
+            "accounts", "profiles", "handle", "handles"
+        )
+    }
+
+    /** Resolve a which-account question to the chat's
+     *  newest X / identity-stamped / parked record, or
+     *  null. Shape: an interrogative lead (which / what
+     *  / who), an account word (account / profile /
+     *  handle), and a sign-in state (logged / signed, or
+     *  log|sign + in|out) — every token inside the
+     *  closed vocabulary, so lookalikes fall through:
+     *  "which account should i use for the signup"
+     *  (use, signup), "what profile picture should she
+     *  use" (picture, use). */
+    fun whichAccountTaskFor(
+        text: String, tasks: List<JSONObject>, chatId: String
+    ): JSONObject? {
+        val tokens = stateTokens(text) ?: return null
+        if (tokens.size > 8) return null
+        val set = tokens.toSet()
+        if (set.none { it in setOf("which", "what", "who") }) {
+            return null
+        }
+        if (set.none {
+                it in setOf(
+                    "account", "accounts", "profile",
+                    "profiles", "handle", "handles"
+                )
+            }
+        ) {
+            return null
+        }
+        val loginHit = set.any { it in LOGIN_WORDS } ||
+            (("log" in set || "sign" in set) &&
+                ("in" in set || "out" in set))
+        if (!loginHit) return null
+        if (!tokens.all { it in WHICH_ACCOUNT_VOCAB }) return null
+        return chatTasksNewestFirst(tasks, chatId).firstOrNull {
+            isXTask(it) || SessionIdentity.checked(it) ||
+                it.optString("state") == TaskStates.PARKED_AT_WALL
+        }
+    }
+
+    /** The deterministic which-account answer, composed
+     *  from a FRESH stamp (the caller runs the freshness
+     *  rule first — this never sees a stale one): the
+     *  account named outright, with the read time and
+     *  the same ownership framing as the login answer. */
+    fun whichAccountAnswerFor(task: JSONObject, now: Long): String {
+        val title = TaskTransparency.titleFor(task)
+        if (!SessionIdentity.checked(task)) {
+            return "She hasn't read the browser's sign-in " +
+                "on “$title” yet — the answer comes from " +
+                "the page itself when the check runs."
+        }
+        val signed = SessionIdentity.signedInAs(task)
+        val at = SessionIdentity.checkedLabel(task)
+        val atBit = if (at != null) {
+            " (she read it off the page at $at)"
+        } else {
+            ""
+        }
+        if (signed == null) {
+            return "No account — her last check" +
+                (if (at != null) " ($at)" else "") +
+                " showed the browser signed out."
+        }
+        val owner = SessionIdentity.ownerFor(task, signed)
+        val ownerBit = when {
+            owner == SessionIdentity.Owner.OTHER &&
+                LilleXState.isCreationTask(task) ->
+                " That's your account, not hers — she " +
+                    "won't post or act as you without your " +
+                    "approval, and it doesn't count as her " +
+                    "account being created."
+            owner == SessionIdentity.Owner.OTHER ->
+                " That's your account — anything she " +
+                    "posts from it stays approval-gated."
+            else -> ""
+        }
+        return "The browser is signed in as @$signed" +
+            "$atBit.$ownerBit"
+    }
+
+    /** The interim line while a live identity re-read
+     *  runs (v1.0.9): the answer waits for the read, and
+     *  the verified result completes it in the same
+     *  chat from the record. One shape for every stale
+     *  case — no stamp is ever quoted in its place. */
+    fun verifyingIdentityLine(task: JSONObject): String =
+        "She's verifying that from the browser itself " +
+            "right now — the verified answer lands here " +
+            "from the record, not from messages."
+
     // ---------- state questions (v1.0.8) ----------
 
     /**

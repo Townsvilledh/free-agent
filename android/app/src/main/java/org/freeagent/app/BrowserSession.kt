@@ -66,6 +66,19 @@ object BrowserSession {
     var lastState: BrowserPerception.PageState? = null
         private set
 
+    /**
+     * The browser lane's last-activity marker (v1.0.9):
+     * stamped on every page finish and every collect —
+     * page changes included. SessionIdentity's
+     * freshness rule reads it beside the records'
+     * takeover/handback stamps: an identity stamp
+     * older than this marker may never be quoted as
+     * the current sign-in.
+     */
+    @Volatile
+    var lastActivityAt: Long = 0L
+        private set
+
     /** Set by BrowserActivity while it is on screen: how a page's
      *  file chooser should be answered when no upload is staged
      *  (the real system picker). Unset (headless running): a
@@ -88,6 +101,7 @@ object BrowserSession {
             cookies.setAcceptThirdPartyCookies(wv, true)
             wv.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    lastActivityAt = System.currentTimeMillis()
                     pageLatch?.countDown()
                 }
             }
@@ -178,6 +192,7 @@ object BrowserSession {
             ?: throw BrowserException("page collect returned nothing")
         val state = BrowserPerception.parseCollect(json)
         lastState = state
+        lastActivityAt = System.currentTimeMillis()
         try {
             CookieManager.getInstance().flush()
         } catch (e: Exception) {

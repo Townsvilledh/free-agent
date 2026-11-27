@@ -439,31 +439,67 @@ class TaskRunner(private val context: Context) {
             // again: the handback IS the verification.
             var verifiedHandle: String? = null
             var identityRead = false
+            var unreadableReason: String? = null
             if (packaged && isXDomainTask(task)) {
+                // THE READ RUNS TO A DEFINITE RESULT
+                // (v1.0.9): 1.0.8 read only when the
+                // browser happened to rest on x.com — a
+                // handback from any other page left the
+                // verification unstamped forever, and its
+                // xHandle() read stamped signed OUT for a
+                // handle hidden behind the account menu.
+                // Now the lane positions on x.com/home
+                // when it must and runs the concluding
+                // read: signed-in-as, signed-out, or an
+                // explicit unreadable with the reason.
                 val currentDomain = BrowserPerception.domainOf(
                     BrowserSession.currentUrl()
                 )
-                if (currentDomain == "x.com" ||
-                    currentDomain.endsWith(".x.com")
+                if (currentDomain != "x.com" &&
+                    !currentDomain.endsWith(".x.com")
                 ) {
-                    verifiedHandle = try {
-                        xHandle()
+                    try {
+                        xOpen(
+                            "https://x.com/home",
+                            browserDomains(task)
+                        )
                     } catch (e: Exception) {
                         null
                     }
-                    identityRead = true
+                }
+                val outcome = try {
+                    readXIdentityHere()
+                } catch (e: Exception) {
+                    IdentityOutcome.Unreadable(
+                        "the sign-in check itself failed"
+                    )
+                }
+                when (outcome) {
+                    is IdentityOutcome.SignedIn -> {
+                        verifiedHandle = outcome.handle
+                        identityRead = true
+                    }
+                    is IdentityOutcome.SignedOut -> {
+                        identityRead = true
+                    }
+                    is IdentityOutcome.Unreadable -> {
+                        unreadableReason = outcome.reason
+                    }
                 }
             }
-            val verifiedBit = if (identityRead) {
-                if (verifiedHandle != null) {
+            val verifiedBit = when {
+                identityRead && verifiedHandle != null ->
                     " Verified from the page itself: the browser " +
                         "is signed in as @$verifiedHandle."
-                } else {
+                identityRead ->
                     " Verified from the page itself: the browser " +
                         "is still signed out."
-                }
-            } else {
-                ""
+                unreadableReason != null ->
+                    " The sign-in check couldn't read the " +
+                        "page just now ($unreadableReason) — " +
+                        "don't assume either way; the check " +
+                        "retries on its own."
+                else -> ""
             }
             // A planned user handoff (v0.10.1) resumes with its
             // own note: the user acted themselves in her session
@@ -486,23 +522,46 @@ class TaskRunner(private val context: Context) {
                 it.remove("wall")
                 it.remove("handoffStep")
                 if (identityRead) {
-                    SessionIdentity.stamp(it, verifiedHandle, handbackNow)
+                    stampIdentityOn(it, verifiedHandle, handbackNow)
                     it.put(
                         SessionIdentity.HANDBACK_VERIFIED_FIELD,
                         handedBackAt
                     )
-                    // Attribution: a verified handle on a
-                    // creation record is hers only when it
-                    // doesn't contradict the recorded one.
-                    if (verifiedHandle != null) {
-                        val her = it.optString(FinishGate.HER_HANDLE_FIELD)
-                        if (!LilleXState.isCreationTask(it) ||
-                            her.isEmpty() ||
-                            her.equals(verifiedHandle, true)
-                        ) {
-                            it.put("xHandle", verifiedHandle)
+                }
+                val unreadable = unreadableReason
+                if (unreadable != null) {
+                    // No verification stamp: the handback
+                    // stays pending, the unreadable mark is
+                    // the record's latest word, and the
+                    // re-check machinery (chat questions,
+                    // the watchdog) owes the read a retry.
+                    SessionIdentity.stampUnreadable(
+                        it, unreadable, handbackNow
+                    )
+                }
+            }
+            if (!identityRead && unreadableReason != null) {
+                // The unreadable handback still speaks —
+                // deterministically, once per handback —
+                // so silence never reads as a conclusion.
+                val fresh = store.get(id) ?: task
+                if (ChatTaskLink.isChatTask(fresh) &&
+                    fresh.optLong(
+                        SessionIdentity.HANDBACK_ANNOUNCED_FIELD, 0L
+                    ) < handedBackAt
+                ) {
+                    val origin = fresh.optString(ChatTaskLink.ORIGIN_FIELD)
+                    if (origin.isNotEmpty()) {
+                        ChatStore(context).appendMessage(
+                            origin, "lille",
+                            SessionIdentity.handbackUnreadableLine(
+                                fresh, unreadableReason
+                            )
+                        )
+                        store.update(id) {
                             it.put(
-                                FinishGate.X_HANDLE_AT_FIELD, handbackNow
+                                SessionIdentity.HANDBACK_ANNOUNCED_FIELD,
+                                handedBackAt
                             )
                         }
                     }
@@ -2492,6 +2551,268 @@ class TaskRunner(private val context: Context) {
         return BrowserPerception.parseHandle(v)
     }
 
+    /** The three ways an identity read can land
+     *  (v1.0.9): signed in as a named handle, signed
+     *  out, or UNREADABLE — the page said neither, and
+     *  the read says so instead of guessing. */
+    private sealed class IdentityOutcome {
+        data class SignedIn(val handle: String) : IdentityOutcome()
+        object SignedOut : IdentityOutcome()
+        data class Unreadable(val reason: String) : IdentityOutcome()
+    }
+
+    /** Stamp a CONCLUDED read on a record: the identity
+     *  stamp plus the creation-attribution guard (a
+     *  verified handle lands in xHandle only when it
+     *  doesn't contradict a settled creation record, so
+     *  someone else's session can never satisfy her
+     *  finish gate). Shared by every read site. */
+    private fun stampIdentityOn(
+        t: JSONObject, handle: String?, now: Long
+    ) {
+        SessionIdentity.stamp(t, handle, now)
+        if (handle != null) {
+            val her = t.optString(FinishGate.HER_HANDLE_FIELD)
+            if (!LilleXState.isCreationTask(t) ||
+                her.isEmpty() || her.equals(handle, true)
+            ) {
+                t.put("xHandle", handle)
+                t.put(FinishGate.X_HANDLE_AT_FIELD, now)
+            }
+        }
+    }
+
+    /**
+     * THE CONCLUDING IDENTITY READ (v1.0.9). The 1.0.8
+     * read was xHandle() alone: null meant signed OUT —
+     * but null also means "the handle isn't exposed on
+     * this page" (on mobile X it sits behind the
+     * top-left avatar), so a signed-in home feed was
+     * stamped signed out, and the stale stamp was later
+     * quoted as fact. This read judges the page's SHAPE
+     * (BrowserPerception.xIdentityShape, fixture-
+     * pinned): handle in the tree → signed in; sign-in
+     * chrome and no session furniture → signed out;
+     * session furniture but no handle → the scripted
+     * reveal (open the account menu / profile, re-read)
+     * and only then a conclusion; anything else →
+     * Unreadable with the reason, which the caller
+     * stamps as such — never a recycled older stamp.
+     * Runs wherever the browser currently rests; the
+     * caller positions it first.
+     */
+    private fun readXIdentityHere(): IdentityOutcome {
+        var state = BrowserSession.read(context)
+        var handle = try {
+            xHandle()
+        } catch (e: Exception) {
+            null
+        } ?: BrowserPerception.xHandleFromState(state)
+        if (handle != null) return IdentityOutcome.SignedIn(handle)
+        return when (BrowserPerception.xIdentityShape(state, null)) {
+            BrowserPerception.XIdentityShape.SIGNED_OUT ->
+                IdentityOutcome.SignedOut
+            BrowserPerception.XIdentityShape.HANDLE_BEHIND_MENU -> {
+                try {
+                    BrowserSession.evalValue(
+                        context,
+                        BrowserPerception.X_OPEN_ACCOUNT_MENU_JS
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+                Thread.sleep(1_200)
+                state = BrowserSession.read(context)
+                handle = try {
+                    xHandle()
+                } catch (e: Exception) {
+                    null
+                } ?: BrowserPerception.xHandleFromState(state)
+                    ?: BrowserPerception.xHandleFromProfileUrl(state.url)
+                if (handle != null) {
+                    IdentityOutcome.SignedIn(handle)
+                } else {
+                    IdentityOutcome.Unreadable(
+                        "the account menu opened but showed no handle"
+                    )
+                }
+            }
+            BrowserPerception.XIdentityShape.HANDLE_IN_TREE ->
+                IdentityOutcome.Unreadable(
+                    "the page showed the account area but no readable handle"
+                )
+            BrowserPerception.XIdentityShape.UNREADABLE ->
+                IdentityOutcome.Unreadable(
+                    "the page shows neither a signed-in account nor a sign-in form"
+                )
+        }
+    }
+
+    /**
+     * THE IDENTITY RE-CHECK PASS (v1.0.9): a read-only
+     * pass over a record, run by TaskWorker's recheck
+     * mode — the freshness rule's engine. It never runs
+     * the task (no state transitions, no un-parking);
+     * it positions the browser if the record's lane may
+     * move it (a parked record's page is evidence and is
+     * read in place), runs the concluding read, stamps
+     * the outcome, syncs the registry, completes any
+     * handback verification this read settles, and —
+     * when a chat requested the check — lands the
+     * verified answer in that chat from the record.
+     * Returns true when the read concluded.
+     */
+    fun runIdentityRecheck(id: String): Boolean {
+        val task = store.get(id) ?: return false
+        if (TaskControl.isArchived(task) ||
+            TaskControl.wasKilled(task) || !isXDomainTask(task)
+        ) {
+            clearRecheck(id)
+            return false
+        }
+        val chatId = task.optString(SessionIdentity.RECHECK_CHAT_FIELD)
+        val requestedAt = task.optLong(
+            SessionIdentity.RECHECK_AT_FIELD, 0L
+        )
+        // A conclusion fresher than the request already
+        // answers it — no second read needed.
+        if (requestedAt > 0L &&
+            !SessionIdentity.recheckRequested(task) &&
+            SessionIdentity.checked(task) &&
+            SessionIdentity.unreadableReason(task) == null
+        ) {
+            deliverRecheckAnswer(id, chatId, null)
+            clearRecheck(id)
+            return true
+        }
+        val wasHandbackPending = SessionIdentity.handbackPending(task)
+        val parked = task.optString("state") ==
+            TaskStates.PARKED_AT_WALL
+        val domain = BrowserPerception.domainOf(
+            BrowserSession.currentUrl()
+        )
+        val onX = domain == "x.com" || domain.endsWith(".x.com")
+        val outcome: IdentityOutcome = if (!onX && parked) {
+            // A parked page is evidence for a step that's
+            // his — the re-check never navigates it away.
+            IdentityOutcome.Unreadable(
+                "the browser is parked away from X for a step that's yours"
+            )
+        } else {
+            try {
+                if (!onX) {
+                    xOpen("https://x.com/home", browserDomains(task))
+                }
+                readXIdentityHere()
+            } catch (e: Exception) {
+                IdentityOutcome.Unreadable(
+                    "the sign-in check itself failed"
+                )
+            }
+        }
+        val now = System.currentTimeMillis()
+        var handle: String? = null
+        when (outcome) {
+            is IdentityOutcome.SignedIn -> {
+                handle = outcome.handle
+                store.update(id) { t ->
+                    stampIdentityOn(t, handle, now)
+                    if (SessionIdentity.handbackPending(t)) {
+                        t.put(
+                            SessionIdentity.HANDBACK_VERIFIED_FIELD,
+                            t.optLong("handedBackAt", 0L)
+                        )
+                    }
+                }
+                syncAccountRegistry(store.get(id) ?: task, handle)
+            }
+            is IdentityOutcome.SignedOut -> {
+                store.update(id) { t ->
+                    stampIdentityOn(t, null, now)
+                    if (SessionIdentity.handbackPending(t)) {
+                        t.put(
+                            SessionIdentity.HANDBACK_VERIFIED_FIELD,
+                            t.optLong("handedBackAt", 0L)
+                        )
+                    }
+                }
+                AccountRegistryStore(context)
+                    .recordSignedOut(AccountsRegistry.PLATFORM_X)
+            }
+            is IdentityOutcome.Unreadable -> {
+                store.update(id) { t ->
+                    SessionIdentity.stampUnreadable(
+                        t, outcome.reason, now
+                    )
+                }
+            }
+        }
+        // A handback this read just verified gets its
+        // announcement (once) in the ORIGIN chat — unless
+        // the requesting chat IS the origin, whose answer
+        // below is the announcement.
+        val fresh = store.get(id) ?: task
+        if (wasHandbackPending &&
+            outcome is IdentityOutcome.SignedIn &&
+            ChatTaskLink.isChatTask(fresh)
+        ) {
+            val handedBackAt = fresh.optLong("handedBackAt", 0L)
+            val origin = fresh.optString(ChatTaskLink.ORIGIN_FIELD)
+            if (origin.isNotEmpty() && origin != chatId &&
+                fresh.optLong(
+                    SessionIdentity.HANDBACK_ANNOUNCED_FIELD, 0L
+                ) < handedBackAt
+            ) {
+                ChatStore(context).appendMessage(
+                    origin, "lille",
+                    SessionIdentity.handbackAnnouncement(
+                        fresh, handle, challengePresent = false
+                    )
+                )
+                store.update(id) { t ->
+                    t.put(
+                        SessionIdentity.HANDBACK_ANNOUNCED_FIELD,
+                        handedBackAt
+                    )
+                }
+            }
+        }
+        deliverRecheckAnswer(id, chatId, outcome)
+        clearRecheck(id)
+        return outcome !is IdentityOutcome.Unreadable
+    }
+
+    /** Drop a record's re-check request fields. */
+    private fun clearRecheck(id: String) {
+        store.update(id) { t ->
+            t.remove(SessionIdentity.RECHECK_AT_FIELD)
+            t.remove(SessionIdentity.RECHECK_CHAT_FIELD)
+        }
+    }
+
+    /** Land a re-check's answer in the requesting chat:
+     *  the record's own login answer for a concluded
+     *  read, or the honest still-checking line for an
+     *  unreadable one. No chat requested → nothing. */
+    private fun deliverRecheckAnswer(
+        id: String, chatId: String, outcome: IdentityOutcome?
+    ) {
+        if (chatId.isEmpty()) return
+        val fresh = store.get(id) ?: return
+        val text = if (outcome is IdentityOutcome.Unreadable) {
+            "She checked just now and the sign-in still " +
+                "couldn't be read from the page " +
+                "(${outcome.reason}) — the check retries " +
+                "on its own, and no older sign-in state " +
+                "counts until one lands."
+        } else {
+            StatusProbe.loginAnswerFor(
+                fresh, System.currentTimeMillis()
+            )
+        }
+        ChatStore(context).appendMessage(chatId, "lille", text)
+    }
+
     private fun xArticles(n: Int): List<BrowserPerception.Article> {
         val json = BrowserSession.evalValue(
             context, BrowserPerception.xArticlesJs(n)
@@ -2505,47 +2826,65 @@ class TaskRunner(private val context: Context) {
             return BrowserPerception.challengeObservation(it) +
                 "\n(page: ${state.url})"
         }
-        val handle = xHandle()
-        return if (handle != null) {
-            try {
-                File(taskDir(id), "x_session.json").writeText(
-                    JSONObject().put("handle", handle)
-                        .put("ts", System.currentTimeMillis()).toString(2)
-                )
-            } catch (e: Exception) {
-                // The observation is the evidence; the file is a copy.
-            }
-            // IDENTITY (v1.0.8): the read stamps the
-            // session identity on the record AND the
-            // accounts registry. Attribution guard: on a
-            // creation record whose handle is settled, a
-            // session naming anyone else is a FOREIGN
-            // session — it stamps signedInAs only, never
-            // xHandle, so her gate can't be satisfied by
-            // someone else's account.
-            val nowMs = System.currentTimeMillis()
-            store.update(id) { t ->
-                SessionIdentity.stamp(t, handle, nowMs)
-                val her = t.optString(FinishGate.HER_HANDLE_FIELD)
-                if (!LilleXState.isCreationTask(t) ||
-                    her.isEmpty() || her.equals(handle, true)
-                ) {
-                    t.put("xHandle", handle)
-                    t.put(FinishGate.X_HANDLE_AT_FIELD, nowMs)
+        // The concluding read (v1.0.9): a handle hidden
+        // behind the account menu is revealed, not
+        // misread as signed out; a page that says
+        // neither is reported unreadable, not logged_out.
+        val outcome = try {
+            readXIdentityHere()
+        } catch (e: Exception) {
+            IdentityOutcome.Unreadable(
+                "the sign-in check itself failed"
+            )
+        }
+        return when (outcome) {
+            is IdentityOutcome.SignedIn -> {
+                val handle = outcome.handle
+                try {
+                    File(taskDir(id), "x_session.json").writeText(
+                        JSONObject().put("handle", handle)
+                            .put("ts", System.currentTimeMillis()).toString(2)
+                    )
+                } catch (e: Exception) {
+                    // The observation is the evidence; the file is a copy.
                 }
+                // IDENTITY (v1.0.8): the read stamps the
+                // session identity on the record AND the
+                // accounts registry. Attribution guard: on a
+                // creation record whose handle is settled, a
+                // session naming anyone else is a FOREIGN
+                // session — it stamps signedInAs only, never
+                // xHandle, so her gate can't be satisfied by
+                // someone else's account.
+                val nowMs = System.currentTimeMillis()
+                store.update(id) { t ->
+                    stampIdentityOn(t, handle, nowMs)
+                }
+                store.get(id)?.let { syncAccountRegistry(it, handle) }
+                "X_SESSION logged_in as @$handle — session is live in " +
+                    "Lille's persistent browser profile"
             }
-            store.get(id)?.let { syncAccountRegistry(it, handle) }
-            "X_SESSION logged_in as @$handle — session is live in " +
-                "Lille's persistent browser profile"
-        } else {
-            val nowMs = System.currentTimeMillis()
-            store.update(id) { t ->
-                SessionIdentity.stamp(t, null, nowMs)
+            is IdentityOutcome.SignedOut -> {
+                val nowMs = System.currentTimeMillis()
+                store.update(id) { t ->
+                    stampIdentityOn(t, null, nowMs)
+                }
+                AccountRegistryStore(context)
+                    .recordSignedOut(AccountsRegistry.PLATFORM_X)
+                "X_SESSION logged_out — no account is signed in in Lille's " +
+                    "browser profile (page: ${state.url.take(80)})"
             }
-            AccountRegistryStore(context)
-                .recordSignedOut(AccountsRegistry.PLATFORM_X)
-            "X_SESSION logged_out — no account is signed in in Lille's " +
-                "browser profile (page: ${state.url.take(80)})"
+            is IdentityOutcome.Unreadable -> {
+                val nowMs = System.currentTimeMillis()
+                store.update(id) { t ->
+                    SessionIdentity.stampUnreadable(
+                        t, outcome.reason, nowMs
+                    )
+                }
+                "X_SESSION unreadable — ${outcome.reason}. Do " +
+                    "not assume the sign-in either way; the " +
+                    "check retries on its own."
+            }
         }
     }
 
@@ -2843,8 +3182,14 @@ class TaskRunner(private val context: Context) {
         // The identity read: in place when the browser
         // already rests on x.com (a mid-signup flow page
         // must survive a resume untouched), else via
-        // x.com/home.
-        val handle = try {
+        // x.com/home — and CONCLUDING (v1.0.9): the
+        // 1.0.8 read stamped signed-out whenever the
+        // handle wasn't in the tree, including on a
+        // signed-in page whose handle sits behind the
+        // account menu. An unconcluded read now stamps
+        // unreadable and instructs accordingly — the
+        // lane never separates accounts on a guess.
+        val outcome = try {
             val currentDomain = BrowserPerception.domainOf(
                 BrowserSession.currentUrl()
             )
@@ -2853,28 +3198,63 @@ class TaskRunner(private val context: Context) {
             ) {
                 xOpen("https://x.com/home", domains)
             }
-            xHandle()
+            readXIdentityHere()
         } catch (e: Exception) {
-            null
+            IdentityOutcome.Unreadable(
+                "the sign-in check itself failed"
+            )
         }
+        val handle = (outcome as? IdentityOutcome.SignedIn)?.handle
         val now = System.currentTimeMillis()
         var instruction: String? = null
         store.update(id) { t ->
-            SessionIdentity.stamp(t, handle, now)
-            if (handle != null) {
-                val her = t.optString(FinishGate.HER_HANDLE_FIELD)
-                if (!LilleXState.isCreationTask(t) ||
-                    her.isEmpty() || her.equals(handle, true)
-                ) {
-                    t.put("xHandle", handle)
-                    t.put(FinishGate.X_HANDLE_AT_FIELD, now)
+            when (outcome) {
+                is IdentityOutcome.Unreadable -> {
+                    SessionIdentity.stampUnreadable(
+                        t, outcome.reason, now
+                    )
+                    instruction =
+                        SessionIdentity.unreadableInstruction(
+                            outcome.reason
+                        )
+                }
+                else -> {
+                    stampIdentityOn(t, handle, now)
+                    // A concluded lane-start read also
+                    // settles a pending handback (the
+                    // panel's user-hold handback has no
+                    // wall block to verify it): the read
+                    // IS the verification.
+                    if (SessionIdentity.handbackPending(t)) {
+                        t.put(
+                            SessionIdentity.HANDBACK_VERIFIED_FIELD,
+                            t.optLong("handedBackAt", 0L)
+                        )
+                    }
                 }
             }
             if (LilleXState.isCreationTask(t)) {
-                val owner = SessionIdentity.ownerFor(
-                    t, newestConnectHandle()
-                )
-                val signed = SessionIdentity.signedInAs(t)
+                // Account separation judges the FRESH
+                // stamp — only a concluded read may feed
+                // it (an unreadable read left the old
+                // stamp in place, and separating on it
+                // would be separating on a guess).
+                val owner = if (
+                    outcome !is IdentityOutcome.Unreadable
+                ) {
+                    SessionIdentity.ownerFor(
+                        t, newestConnectHandle()
+                    )
+                } else {
+                    SessionIdentity.Owner.UNCHECKED
+                }
+                val signed = if (
+                    outcome !is IdentityOutcome.Unreadable
+                ) {
+                    SessionIdentity.signedInAs(t)
+                } else {
+                    null
+                }
                 if (signed != null &&
                     t.optLong("identityNoteAt", 0L) < now
                 ) {
@@ -2915,7 +3295,13 @@ class TaskRunner(private val context: Context) {
                 }
             }
         }
-        syncAccountRegistry(store.get(id) ?: task, handle)
+        // The registry syncs only on a CONCLUSION — an
+        // unreadable read must not mark the platform
+        // signed out (that was the 1.0.8 conflation,
+        // one level down).
+        if (outcome !is IdentityOutcome.Unreadable) {
+            syncAccountRegistry(store.get(id) ?: task, handle)
+        }
         instruction?.let {
             messages.put(
                 JSONObject().put("role", "user").put("content", it)

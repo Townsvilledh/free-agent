@@ -44,6 +44,29 @@ class TaskWorker(context: Context, params: WorkerParameters) :
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
+        // IDENTITY RE-CHECK mode (v1.0.9): a read-only
+        // pass — the record's sign-in read runs to a
+        // conclusion (or an explicit unreadable) WITHOUT
+        // running the task: no state transitions, no
+        // un-parking, no reporter. It takes the browser
+        // lane's gate like any browser work; contention
+        // retries later, and the request stamp on the
+        // record survives until a read lands.
+        if (inputData.getString(KEY_MODE) == MODE_IDENTITY_RECHECK) {
+            TaskStore(applicationContext).get(taskId)
+                ?: return Result.failure()
+            watchdogPass(applicationContext, excluding = taskId)
+            if (!TaskGate.shared.tryAcquire(taskId, true)) {
+                return Result.retry()
+            }
+            try {
+                TaskRunner(applicationContext)
+                    .runIdentityRecheck(taskId)
+            } finally {
+                TaskGate.shared.release(taskId)
+            }
+            return Result.success()
+        }
         // Bounded concurrency (v1.0.1, TaskGate): at most
         // two task runs progress at once, and the exclusive
         // browser lane admits one browser run at a time. A
@@ -150,8 +173,38 @@ class TaskWorker(context: Context, params: WorkerParameters) :
 
     companion object {
         const val KEY_TASK_ID = "task_id"
+        const val KEY_MODE = "mode"
+        const val MODE_IDENTITY_RECHECK = "identity_recheck"
 
         fun uniqueName(taskId: String) = "lille-task-$taskId"
+
+        /** Enqueue an identity re-check (v1.0.9) under its
+         *  OWN unique name — it must never REPLACE (or be
+         *  replaced by) the task's own pending run: the
+         *  read and the run are different passes over the
+         *  same record. */
+        fun enqueueIdentityRecheck(context: Context, taskId: String) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val request = OneTimeWorkRequestBuilder<TaskWorker>()
+                .setConstraints(constraints)
+                .setInputData(
+                    workDataOf(
+                        KEY_TASK_ID to taskId,
+                        KEY_MODE to MODE_IDENTITY_RECHECK
+                    )
+                )
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    60, TimeUnit.SECONDS
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "lille-idcheck-$taskId",
+                ExistingWorkPolicy.REPLACE, request
+            )
+        }
 
         /** Enqueue (or re-enqueue) background continuation for a task. */
         fun enqueue(context: Context, taskId: String) {
@@ -249,6 +302,15 @@ class TaskWorker(context: Context, params: WorkerParameters) :
             for (id in stale) {
                 if (id == excluding) continue
                 enqueueForced(context, id)
+            }
+            // Identity re-checks owed (v1.0.9): a record
+            // whose latest sign-in read couldn't conclude
+            // gets the read retried on the watchdog's own
+            // schedule — the sign-in never stays unknown
+            // just because one page wouldn't say.
+            for (id in TaskWatchdog.identityRecheckIds(tasks, now)) {
+                if (id == excluding) continue
+                enqueueIdentityRecheck(context, id)
             }
         }
 
