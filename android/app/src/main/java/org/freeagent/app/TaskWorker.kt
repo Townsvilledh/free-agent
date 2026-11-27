@@ -53,6 +53,11 @@ class TaskWorker(context: Context, params: WorkerParameters) :
         // lane never fails either task.
         val record = TaskStore(applicationContext).get(taskId)
             ?: return Result.failure()
+        // Watchdog (v1.0.2): every worker pass also sweeps
+        // the OTHER tasks — an expired wait gets its pass, a
+        // stale wait gets a forced retry. This task's own
+        // run below is its pass, so it is excluded here.
+        watchdogPass(applicationContext, excluding = taskId)
         if (!TaskGate.shared.tryAcquire(
                 taskId, TaskRunner.isBrowserTask(record)
             )
@@ -68,7 +73,33 @@ class TaskWorker(context: Context, params: WorkerParameters) :
 
     private suspend fun doWorkAdmitted(taskId: String): Result {
         setForeground(createForegroundInfo(taskId))
+        // Watchdog bookkeeping: was THIS pass a forced retry
+        // that has not been accounted for yet?
+        val before = TaskStore(applicationContext).get(taskId)
+        val forcedAt = before?.optLong("watchdogForcedAt", 0L) ?: 0L
+        val handledAt = before?.optLong("watchdogHandledAt", 0L) ?: 0L
+        val thisPassForced = forcedAt > handledAt
         val finalState = TaskRunner(applicationContext).runTask(taskId)
+        if (thisPassForced) {
+            // A forced retry must never fail silently: if it
+            // STILL ends waiting, the record says so in work
+            // terms (rendered on the status line by
+            // TaskTransparency); if it moved, any older
+            // watchdog note is cleared. Either way the force
+            // is marked handled — the breaker re-arms from
+            // the fresh updatedAt.
+            TaskStore(applicationContext).update(taskId) {
+                it.put("watchdogHandledAt", forcedAt)
+                if (TaskStates.isWaiting(finalState)) {
+                    it.put(
+                        "watchdogNote",
+                        TaskWatchdog.FORCED_STILL_WAITING_NOTE
+                    )
+                } else {
+                    it.remove("watchdogNote")
+                }
+            }
+        }
         // v0.13: a task born in a chat reports its settled
         // state back INTO that chat (graded, deduplicated by
         // ChatTaskLink). Waiting states compose nothing — the
@@ -165,6 +196,60 @@ class TaskWorker(context: Context, params: WorkerParameters) :
                 TaskStore(context).all()
             )
             for (id in ids) enqueue(context, id)
+        }
+
+        /** FORCE a waiting task to retry NOW (v1.0.2
+         *  watchdog + the user's Run now): the stored wait
+         *  state is treated as suspect and cleared BEFORE
+         *  the pass — nextRetryAt and every per-route
+         *  rest/pacing field — so the retry is a genuinely
+         *  fresh all-routes attempt, not a re-read of the
+         *  state that may have caused the stuckness. The
+         *  force is stamped on the record; doWorkAdmitted
+         *  accounts for it (visible note if it still ends
+         *  waiting). */
+        fun enqueueForced(context: Context, taskId: String) {
+            val store = TaskStore(context)
+            val record = store.get(taskId) ?: return
+            if (!TaskStates.isWaiting(record.optString("state"))) return
+            store.update(taskId) {
+                it.remove("nextRetryAt")
+                it.remove("routeRestUntil")
+                it.remove("routeStreaks")
+                it.remove("routeLastCallAt")
+                it.put("watchdogForcedAt", System.currentTimeMillis())
+                it.put(
+                    "watchdogForces",
+                    record.optInt("watchdogForces", 0) + 1
+                )
+            }
+            enqueue(context, taskId)
+        }
+
+        /** One watchdog sweep (v1.0.2): expired waits get an
+         *  immediate pass (the app-open kick); stale waits —
+         *  unmoved beyond TaskWatchdog.STALE_MS — get a
+         *  FORCED retry ignoring their stored wait state.
+         *  Called on app open (MainActivity.onResume) and at
+         *  the start of every worker pass. Route availability:
+         *  the keyless pair is always configured (the
+         *  no-keys doctrine), so a route is always available
+         *  to force with. */
+        fun watchdogPass(context: Context, excluding: String? = null) {
+            val store = TaskStore(context)
+            val tasks = store.all()
+            val now = System.currentTimeMillis()
+            val stale = TaskWatchdog.staleWaitIds(
+                tasks, now, routeAvailable = true
+            ).toSet()
+            for (id in TaskWatchdog.expiredWaitIds(tasks, now)) {
+                if (id == excluding || id in stale) continue
+                enqueue(context, id)
+            }
+            for (id in stale) {
+                if (id == excluding) continue
+                enqueueForced(context, id)
+            }
         }
 
         fun cancel(context: Context, taskId: String) {

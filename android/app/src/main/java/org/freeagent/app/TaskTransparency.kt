@@ -350,10 +350,12 @@ object TaskTransparency {
                 "Now: working on the next step."
             TaskStates.WAITING_NETWORK ->
                 "Waiting for the network to come back — " +
-                    "she continues on her own." + retryBit(task, now)
+                    "she continues on her own." + retryBit(task, now) +
+                    watchdogBit(task)
             TaskStates.WAITING_ROUTE ->
                 "Taking a short pause before the next step — " +
-                    "she continues on her own." + retryBit(task, now)
+                    "she continues on her own." + retryBit(task, now) +
+                    watchdogBit(task)
             TaskStates.PARKED_AT_WALL -> {
                 val step = task.optString("wallStep").trim()
                 when {
@@ -380,6 +382,17 @@ object TaskTransparency {
                     ?.let { "Why: $it" }
             else -> null
         }
+
+    /** The watchdog's visible trace (v1.0.2): when a forced
+     *  retry still ended waiting, the record's watchdogNote
+     *  says so in work terms — stuckness is visible state,
+     *  never silence. Vetted like every record-echoed line. */
+    private fun watchdogBit(task: JSONObject): String {
+        val note = NarrationGuard.cleanOrNull(
+            task.optString("watchdogNote")
+        ) ?: return ""
+        return " $note"
+    }
 
     /** " Next try around 4:05 AM." when the record carries
      *  a retry time still ahead; silence otherwise (a due

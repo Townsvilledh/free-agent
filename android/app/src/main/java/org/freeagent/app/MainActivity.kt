@@ -490,6 +490,13 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         uiAlive = true
+        // Watchdog app-open kick (v1.0.2): opening the app
+        // never leaves an expired wait sitting — expired
+        // waits get an immediate pass, stale waits (>10 min
+        // unmoved) a forced retry that ignores their stored
+        // wait state. Cheap record scan; enqueues are
+        // REPLACE-idempotent.
+        TaskWorker.watchdogPass(this)
         if (::walletCardText.isInitialized) refreshWalletCard()
         if (::chatStore.isInitialized && renderedChatId.isNotEmpty()) {
             val current = ChatData.activeId(chatStore.root())
@@ -657,6 +664,26 @@ class MainActivity : AppCompatActivity() {
                         expandedTaskIds.add(statusTaskId)
                     }
                     renderChat(chatId)
+                }
+                // RUN NOW (v1.0.2 watchdog): in the EXPANDED
+                // status view, a waiting task carries the
+                // user's own wake button — a forced pass
+                // that ignores the stored wait state. Slim
+                // shared-menu row styling, like every other
+                // action surface.
+                if (expandedTaskIds.contains(statusTaskId) &&
+                    TaskWatchdog.runNowOffered(statusTask.optString("state"))
+                ) {
+                    transcript.addView(
+                        LilleMenu.actionRow(this, "Run now") {
+                            TaskWorker.enqueueForced(this, statusTaskId)
+                            Toast.makeText(
+                                this@MainActivity, "Trying again now",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            renderChat(chatId)
+                        }
+                    )
                 }
             }
             if (role == "user") userBubbles.add(bubble to display)
