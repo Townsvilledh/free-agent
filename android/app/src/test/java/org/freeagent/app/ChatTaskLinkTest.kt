@@ -177,11 +177,13 @@ class ChatTaskLinkTest {
         )
         val text = ChatTaskLink.reportFor(t, TaskStates.COMPLETED)!!
         assertTrue(text.contains("(partial)"))
-        assertTrue(
-            text.contains("Not done here (needs the computer lane)")
-        )
-        assertTrue(text.contains("email work"))
+        // v1.0.4: the not-done parts are named by shape —
+        // routed work carries its hand-off receipt, and the
+        // email part names the one Settings step.
+        assertTrue(text.contains("Handed to the computer lane"))
+        assertTrue(text.contains("receipt:"))
         assertTrue(text.contains("video work"))
+        assertTrue(text.contains("The email part is not done"))
         assertFalse(text.contains("Done — that work is finished."))
         assertTrue(text.contains(ChatTaskLink.COST_LINE))
     }

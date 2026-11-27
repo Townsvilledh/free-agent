@@ -323,7 +323,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshBrainChain() {
         brainChain = BrainFailure.chain(
-            OwnKeyRoutes.presentRoutes { name -> vault.hasSecret(name) }
+            OwnKeyRoutes.presentRoutes(
+                { name -> vault.hasSecret(name) },
+                lanEnabled = LanRoute.isEnabled(this)
+            )
         )
     }
 
@@ -1029,6 +1032,60 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // APPROVALS (v1.0.4, Plan/Act + the send gate): a
+        // task parked for the user's word — a plan awaiting
+        // approval, an email send awaiting its word — is
+        // released by the deterministic approval shapes and
+        // nothing else. The check runs before detection: an
+        // approval is not a new job and not conversation.
+        if (!hadAttachment && PlanAct.isApprovalMessage(raw)) {
+            val pending = TaskStore(this).all()
+                .filter {
+                    it.optString(ChatTaskLink.ORIGIN_FIELD) == chatId &&
+                        it.optString("state") == TaskStates.PAUSED &&
+                        it.optString(PlanAct.APPROVAL_KIND_FIELD)
+                            .isNotEmpty()
+                }
+                .maxByOrNull { it.optLong("updatedAt", 0L) }
+            if (pending != null) {
+                applyApproval(chatId, pending)
+                return
+            }
+        }
+
+        // UNDO (v1.0.4, checkpoints): the deterministic
+        // command restores the newest checkpointed step of
+        // this chat's latest task that has one.
+        val undoNorm = raw.trim().lowercase().trimEnd('.', '!')
+        if (!hadAttachment &&
+            (undoNorm == "undo last step" || undoNorm == "undo the last step")
+        ) {
+            val task = StatusProbe.latestTaskForChat(
+                TaskStore(this).all(), chatId
+            )
+            if (task != null && Checkpoints.count(task) > 0) {
+                appendAssistantMessage(
+                    chatId,
+                    TaskRunner(this).undoLastCheckpoint(
+                        task.optString("id")
+                    )
+                )
+                return
+            }
+        }
+
+        // RECIPES (v1.0.4): "run recipe <name>" runs a
+        // recipe from her library in this chat — the
+        // deterministic door to the recipe runner.
+        if (!hadAttachment &&
+            raw.trim().lowercase().startsWith("run recipe ")
+        ) {
+            val name = raw.trim().substringAfter(" ")
+                .substringAfter(" ").trim().lowercase()
+            startRecipeInChat(chatId, name)
+            return
+        }
+
         // v0.13 — CHAT→TASK (the chat is the command surface):
         // a job given here is taken on by Lille herself, as
         // work in this thread. Detection is the
@@ -1065,6 +1122,30 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             JobDetect.Outcome.NotJob -> Unit
+        }
+
+        // STEERS (v1.0.4, interruption-as-event): a plain
+        // message in a chat whose task is RUNNING also
+        // steers that task — recorded on its record as an
+        // event, applied at its next step boundary. The
+        // chat conversation below proceeds exactly as
+        // before; the steer never kills or restarts the run.
+        run {
+            val active = TaskStore(this).all()
+                .filter {
+                    it.optString(ChatTaskLink.ORIGIN_FIELD) == chatId &&
+                        TaskStates.isResumable(it.optString("state"))
+                }
+                .maxByOrNull { it.optLong("updatedAt", 0L) }
+            if (active != null) {
+                val taskId = active.optString("id")
+                TaskStore(this).update(taskId) {
+                    val steers = it.optJSONArray("pendingSteers")
+                        ?: JSONArray()
+                    steers.put(raw)
+                    it.put("pendingSteers", steers)
+                }
+            }
         }
 
         val flight = flightFor(chatId)
@@ -1161,11 +1242,117 @@ class MainActivity : AppCompatActivity() {
         // browser job holds the browser lane from its
         // first run. The runner re-stamps the same plan at
         // run start (idempotent).
-        val plan = TaskTools.planFor(instruction)
-        taskStore.update(taskId) { TaskTools.stampPlan(it, plan) }
+        val plan = TaskTools.planFor(
+            instruction,
+            TaskTools.DeviceCaps(
+                gmailConnected = GmailConnection.isConnected(this)
+            )
+        )
+        taskStore.update(taskId) {
+            TaskTools.stampPlan(it, plan)
+            // PLAN/ACT (v1.0.4): a consequential job is
+            // stamped PLAN at creation too, so its first
+            // status already says she is planning first.
+            PlanAct.stampInitialMode(it, instruction)
+        }
         linkTaskToChat(taskId, chatId)
         TaskWorker.enqueue(this, taskId)
         appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
+    }
+
+    /** Release a parked approval (v1.0.4): the word landed
+     *  in the chat — the gate opens on the record and the
+     *  engine resumes the work in this thread. A plan
+     *  approval flips the run to ACT mode (the acting
+     *  tools exist from the next run); a send approval
+     *  arms the one pending send. */
+    private fun applyApproval(chatId: String, task: JSONObject) {
+        val taskId = task.optString("id")
+        val kind = task.optString(PlanAct.APPROVAL_KIND_FIELD)
+        TaskStore(this).update(taskId) {
+            it.remove(PlanAct.APPROVAL_KIND_FIELD)
+            it.remove(PlanAct.APPROVAL_DETAIL_FIELD)
+            it.remove("note")
+            if (kind == "gmail_send") {
+                it.put("gmailSendApproved", true)
+            } else {
+                it.put(PlanAct.MODE_FIELD, PlanAct.MODE_ACT)
+                it.put("planApproved", true)
+            }
+            EventLog.append(
+                it, "approved", System.currentTimeMillis(),
+                JSONObject().put("kind", kind)
+            )
+        }
+        TaskWorker.enqueue(this, taskId)
+        appendAssistantMessage(
+            chatId,
+            if (kind == "gmail_send") {
+                "Approved — she's sending it now."
+            } else {
+                "Approved — she's carrying out the plan now."
+            }
+        )
+    }
+
+    /** Her recipe library (v1.0.4): name → recipe JSON text,
+     *  in the agent-state store (rides the backup). The two
+     *  built-ins are seeded on first read. */
+    private fun recipeLibrary(): JSONObject {
+        val store = AgentStateStore(this)
+        val raw = store.readSection(AgentStateStore.SECTION_RECIPES)
+        if (raw != null) {
+            return try { JSONObject(raw) } catch (e: Exception) { JSONObject() }
+        }
+        val library = JSONObject()
+        for (name in Recipes.builtinNames()) {
+            Recipes.builtin(name)?.let { library.put(name, it.toString()) }
+        }
+        store.writeSection(
+            AgentStateStore.SECTION_RECIPES, library.toString()
+        )
+        return library
+    }
+
+    /** Run a recipe in this chat (v1.0.4): the recipe's
+     *  instructions (parameters substituted) become a task
+     *  carrying the recipe itself — its tool allowlist is
+     *  enforced at dispatch and its success check gates
+     *  the finish. */
+    private fun startRecipeInChat(chatId: String, name: String) {
+        val recipeText = recipeLibrary().optString(name)
+        val recipe = if (recipeText.isEmpty()) {
+            null
+        } else {
+            try { JSONObject(recipeText) } catch (e: Exception) { null }
+        }
+        if (recipe == null) {
+            appendAssistantMessage(
+                chatId,
+                "There's no recipe called \"$name\" in her library " +
+                    "yet — the built-ins are " +
+                    Recipes.builtinNames().joinToString(", ") + "."
+            )
+            return
+        }
+        val instruction = Recipes.substitute(recipe, emptyMap())
+        val taskStore = TaskStore(this)
+        val task = taskStore.create(
+            instruction + "\n\n" + ChatTaskLink.INTAKE_NOTE
+        )
+        val taskId = task.optString("id")
+        taskStore.update(taskId) {
+            it.put("kind", "recipe")
+            it.put("recipeName", name)
+            it.put("recipeJson", recipe.toString())
+        }
+        linkTaskToChat(taskId, chatId)
+        TaskWorker.enqueue(this, taskId)
+        appendAssistantMessage(
+            chatId,
+            "Running the recipe \"$name\" here — she'll report " +
+                "back in this chat when it's done."
+        )
     }
 
     // ---------- the main chat's menu + packaged jobs ----------
@@ -2581,9 +2768,22 @@ class MainActivity : AppCompatActivity() {
     ) {
         val flight = flightFor(chatId)
         val gen = flight.generation
-        val spec = OwnKeyRoutes.spec(route)
-        val key = spec?.let { vault.getSecret(it.vaultKeyName) }
-        if (spec == null || key.isNullOrEmpty()) {
+        // v1.0.4: the LAN route ("your computer") walks this
+        // same path — its spec is built on demand, it carries
+        // NO key (a local server on the user's own network),
+        // and its address/model come from the vault. An
+        // unreachable computer simply fails the call and the
+        // chain falls through, seamlessly.
+        val isLan = route == BrainFailure.Route.LAN
+        val spec = if (isLan) {
+            OwnKeyRoutes.lanSpec()
+        } else {
+            OwnKeyRoutes.spec(route)
+        }
+        val key = spec?.let {
+            if (isLan) "" else vault.getSecret(it.vaultKeyName)
+        }
+        if (spec == null || (!isLan && key.isNullOrEmpty())) {
             // The key was removed between the chain refresh
             // and this call: the route is absent, not broken.
             // Fall through as a network-class failure; the
@@ -2594,15 +2794,24 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        val customBase = if (route == BrainFailure.Route.CUSTOM) {
-            vault.getSecret(OwnKeyRoutes.CUSTOM_URL_VAULT_KEY)
-        } else {
-            null
+        val customBase = when {
+            route == BrainFailure.Route.CUSTOM ->
+                vault.getSecret(OwnKeyRoutes.CUSTOM_URL_VAULT_KEY)
+            isLan -> vault.getSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
+            else -> null
         }
-        val customModel = if (route == BrainFailure.Route.CUSTOM) {
-            vault.getSecret(OwnKeyRoutes.CUSTOM_MODEL_VAULT_KEY)
-        } else {
-            null
+        val customModel = when {
+            route == BrainFailure.Route.CUSTOM ->
+                vault.getSecret(OwnKeyRoutes.CUSTOM_MODEL_VAULT_KEY)
+            isLan -> vault.getSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY)
+            else -> null
+        }
+        if (isLan && customBase.isNullOrEmpty()) {
+            brainRouteFailed(
+                chatId, userText, 0, false, historyText,
+                route, BrainFailure.Class.NETWORK, null
+            )
+            return
         }
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
@@ -2611,11 +2820,13 @@ class MainActivity : AppCompatActivity() {
         val bodyJson = JSONObject()
             .put("model", OwnKeyRoutes.chatModel(spec, customModel))
             .put("messages", messages)
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(OwnKeyRoutes.chatUrl(spec, customBase))
-            .header("Authorization", "Bearer $key")
             .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+        if (!key.isNullOrEmpty()) {
+            requestBuilder.header("Authorization", "Bearer $key")
+        }
+        val request = requestBuilder.build()
         stampBrainCall(route)
         val call = client.newCall(request)
         flight.call = call

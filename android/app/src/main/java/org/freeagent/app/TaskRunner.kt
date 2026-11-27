@@ -65,12 +65,60 @@ class TaskRunner(private val context: Context) {
         private const val MODEL = "openai"
         private const val MAX_STEPS = 8
         private const val BROWSER_MAX_STEPS = 40
+
+        /** The observation executeMailTool returns when a
+         *  send parks for the user's approval — the run loop
+         *  stops on it before any further step. Never
+         *  model-visible: the loop returns first. */
+        const val GMAIL_PARK_OBSERVATION = "PARKED_FOR_APPROVAL"
+
+        // LAN route health cache (v1.0.4): a 60-second
+        // verdict per address, so a dead computer costs one
+        // short probe a minute — never a full request
+        // timeout per step.
+        @Volatile private var lanHealthBase: String = ""
+        @Volatile private var lanHealthAt: Long = 0L
+        @Volatile private var lanHealthOk: Boolean = false
+
+        /** Is the user's computer answering? A short GET on
+         *  its /models — the OpenAI-compatible shape's
+         *  cheapest liveness probe. Cached briefly; any
+         *  failure is just "not now", and the chain walks
+         *  on seamlessly. */
+        fun lanHealthy(baseUrl: String): Boolean {
+            val now = System.currentTimeMillis()
+            if (baseUrl == lanHealthBase && now - lanHealthAt < 60_000L) {
+                return lanHealthOk
+            }
+            val ok = try {
+                val probe = OkHttpClient.Builder()
+                    .connectTimeout(3, TimeUnit.SECONDS)
+                    .readTimeout(3, TimeUnit.SECONDS)
+                    .build()
+                val base = baseUrl.trimEnd('/')
+                val url = if (base.endsWith("/v1")) {
+                    "$base/models"
+                } else {
+                    "$base/v1/models"
+                }
+                probe.newCall(Request.Builder().url(url).get().build())
+                    .execute().use { it.code in 200..499 }
+            } catch (e: Exception) {
+                false
+            }
+            lanHealthBase = baseUrl
+            lanHealthAt = now
+            lanHealthOk = ok
+            return ok
+        }
         private const val SYSTEM_PROMPT =
             "You are Lille, an autonomous agent completing a task on the user's phone by calling tools. " +
             "Reply with exactly ONE fenced JSON block per step, like:\n" +
             "```json\n{\"tool\": \"write_note\", \"args\": {\"path\": \"note.txt\", \"content\": \"...\"}}\n```\n" +
             "Tools: write_note{path,content}, read_note{path}, list_notes{}, web_search{query}, " +
-            "finish{summary, outputs}. All files are notes inside the app sandbox; use relative paths. " +
+            "memory_read{}, memory_write{block,fact}, memory_search{query}, " +
+            "plan_note{facts,subgoals,done,dropped}, finish{summary, outputs}. " +
+            "All files are notes inside the app sandbox; use relative paths. " +
             "When fully done, call finish and list produced notes in outputs. Never invent tool results."
         private const val BROWSER_SYSTEM_PROMPT =
             "You are Lille, an autonomous agent completing a task in your OWN browser on the user's phone by calling tools. " +
@@ -101,7 +149,9 @@ class TaskRunner(private val context: Context) {
             "browser_type_secret{ref,vault_key}, browser_upload{ref,path}, browser_screenshot{name}, " +
             "browser_wait{seconds or text,timeout}, browser_handoff{step}, vault_gen_secret{key}, " +
             "vault_record_account{site,username,vault_key}, web_search{query}, write_note{path,content}, " +
-            "read_note{path}, list_notes{}, finish{summary}. The browser is bound by this task's domain " +
+            "read_note{path}, list_notes{}, memory_read{}, memory_write{block,fact}, " +
+            "memory_search{query}, plan_note{facts,subgoals,done,dropped}, finish{summary}. " +
+            "The browser is bound by this task's domain " +
             "allowlist (named in the environment note): browser_open only those domains, and work from " +
             "browser_read's element refs — refs are reassigned on every read, so re-read after each " +
             "navigation. Passwords are NEVER typed by you and NEVER written into any file or message: " +
@@ -166,9 +216,28 @@ class TaskRunner(private val context: Context) {
         // Packaged tasks (kind set) keep their package's
         // toolset and are never planned.
         val packaged = TaskTools.isPackaged(task)
-        val plan = if (packaged) null else TaskTools.planFor(text)
+        // v1.0.4: the plan is computed against the phone's
+        // LIVE capabilities — Gmail connected or not — so
+        // mail is device kit when the connection exists and
+        // an up-front declaration when it does not.
+        val caps = TaskTools.DeviceCaps(
+            gmailConnected = GmailConnection.isConnected(context)
+        )
+        val plan = if (packaged) null else TaskTools.planFor(text, caps)
         val browserToolsActive = browserTask ||
             (plan?.requiresBrowser == true)
+        // RECIPES (v1.0.4): a recipe record carries its
+        // package as JSON; its tool allowlist is its
+        // contract and its success check is its finish gate.
+        val recipe = if (task.optString("kind") == "recipe") {
+            try {
+                JSONObject(task.optString("recipeJson"))
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
 
         if (task.optString("lane") == "host") {
             // Lane discipline: a host-lane task belongs to the
@@ -206,18 +275,126 @@ class TaskRunner(private val context: Context) {
             // browser allowlist are record evidence from
             // here on. A new run also supersedes the last
             // budget rest's flag.
-            if (plan != null) TaskTools.stampPlan(it, plan)
+            if (plan != null) {
+                TaskTools.stampPlan(it, plan)
+                // PLAN/ACT (v1.0.4): a consequential general
+                // task starts in PLAN mode — mutating tools
+                // absent — until the user approves the plan.
+                // A recipe is exempt: the recipe file IS the
+                // user's pre-approved instruction.
+                if (recipe == null) PlanAct.stampInitialMode(it, text)
+            }
             it.remove(StepBudget.REST_FLAG)
+            EventLog.append(it, "run_start", System.currentTimeMillis())
+        }
+        // Re-read: the update above may have stamped the
+        // plan/mode onto the record — the run's decisions
+        // (plan mode above all) read the record's truth,
+        // not the pre-update snapshot.
+        task = store.get(id) ?: task
+        // LANE ROUTING (v1.0.4): the classes this phone can
+        // never carry (repo/code, video) are ROUTED, not
+        // dropped — the spec export is written once, and
+        // its receipt lives on the record where the status
+        // and the graded report read it. No general task
+        // ends in a terminal "cannot execute" for a
+        // routable class again (the Full-Kit law).
+        if (plan != null && plan.routed.isNotEmpty() &&
+            !task.optBoolean("laneRouted")
+        ) {
+            exportSpec(
+                task,
+                "classes routed to the computer lane: " +
+                    TaskTools.labelsFor(plan.routed)
+            )
+            store.update(id) {
+                it.put("laneRouted", true)
+                it.put("laneReceipt", "specs/$id.json")
+                it.put(
+                    "laneRoutedClasses",
+                    TaskTools.labelsFor(plan.routed)
+                )
+                EventLog.append(
+                    it, "lane_routed", System.currentTimeMillis(),
+                    JSONObject().put(
+                        "classes", TaskTools.labelsFor(plan.routed)
+                    )
+                )
+            }
         }
         var messages = task.optJSONArray("messages") ?: JSONArray()
+        // PLAN MODE (v1.0.4): a consequential general task
+        // that has not been approved yet runs on the PLAN
+        // registry — read-only tools + propose_plan; the
+        // acting tools do not exist in this run. Read from a
+        // fresh record: the run-start update may have just
+        // stamped the mode onto it.
+        val planMode = plan != null &&
+            PlanAct.isPlanMode(store.get(id) ?: task)
         if (messages.length() == 0) {
             messages.put(JSONObject().put("role", "system")
                 .put("content", when {
+                    planMode -> PlanAct.PLAN_SYSTEM_PROMPT
                     packaged -> BROWSER_SYSTEM_PROMPT
                     browserToolsActive -> GENERAL_BROWSER_SYSTEM_PROMPT
                     else -> SYSTEM_PROMPT
                 }))
             messages.put(JSONObject().put("role", "user").put("content", text))
+        }
+        // PLAN APPROVED (v1.0.4): the user gave the word in
+        // the chat — the run that parked on the PLAN prompt
+        // resumes on the full registry. The swap happens
+        // once, on the record's flag, and the model is told
+        // plainly that the acting tools now exist.
+        if (plan != null && !planMode &&
+            task.optBoolean("planApproved") &&
+            !task.optBoolean("planPromptSwapped") &&
+            messages.length() > 0
+        ) {
+            messages.put(
+                0,
+                JSONObject().put("role", "system").put(
+                    "content",
+                    if (browserToolsActive) {
+                        GENERAL_BROWSER_SYSTEM_PROMPT
+                    } else {
+                        SYSTEM_PROMPT
+                    }
+                )
+            )
+            messages.put(JSONObject().put("role", "user").put(
+                "content",
+                "The user approved your plan in the chat. The acting " +
+                    "tools are now available (the full tool list in " +
+                    "your instructions applies, including the tools " +
+                    "this job's environment note names). Carry out " +
+                    "the plan on the record."
+            ))
+            store.update(id) {
+                it.put("planPromptSwapped", true)
+                it.put("messages", messages)
+            }
+        }
+        // GMAIL SEND APPROVED (v1.0.4): a send parked for
+        // the user's word; the word landed — tell her once
+        // to make the call again (the gate now opens).
+        if (task.optBoolean("gmailSendApproved") &&
+            task.has("pendingGmailSend") &&
+            !task.optBoolean("gmailSendResumeNoted") &&
+            messages.length() > 0
+        ) {
+            val pending = task.optJSONObject("pendingGmailSend")
+            messages.put(JSONObject().put("role", "user").put(
+                "content",
+                "The user approved the email send in the chat. Call " +
+                    "gmail_send now with to=${pending?.optString("to")}, " +
+                    "subject=${pending?.optString("subject")} and the " +
+                    "same body you prepared."
+            ))
+            store.update(id) {
+                it.put("gmailSendResumeNoted", true)
+                it.put("messages", messages)
+            }
         }
         var stepsDone = task.optInt("steps", 0)
         val maxSteps = if (browserToolsActive) BROWSER_MAX_STEPS else MAX_STEPS
@@ -265,7 +442,70 @@ class TaskRunner(private val context: Context) {
         if (plan != null && !task.optBoolean("envNotePosted")) {
             messages.put(JSONObject().put("role", "user")
                 .put("content", TaskTools.environmentNote(plan)))
+            if (plan.requiresCalendar) {
+                // Calendar tools take epoch times — give her
+                // the anchor instead of letting her guess it.
+                val nowMs = System.currentTimeMillis()
+                messages.put(JSONObject().put("role", "user").put(
+                    "content",
+                    "The current time is " +
+                        "${CalendarFormat.formatInstant(nowMs)} " +
+                        "(epoch ms $nowMs). Compute calendar times from it."
+                ))
+            }
             store.update(id) { it.put("envNotePosted", true) }
+            checkpoint(id, messages, stepsDone, windowSteps)
+        }
+        // MEMORY + SKILLS + SITE CARDS (v1.0.4): her durable
+        // context, posted ONCE per task at its start. The
+        // memory core rides as a FROZEN SNAPSHOT (stamped on
+        // the record — resumes and later runs of this task
+        // read the same snapshot, never a moving target);
+        // skills she wrote from earlier runs and the cards
+        // for this job's sites join it. A guide, not gospel:
+        // memory can be wrong and the live state in front of
+        // her cannot.
+        if (!task.optBoolean("contextPosted") && messages.length() > 0) {
+            val stateStore = AgentStateStore(context)
+            val parts = mutableListOf<String>()
+            val frozen = task.optString("memorySnapshot")
+            val snapshot = if (frozen.isNotEmpty()) {
+                frozen
+            } else {
+                val snap = AgentMemory(
+                    stateStore.io(AgentStateStore.SECTION_MEMORY)
+                ).snapshot()
+                store.update(id) { it.put("memorySnapshot", snap) }
+                snap
+            }
+            if (snapshot.isNotBlank()) {
+                parts.add(
+                    "What you remember (frozen snapshot from your " +
+                        "memory at this task's start):\n$snapshot"
+                )
+            }
+            val skillStore = SkillStore(
+                stateStore.io(AgentStateStore.SECTION_SKILLS)
+            )
+            for (skill in skillStore.match(text)) {
+                parts.add(skillStore.render(skill))
+            }
+            if (plan != null && plan.browserDomains.isNotEmpty()) {
+                val cards = SiteCards(
+                    stateStore.io(AgentStateStore.SECTION_CARDS)
+                ).renderFor(plan.browserDomains)
+                if (cards.isNotBlank()) parts.add(cards)
+            }
+            if (parts.isNotEmpty()) {
+                messages.put(JSONObject().put("role", "user").put(
+                    "content",
+                    "Context from your memory and earlier runs — a " +
+                        "guide, not gospel; the live state in front " +
+                        "of you wins any disagreement:\n\n" +
+                        parts.joinToString("\n\n")
+                ))
+            }
+            store.update(id) { it.put("contextPosted", true) }
             checkpoint(id, messages, stepsDone, windowSteps)
         }
         // Window outcome counters for the progress-aware
@@ -286,12 +526,63 @@ class TaskRunner(private val context: Context) {
         var lastChallenge: BrowserPerception.Challenge? = null
         var pendingHandoffStep: String? = null
 
+        // One stall mechanism for the whole run (v1.0.4):
+        // reflections feed it, its verdicts steer or park.
+        val stallTracker = StallTracker()
         while (windowSteps < maxSteps) {
             // Honour pause/cancel that landed while we were working.
             val fresh = store.get(id) ?: return TaskStates.FAILED
             when (fresh.optString("state")) {
                 TaskStates.CANCELLED -> return TaskStates.CANCELLED
                 TaskStates.PAUSED -> return TaskStates.PAUSED
+            }
+            // STEERS (v1.0.4, interruption-as-event): a user
+            // message that steered this task from its chat is
+            // an EVENT on the record — applied here, at the
+            // step boundary, never by killing the run. The
+            // work so far stands; the steer joins the
+            // conversation and the loop continues.
+            val steers = fresh.optJSONArray("pendingSteers")
+            if (steers != null && steers.length() > 0) {
+                for (i in 0 until steers.length()) {
+                    val steer = steers.optString(i)
+                    if (steer.isBlank()) continue
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "The user is steering this work: $steer " +
+                            "Apply it from this step on; everything " +
+                            "done so far stands."
+                    ))
+                    store.update(id) {
+                        EventLog.append(
+                            it, "steer",
+                            System.currentTimeMillis(),
+                            JSONObject().put("text", steer.take(120))
+                        )
+                    }
+                }
+                store.update(id) {
+                    it.put("pendingSteers", JSONArray())
+                    it.put("messages", messages)
+                }
+            }
+            // CONDENSER (v1.0.4): past the bound, old tool
+            // exchanges fold into ONE tombstone message that
+            // says what it folded — never silent truncation.
+            if (messages.length() > 30) {
+                val (condensed, folded) =
+                    EventLog.condenseMessages(messages, 12)
+                if (folded > 0) {
+                    messages = condensed
+                    store.update(id) {
+                        it.put("messages", messages)
+                        EventLog.append(
+                            it, "condensed",
+                            System.currentTimeMillis(),
+                            JSONObject().put("folded", folded)
+                        )
+                    }
+                }
             }
 
             // Brain-call pacing lives inside callModel now
@@ -400,6 +691,20 @@ class TaskRunner(private val context: Context) {
             }
             val (name, args) = call
             if (name == "finish") {
+                if (planMode) {
+                    // PLAN MODE (v1.0.4): there is no finish
+                    // here — the run's product is a plan for
+                    // the user to approve.
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "You are in PLAN MODE — finish does not exist " +
+                            "here. Call propose_plan{plan,subgoals} " +
+                            "with the plan you have formed; the user " +
+                            "approves it in the chat."
+                    ))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
                 val outputs = args.optJSONArray("outputs")
                 val missing = mutableListOf<String>()
                 if (outputs != null) {
@@ -433,8 +738,106 @@ class TaskRunner(private val context: Context) {
                         stepOverride = pendingHandoffStep
                     )
                 }
+                // VERIFY-STATE + FINAL-ANSWER CHECKS
+                // (v1.0.4, steals #2 + #8): a finish is a
+                // CLAIM until the claimed end state is
+                // re-read. The probe re-reads it (note /
+                // browser page / calendar), the deterministic
+                // checks judge the record, and a failing
+                // finish bounces back to work ONCE; a second
+                // failure finishes honestly with the check
+                // named on the record.
+                val summaryText = args.optString("summary", "Done.")
+                var recipeFailed = false
+                val verify = if (recipe != null) {
+                    val passed = Recipes.checkPasses(
+                        recipe, recipeProbeText(recipe, id)
+                    )
+                    if (!passed) {
+                        // Fresh read: the local snapshot does
+                        // not see this run's own retry stamps.
+                        val retries = (store.get(id) ?: task)
+                            .optInt("recipeRetries", 0)
+                        val maxRetries =
+                            recipe.optInt("maxRetries", 0)
+                        if (retries < maxRetries) {
+                            // Bounded retry: a fresh attempt
+                            // at the same recipe, told why.
+                            val freshMessages = JSONArray()
+                            freshMessages.put(JSONObject()
+                                .put("role", "system")
+                                .put(
+                                    "content",
+                                    if (browserToolsActive) {
+                                        GENERAL_BROWSER_SYSTEM_PROMPT
+                                    } else {
+                                        SYSTEM_PROMPT
+                                    }
+                                ))
+                            freshMessages.put(JSONObject()
+                                .put("role", "user").put("content", text))
+                            freshMessages.put(JSONObject()
+                                .put("role", "user").put(
+                                    "content",
+                                    "Attempt ${retries + 2}: the recipe's " +
+                                        "success check failed on the last " +
+                                        "attempt (" +
+                                        describeRecipeCheck(recipe) +
+                                        "). Do the work so the check " +
+                                        "passes this time."
+                                ))
+                            store.update(id) {
+                                it.put("recipeRetries", retries + 1)
+                                it.put("messages", freshMessages)
+                                it.put("steps", stepsDone)
+                            }
+                            messages = freshMessages
+                            windowSteps = 0
+                            continue
+                        }
+                        recipeFailed = true
+                    }
+                    FinishVerifier.externalVerdict(
+                        passed,
+                        if (passed) {
+                            "the recipe's success check passed " +
+                                "(${describeRecipeCheck(recipe)})"
+                        } else {
+                            "the recipe's success check did NOT pass " +
+                                "(${describeRecipeCheck(recipe)})"
+                        }
+                    )
+                } else {
+                    runFinishProbe(id, plan, browserToolsActive)
+                }
+                val freshRecord = store.get(id) ?: task
+                val failures = FinalChecks.evaluate(
+                    freshRecord, plan, summaryText, verify
+                ).toMutableList()
+                if (recipeFailed) {
+                    failures.add(
+                        FinalChecks.Failure(
+                            "recipe_success_check", verify.detail
+                        )
+                    )
+                }
+                if (failures.isNotEmpty() &&
+                    freshRecord.optInt(TaskPlanning.BOUNCES_FIELD, 0) == 0
+                ) {
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content", FinalChecks.bounceNote(failures)
+                    ))
+                    store.update(id) {
+                        it.put(TaskPlanning.BOUNCES_FIELD, 1)
+                        it.put("messages", messages)
+                        it.put("steps", stepsDone)
+                        FinishVerifier.stamp(it, verify)
+                    }
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
                 store.update(id, TaskStates.COMPLETED) {
-                    it.put("summary", args.optString("summary", "Done."))
+                    it.put("summary", summaryText)
                     it.put("steps", stepsDone)
                     it.put("messages", messages)
                     // Never silently downgrade (v1.0.3): a
@@ -444,26 +847,123 @@ class TaskRunner(private val context: Context) {
                     if (plan != null && plan.partial) {
                         it.put("partialCompletion", true)
                     }
+                    // Verify-state + final checks (v1.0.4):
+                    // the re-read and any failed check ride
+                    // the record; a failed check marks the
+                    // finish partial — the report names it.
+                    FinishVerifier.stamp(it, verify)
+                    if (failures.isNotEmpty()) {
+                        it.put("partialCompletion", true)
+                        it.put(
+                            FinalChecks.FAILED_FIELD,
+                            failures.joinToString(",") { f -> f.check }
+                        )
+                    }
+                    EventLog.append(
+                        it, "finish", System.currentTimeMillis(),
+                        JSONObject()
+                            .put("verified", verify.ok)
+                            .put(
+                                "checks",
+                                failures.joinToString(",") { f -> f.check }
+                            )
+                    )
                 }
+                onTaskCompleted(id, text, plan)
                 return TaskStates.COMPLETED
             }
+            // PLAN PROPOSAL (v1.0.4): the plan-mode run's one
+            // productive act — the plan lands on the record,
+            // the task parks, and the user approves in the
+            // chat. The acting tools do not exist until then.
+            if (!packaged && name == "propose_plan") {
+                val planText = args.optString("plan")
+                store.update(id, TaskStates.PAUSED) {
+                    it.put("steps", stepsDone)
+                    it.put("messages", messages)
+                    it.put("planText", planText)
+                    it.put(PlanAct.APPROVAL_KIND_FIELD, "plan")
+                    it.put(
+                        PlanAct.APPROVAL_DETAIL_FIELD,
+                        planText.take(120)
+                    )
+                    TaskPlanning.applyPlanNote(it, args, stepsDone)
+                    it.put("note", PlanAct.parkNote("plan", ""))
+                    EventLog.append(
+                        it, "plan_proposed",
+                        System.currentTimeMillis()
+                    )
+                }
+                return TaskStates.PAUSED
+            }
+            // The page signature BEFORE the step, for the
+            // reflection pass (v1.0.4): a browser step's
+            // outcome is graded against what actually
+            // changed on the page.
+            val pageSigBefore = BrowserSession.lastState?.let {
+                StepReflection.pageSignature(it)
+            }
             val observation = when {
+                // PLAN GATE (v1.0.4): the dispatch wall
+                // behind the registry wall — a mutating call
+                // named in plan mode is refused by Sentinel.
+                plan != null &&
+                    PlanAct.refuses(PlanAct.mode(task), name) ->
+                    TaskTools.PLAN_REFUSAL
+                // PLAN NOTE (v1.0.4): the planning tool lands
+                // on the record itself.
+                !packaged && name == "plan_note" -> {
+                    var obs = ""
+                    store.update(id) {
+                        obs = TaskPlanning.applyPlanNote(it, args, stepsDone)
+                        EventLog.append(
+                            it, "plan_note",
+                            System.currentTimeMillis()
+                        )
+                    }
+                    obs
+                }
+                // RECIPE CONTRACT (v1.0.4): a recipe's tool
+                // allowlist is its contract — a call outside
+                // it is refused, never improvised around.
+                recipe != null && name != "finish" &&
+                    !Recipes.allowedTools(recipe).contains(name) ->
+                    "error: SENTINEL — the recipe " +
+                        "${recipe.optString("name")} does not allow " +
+                        "the tool $name; its tools are its contract. " +
+                        "Work with the allowed tools or finish."
                 packaged -> executeBrowserTool(id, task, name, args)
-                browserToolsActive ->
-                    // General task, browser in play (v1.0.3):
-                    // the pure dispatch (TaskTools.executorFor)
-                    // routes browser-family calls to the SAME
-                    // device browser executor the packaged
-                    // lane uses, refuses the X lane tools by
-                    // Sentinel, and leaves notes/search to the
-                    // note executor.
-                    when (TaskTools.executorFor(true, name)) {
+                else ->
+                    // General task (v1.0.3 + v1.0.4): the
+                    // pure dispatch (TaskTools.executorFor)
+                    // routes each family to its executor —
+                    // browser to the SAME device browser
+                    // executor the packaged lane uses,
+                    // calendar/mail/memory to the device
+                    // lanes, the X tools refused by Sentinel,
+                    // notes/search to the note executor.
+                    when (TaskTools.executorFor(
+                        browserToolsActive, name,
+                        mailActive = plan?.mailActive == true,
+                        calendarActive = plan?.requiresCalendar == true
+                    )) {
                         TaskTools.Executor.BROWSER ->
                             executeBrowserTool(id, task, name, args)
+                        TaskTools.Executor.CALENDAR ->
+                            executeCalendarTool(id, name, args)
+                        TaskTools.Executor.MAIL ->
+                            executeMailTool(id, task, name, args, stepsDone)
+                        TaskTools.Executor.MEMORY ->
+                            executeMemoryTool(name, args)
                         TaskTools.Executor.REFUSE_X -> TaskTools.X_REFUSAL
                         else -> executeTool(id, name, args)
                     }
-                else -> executeTool(id, name, args)
+            }
+            // A gmail send parked for the user's word inside
+            // executeMailTool: the record already carries the
+            // park — stop here, before any further step.
+            if (observation == GMAIL_PARK_OBSERVATION) {
+                return TaskStates.PAUSED
             }
             // The window's outcome, for the progress-aware
             // budget: an error observation is a step that
@@ -491,6 +991,71 @@ class TaskRunner(private val context: Context) {
             messages.put(JSONObject().put("role", "user")
                 .put("content", "Tool result ($name): $observation"))
             checkpoint(id, messages, stepsDone, windowSteps)
+            // REFLECTION + STALL (v1.0.4, steals #3 + #14):
+            // every general step is classified on the record
+            // (worked / wrong target / no change /
+            // unexpected) and the ONE stall mechanism judges
+            // the stream — change strategy once, then park
+            // with a named reason instead of grinding.
+            if (!packaged) {
+                val pageSigAfter = BrowserSession.lastState?.let {
+                    StepReflection.pageSignature(it)
+                }
+                val outcome = StepReflection.classify(
+                    name, observation, pageSigBefore, pageSigAfter
+                )
+                val nowMs = System.currentTimeMillis()
+                store.update(id) {
+                    StepReflection.record(it, stepsDone, name, outcome)
+                    EventLog.append(
+                        it, "step", nowMs,
+                        JSONObject()
+                            .put("tool", name)
+                            .put("outcome", outcome.name)
+                    )
+                }
+                when (stallTracker.record(
+                    stallTracker.signature(name, args, observation),
+                    outcome
+                )) {
+                    StallTracker.Verdict.CHANGE_STRATEGY -> {
+                        messages.put(JSONObject().put("role", "user")
+                            .put("content", stallTracker.strategyNote()))
+                        store.update(id) {
+                            it.put("messages", messages)
+                            EventLog.append(
+                                it, "stuck_strategy",
+                                System.currentTimeMillis()
+                            )
+                        }
+                    }
+                    StallTracker.Verdict.PARK -> {
+                        store.update(id, TaskStates.PAUSED) {
+                            it.put("note", stallTracker.parkReason())
+                            it.put("steps", stepsDone)
+                            it.put("messages", messages)
+                            it.put(StepBudget.WINDOW_FIELD, windowSteps)
+                            EventLog.append(
+                                it, "stuck_park",
+                                System.currentTimeMillis()
+                            )
+                        }
+                        return TaskStates.PAUSED
+                    }
+                    StallTracker.Verdict.OK -> {}
+                }
+                // PLANNING INTERVAL (v1.0.4, steal #8): the
+                // run owes a recorded plan note at the
+                // cadence — requested on this result, merged
+                // by the plan_note tool when it lands.
+                if (name != "plan_note" &&
+                    TaskPlanning.planDue(windowSteps, browserToolsActive)
+                ) {
+                    messages.put(JSONObject().put("role", "user")
+                        .put("content", TaskPlanning.PLAN_REQUEST))
+                    store.update(id) { it.put("messages", messages) }
+                }
+            }
             task = store.get(id) ?: return TaskStates.FAILED
         }
 
@@ -876,9 +1441,29 @@ class TaskRunner(private val context: Context) {
             return null
         }
 
-        val present = OwnKeyRoutes.presentRoutes { name -> vault.hasSecret(name) }
+        val present = OwnKeyRoutes.presentRoutes(
+            { name -> vault.hasSecret(name) },
+            lanEnabled = LanRoute.isEnabled(context)
+        )
         for (route in BrainFailure.OWN_KEY_ORDER) {
             if (route !in present) continue
+            if (route == BrainFailure.Route.LAN) {
+                // YOUR COMPUTER (v1.0.4, steal #13): the LAN
+                // route — the user's own model server, no key.
+                // Health-checked first: an unreachable
+                // computer is skipped in silence and the chain
+                // falls back seamlessly (the seamless law —
+                // no route talk reaches any user surface).
+                val base = vault.getSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
+                    ?: continue
+                if (!lanHealthy(base)) continue
+                val model = vault.getSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY)
+                    ?.ifBlank { null } ?: OwnKeyRoutes.LAN_DEFAULT_MODEL
+                attempt(route.key) {
+                    callOpenAi(chatUrl(base), model, null, messages)
+                }?.let { return it }
+                continue
+            }
             val spec = OwnKeyRoutes.spec(route) ?: continue
             val key = vault.getSecret(spec.vaultKeyName) ?: continue
             val customBase = if (route == BrainFailure.Route.CUSTOM) {
@@ -938,7 +1523,7 @@ class TaskRunner(private val context: Context) {
         val dir = taskDir(id)
         return try {
             when (name) {
-                "write_note" -> writeNote(dir, args)
+                "write_note" -> writeNoteCheckpointed(id, args)
                 "read_note" -> readNote(dir, args)
                 "list_notes" -> {
                     val files = dir.walkTopDown().filter { it.isFile }
@@ -962,6 +1547,355 @@ class TaskRunner(private val context: Context) {
             target.parentFile?.mkdirs()
             target.writeText(args.optString("content"))
             "wrote $rel (${args.optString("content").length} chars)"
+        }
+    }
+
+    /** write_note with its v1.0.4 bookkeeping: a CHECKPOINT
+     *  of the note's prior state lands on the record before
+     *  the write (so the step can be undone), and the path
+     *  is remembered as the task's last note — the finish
+     *  probe's re-read target (verify-state, steal #2). */
+    private fun writeNoteCheckpointed(id: String, args: JSONObject): String {
+        val rel = args.optString("path")
+        val file = File(taskDir(id), rel)
+        val before = if (file.isFile) {
+            try { file.readText() } catch (e: Exception) { null }
+        } else {
+            null
+        }
+        val obs = writeNote(taskDir(id), args)
+        if (!obs.startsWith("error:")) {
+            store.update(id) {
+                Checkpoints.append(
+                    it,
+                    Checkpoints.noteEntry(
+                        it.optInt("steps", 0), rel, before
+                    )
+                )
+                it.put("lastNotePath", rel)
+            }
+        }
+        return obs
+    }
+
+    /** Undo the newest checkpointed step (v1.0.4): restore
+     *  the note the step changed — byte-for-byte, or delete
+     *  it when the step created it. Deterministic; driven
+     *  from the chat's "undo last step" command. */
+    fun undoLastCheckpoint(id: String): String {
+        val task = store.get(id) ?: return "No such task."
+        val entry = Checkpoints.pop(task) ?: return "Nothing to undo."
+        val (path, content) = Checkpoints.restoreTarget(entry)
+        val file = File(taskDir(id), path).canonicalFile
+        if (!file.path.startsWith(taskDir(id).canonicalFile.path)) {
+            return "Undo refused: the recorded path escapes the sandbox."
+        }
+        if (content == null) {
+            file.delete()
+        } else {
+            file.parentFile?.mkdirs()
+            file.writeText(content)
+        }
+        store.update(id) {
+            it.put(Checkpoints.FIELD, task.optJSONArray(Checkpoints.FIELD))
+        }
+        return "Undid the last step: $path restored."
+    }
+
+    /** VERIFY-STATE probe (v1.0.4, steal #2): re-read the
+     *  end state a finish claims, per FinishVerifier's
+     *  selection. The runner owns the artefacts; the pure
+     *  layer grades what the re-read found. */
+    private fun runFinishProbe(
+        id: String, plan: TaskTools.Plan?, browserActive: Boolean
+    ): FinishVerifier.Result {
+        val task = store.get(id) ?: return FinishVerifier.noneVerdict()
+        return when (FinishVerifier.probeFor(task, browserActive)) {
+            FinishVerifier.ProbeKind.NOTE -> {
+                val path = task.optString("lastNotePath")
+                val file = File(taskDir(id), path)
+                FinishVerifier.noteVerdict(
+                    path, file.isFile,
+                    if (file.isFile) file.length().toInt() else 0
+                )
+            }
+            FinishVerifier.ProbeKind.BROWSER -> {
+                val state = BrowserSession.lastState
+                if (state == null) {
+                    FinishVerifier.browserVerdict("", "", false)
+                } else {
+                    FinishVerifier.browserVerdict(
+                        state.url, state.title,
+                        BrowserPerception.domainAllowed(
+                            state.url, browserDomains(task)
+                        )
+                    )
+                }
+            }
+            FinishVerifier.ProbeKind.CALENDAR -> {
+                val title = task.optString("calendarCreatedTitle")
+                val start = task.optLong("calendarCreatedStart", 0L)
+                val found = try {
+                    CalendarContractGateway(context)
+                        .events(start - 3_600_000L, start + 86_400_000L)
+                        .any { it.title == title }
+                } catch (e: Exception) {
+                    false
+                }
+                FinishVerifier.calendarVerdict(title, found)
+            }
+            FinishVerifier.ProbeKind.NONE -> FinishVerifier.noneVerdict()
+        }
+    }
+
+    /** The text a recipe's success check reads (v1.0.4):
+     *  the target note's content, or the browser's resting
+     *  page text — the check's own target decides. */
+    private fun recipeProbeText(recipe: JSONObject, id: String): String {
+        val check = recipe.optJSONObject("successCheck") ?: return ""
+        return when (check.optString("kind")) {
+            "note_contains" -> {
+                val file = File(taskDir(id), check.optString("target"))
+                if (file.isFile) {
+                    try { file.readText() } catch (e: Exception) { "" }
+                } else {
+                    ""
+                }
+            }
+            "page_contains" -> BrowserSession.lastState?.text ?: ""
+            else -> ""
+        }
+    }
+
+    /** A recipe's success check, in words (for the retry
+     *  note and the verdict detail). */
+    private fun describeRecipeCheck(recipe: JSONObject): String {
+        val check = recipe.optJSONObject("successCheck")
+            ?: return "no success check"
+        return when (check.optString("kind")) {
+            "note_contains" ->
+                "the note ${check.optString("target")} must contain " +
+                    "\"${check.optString("pattern")}\""
+            "page_contains" ->
+                "the page must contain \"${check.optString("pattern")}\""
+            else -> "the run must complete"
+        }
+    }
+
+    /** Post-completion growth (v1.0.4): a successful task
+     *  that took ≥5 tool calls distils its SKILL (steal #7);
+     *  the sites it worked grow their CARDS (steal #9).
+     *  Both ride the agent-state store, and so the backup. */
+    private fun onTaskCompleted(
+        id: String, text: String, plan: TaskTools.Plan?
+    ) {
+        try {
+            val record = store.get(id) ?: return
+            val stateStore = AgentStateStore(context)
+            val skillStore = SkillStore(
+                stateStore.io(AgentStateStore.SECTION_SKILLS)
+            )
+            if (skillStore.shouldDistil(record)) {
+                skillStore.distil(record, System.currentTimeMillis())
+            }
+            if (plan != null && plan.browserDomains.isNotEmpty()) {
+                val cards = SiteCards(
+                    stateStore.io(AgentStateStore.SECTION_CARDS)
+                )
+                val title = BrowserSession.lastState?.title ?: ""
+                for (domain in plan.browserDomains) {
+                    cards.grow(domain, System.currentTimeMillis(), keyScreen = title)
+                }
+            }
+        } catch (e: Exception) {
+            // Growth is a dividend, never a failure mode:
+            // a completed task stays completed.
+        }
+    }
+
+    /** The calendar executor (v1.0.4): CalendarContract
+     *  behind the pure gateway. Creation is a mutating
+     *  tool — plan-gated upstream like every mutation, and
+     *  its result is recorded for the finish probe. */
+    private fun executeCalendarTool(
+        id: String, name: String, args: JSONObject
+    ): String {
+        val gateway = CalendarContractGateway(context)
+        return try {
+            when (name) {
+                "calendar_read" -> {
+                    val now = System.currentTimeMillis()
+                    val rangeName = args.optString("range")
+                        .ifEmpty { "today" }
+                    val (from, to) = when (rangeName) {
+                        "week" -> now to now + 7 * 86_400_000L
+                        "tomorrow" ->
+                            CalendarFormat.dayRange(now + 86_400_000L)
+                        else -> CalendarFormat.dayRange(now)
+                    }
+                    CalendarFormat.formatEvents(
+                        gateway.events(from, to), rangeName
+                    )
+                }
+                "calendar_create" -> {
+                    val title = args.optString("title")
+                    val start = args.optLong("startMs", 0L)
+                    val end = args.optLong("endMs", 0L)
+                    if (title.isBlank() || start <= 0L || end <= start) {
+                        "error: calendar_create needs a title and " +
+                            "startMs/endMs (epoch ms, end after start) — " +
+                            "compute them from the current time given " +
+                            "in the environment note"
+                    } else {
+                        val created = gateway.create(
+                            title, start, end, args.optString("location")
+                        )
+                        store.update(id) {
+                            it.put("calendarCreatedTitle", created.title)
+                            it.put("calendarCreatedStart", created.startMs)
+                        }
+                        "CALENDAR_CREATED id=${created.id} " +
+                            "title=\"${created.title}\" " +
+                            "start=${CalendarFormat.formatInstant(created.startMs)} " +
+                            "— on the calendar."
+                    }
+                }
+                else -> "error: unknown tool: $name"
+            }
+        } catch (e: SecurityException) {
+            "error: the calendar permission is not granted on this " +
+                "phone — the user can grant it in Android Settings → " +
+                "Apps → Lille → Permissions → Calendar. Do not invent " +
+                "events; finish honestly if the job needs the calendar."
+        } catch (e: Exception) {
+            "error: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+
+    /** The Gmail executor (v1.0.4): the device lane behind
+     *  the pure gateway + redaction layer. Not connected →
+     *  the honest NOT_CONNECTED observation (the plan
+     *  already declared it at task start; nothing is
+     *  faked). SEND walks MailSendGate's triple gate in
+     *  order; when the ONLY closed gate is the user's
+     *  approval, the send PARKS for that word — the record
+     *  carries the pending send, the chat carries the ask,
+     *  and an "approve send" in the chat opens the gate. */
+    private fun executeMailTool(
+        id: String, task: JSONObject, name: String,
+        args: JSONObject, stepsDone: Int
+    ): String {
+        if (!GmailConnection.isConnected(context)) {
+            return NOT_CONNECTED
+        }
+        val gateway = GmailGateway(context)
+        return try {
+            when (name) {
+                "gmail_list" -> GmailFormat.formatList(
+                    gateway.list(args.optInt("max", 10))
+                )
+                "gmail_search" -> GmailFormat.formatList(
+                    gateway.search(
+                        args.optString("query"),
+                        args.optInt("max", 10)
+                    )
+                )
+                "gmail_read" -> gateway.read(args.optString("id"))
+                "gmail_send" -> {
+                    val refusal = MailSendGate.refusal(
+                        GmailConnection.sendEnabled(context),
+                        GmailConnection.sendScopeGranted(context),
+                        task.optBoolean("gmailSendApproved")
+                    )
+                    when {
+                        refusal == null -> gateway.send(
+                            args.optString("to"),
+                            args.optString("subject"),
+                            args.optString("body")
+                        )
+                        // The only closed gate is approval:
+                        // park for the user's word, with the
+                        // send itself stashed on the record.
+                        GmailConnection.sendEnabled(context) &&
+                            GmailConnection.sendScopeGranted(context) -> {
+                            val detail = "to ${args.optString("to")} — " +
+                                args.optString("subject").take(60)
+                            store.update(id, TaskStates.PAUSED) {
+                                it.put("steps", stepsDone)
+                                it.put(
+                                    PlanAct.APPROVAL_KIND_FIELD,
+                                    "gmail_send"
+                                )
+                                it.put(
+                                    PlanAct.APPROVAL_DETAIL_FIELD, detail
+                                )
+                                it.put(
+                                    "pendingGmailSend",
+                                    JSONObject()
+                                        .put("to", args.optString("to"))
+                                        .put(
+                                            "subject",
+                                            args.optString("subject")
+                                        )
+                                        .put("body", args.optString("body"))
+                                )
+                                it.put(
+                                    "note",
+                                    PlanAct.parkNote("gmail_send", detail)
+                                )
+                                EventLog.append(
+                                    it, "send_parked",
+                                    System.currentTimeMillis()
+                                )
+                            }
+                            GMAIL_PARK_OBSERVATION
+                        }
+                        else -> refusal
+                    }
+                }
+                else -> "error: unknown tool: $name"
+            }
+        } catch (e: Exception) {
+            "error: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+
+    /** The memory executor (v1.0.4, steal #5): her core
+     *  blocks + journal, through the consolidation write
+     *  path — never raw appends. */
+    private fun executeMemoryTool(name: String, args: JSONObject): String {
+        val memory = AgentMemory(
+            AgentStateStore(context).io(AgentStateStore.SECTION_MEMORY)
+        )
+        return try {
+            when (name) {
+                "memory_read" -> memory.snapshot()
+                    .ifBlank { "(memory is empty)" }
+                "memory_search" -> {
+                    val hits = memory.search(args.optString("query"))
+                    if (hits.isEmpty()) {
+                        "(nothing stored matches)"
+                    } else {
+                        hits.joinToString("\n") { "- $it" }
+                    }
+                }
+                "memory_write" -> {
+                    val result = memory.write(
+                        args.optString("block"),
+                        args.optString("fact"),
+                        System.currentTimeMillis()
+                    )
+                    "MEMORY ${result.op} applied=${result.applied}" +
+                        if (result.note.isNotEmpty()) {
+                            " — ${result.note}"
+                        } else {
+                            ""
+                        }
+                }
+                else -> "error: unknown tool: $name"
+            }
+        } catch (e: Exception) {
+            "error: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 
@@ -1085,7 +2019,7 @@ class TaskRunner(private val context: Context) {
         val domains = browserDomains(task)
         return try {
             when (name) {
-                "write_note" -> writeNote(taskDir(id), args)
+                "write_note" -> writeNoteCheckpointed(id, args)
                 "read_note" -> readNote(taskDir(id), args)
                 "browser_open" -> {
                     val url = args.optString("url")
@@ -1119,6 +2053,22 @@ class TaskRunner(private val context: Context) {
                             BrowserSession.clickText(context, args.optString("text"))
                         else -> return "error: browser_click needs a ref or a text"
                     }
+                    domainGuard(state, domains)
+                        ?: BrowserPerception.formatLite(state, "CLICK_OK")
+                }
+                "browser_click_mark" -> {
+                    // Set-of-Marks fallback (v1.0.4): pages
+                    // with no element tree carry numbered
+                    // marks; the session resolves the number
+                    // to a real tap at the region's centre.
+                    preAction(domains)?.let { return it }
+                    if (!args.has("n")) {
+                        return "error: browser_click_mark needs n (a mark " +
+                            "number from the page's MARKS block)"
+                    }
+                    val state = BrowserSession.clickMark(
+                        context, args.optInt("n")
+                    )
                     domainGuard(state, domains)
                         ?: BrowserPerception.formatLite(state, "CLICK_OK")
                 }

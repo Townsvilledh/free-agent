@@ -52,7 +52,13 @@ object BackupPayload {
         val vaultSecrets: Map<String, String>,
         val vaultAccounts: String?,
         val sessions: Map<String, String>,
-        val referralsText: String? = null
+        val referralsText: String? = null,
+        /** Her agent state (v1.0.4): memory, skills, site
+         *  cards, the heartbeat checklist, recipes and
+         *  scheduled jobs — one raw store document, riding
+         *  the backup exactly like chats and tasks. Absent
+         *  in older payloads (null = nothing to restore). */
+        val agentStateText: String? = null
     )
 
     fun build(
@@ -66,7 +72,8 @@ object BackupPayload {
         vaultSecrets: Map<String, String>,
         vaultAccounts: String?,
         sessions: Map<String, String>?,
-        referralsText: String? = null
+        referralsText: String? = null,
+        agentStateText: String? = null
     ): String {
         val root = JSONObject()
             .put("version", PAYLOAD_VERSION)
@@ -77,6 +84,7 @@ object BackupPayload {
         if (tasksText != null) root.put("tasks", tasksText)
         if (proactiveText != null) root.put("proactive", proactiveText)
         if (referralsText != null) root.put("referrals", referralsText)
+        if (agentStateText != null) root.put("agentState", agentStateText)
         root.put("prefs", encodePrefs(prefs))
         val vault = JSONObject()
         val secrets = JSONObject()
@@ -129,7 +137,8 @@ object BackupPayload {
                 vaultSecrets = secrets,
                 vaultAccounts = vault?.optString("accounts", "")?.takeIf { it.isNotEmpty() },
                 sessions = sessions,
-                referralsText = root.optString("referrals", "").takeIf { it.isNotEmpty() }
+                referralsText = root.optString("referrals", "").takeIf { it.isNotEmpty() },
+                agentStateText = root.optString("agentState", "").takeIf { it.isNotEmpty() }
             )
         } catch (e: Exception) {
             null

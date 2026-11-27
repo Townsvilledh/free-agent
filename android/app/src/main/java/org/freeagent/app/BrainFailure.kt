@@ -132,6 +132,7 @@ object BrainFailure {
     enum class Route(val key: String) {
         POLLINATIONS("pollinations"),
         HORDE("horde"),
+        LAN("lan"),
         GROQ("groq"),
         GEMINI("gemini"),
         CEREBRAS("cerebras"),
@@ -144,11 +145,14 @@ object BrainFailure {
      *  from anybody (the no-keys doctrine's floor). */
     val KEYLESS_CHAIN: List<Route> = listOf(Route.POLLINATIONS, Route.HORDE)
 
-    /** The own-key routes in their walk order: Groq →
-     *  Gemini → Cerebras → OpenRouter → AgentRouter →
-     *  custom. */
+    /** The own-key routes in their walk order: the user's
+     *  own computer first (v1.0.4, steal #13 — a user-owned
+     *  route is preferred while it is reachable, and the
+     *  chain falls back seamlessly when it is not), then
+     *  Groq → Gemini → Cerebras → OpenRouter → AgentRouter
+     *  → custom. */
     val OWN_KEY_ORDER: List<Route> = listOf(
-        Route.GROQ, Route.GEMINI, Route.CEREBRAS,
+        Route.LAN, Route.GROQ, Route.GEMINI, Route.CEREBRAS,
         Route.OPENROUTER, Route.AGENTROUTER, Route.CUSTOM
     )
 

@@ -22,27 +22,73 @@ import java.util.UUID
  * transition happens, so re-running a pass never duplicates one.
  * Pure logic over injected data/fetch/clock — JVM-unit-testable.
  */
+/** The heartbeat's data door (v1.0.4): the checklist text
+ *  + the last pass's signature. Separate from
+ *  [ProactiveData] so existing pass constructions (and
+ *  their test fakes) are untouched — a pass without a
+ *  heartbeat door simply has no heartbeat phase. */
+interface HeartbeatData {
+    fun heartbeatText(): String?
+    fun heartbeatSignature(): String
+    fun saveHeartbeatSignature(signature: String)
+}
+
 class ProactivePass(
     private val data: ProactiveData,
     private val tasks: () -> List<JSONObject>,
     private val fetch: (String) -> Pair<Int, String>,
-    private val now: () -> Long
+    private val now: () -> Long,
+    private val heartbeat: HeartbeatData? = null
 ) {
     data class Summary(
         var checked: Int = 0,
         val landed: MutableList<String> = mutableListOf(),
         val expired: MutableList<String> = mutableListOf(),
         var reportsWritten: Int = 0,
-        val pickupTaskIds: MutableList<String> = mutableListOf()
+        val pickupTaskIds: MutableList<String> = mutableListOf(),
+        var heartbeatNeeds: Int = 0
     )
 
     fun run(): Summary {
         val summary = Summary()
         val t = now()
         runDueChecks(t, summary)
+        runHeartbeat(t, summary)
         settlePickups(t, summary)
         pickUpQueued(summary)
         return summary
+    }
+
+    /** THE HEARTBEAT (v1.0.4, steal #1 — OpenClaw): a light
+     *  pass over the HEARTBEAT.md checklist + standing task
+     *  states, SEPARATE from the cron lane's isolated runs.
+     *  Discipline: skipped entirely — no evaluation, no
+     *  report — when the checklist is empty and nothing
+     *  changed; silent (HEARTBEAT_OK) when it looked and
+     *  nothing needs the user; ONE report when something
+     *  does (a parked job, unreported finished work, a due
+     *  checklist item). Needs are never swallowed by the
+     *  skip: a changed world re-opens the pass. */
+    private fun runHeartbeat(t: Long, summary: Summary) {
+        val hb = heartbeat ?: return
+        val (outcome, newSignature) = Heartbeat.evaluate(
+            hb.heartbeatText(), tasks(), hb.heartbeatSignature(), t
+        )
+        when (outcome) {
+            Heartbeat.Outcome.Skip -> Unit
+            Heartbeat.Outcome.Silent ->
+                hb.saveHeartbeatSignature(newSignature)
+            is Heartbeat.Outcome.Surface -> {
+                hb.saveHeartbeatSignature(newSignature)
+                writeReport(
+                    "NEEDS YOU", "While you were away",
+                    outcome.needs.joinToString("\n") { "• ${it.text}" },
+                    t
+                )
+                summary.reportsWritten++
+                summary.heartbeatNeeds = outcome.needs.size
+            }
+        }
     }
 
     private fun writeReport(

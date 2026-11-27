@@ -408,13 +408,51 @@ object TaskTransparency {
      */
     fun declarationFor(task: JSONObject): String? {
         val plan = TaskTools.planFromRecord(task) ?: return null
-        if (plan.unavailable.isEmpty()) return null
-        return TaskTools.availableLine(plan) +
-            " This job also names " +
-            TaskTools.labelsFor(plan.unavailable) +
-            " — that needs the computer lane, so she'll do " +
-            "the parts this phone supports and mark the rest " +
-            "in her report."
+        val parts = mutableListOf<String>()
+        // v1.0.4: routed classes are HANDED OFF, with the
+        // receipt named — not merely "unavailable".
+        if (plan.routed.isNotEmpty()) {
+            parts.add(
+                "This job also names " +
+                    TaskTools.labelsFor(plan.routed) +
+                    " — that work is handed to the computer lane " +
+                    "with a written brief (receipt: " +
+                    task.optString(
+                        "laneReceipt",
+                        "specs/${task.optString("id")}.json"
+                    ) +
+                    "), so she'll do the parts this phone " +
+                    "supports and mark the rest in her report."
+            )
+        }
+        // v1.0.4: mail without a connection declares its
+        // ONE Settings step, not a dead end.
+        if (plan.mailNotConnected) {
+            parts.add(
+                "Email is part of this job and Gmail isn't " +
+                    "connected on this phone yet — that part " +
+                    "waits for one step in Settings (Gmail → " +
+                    "Connect); everything else proceeds here."
+            )
+        }
+        val other = plan.unavailable - plan.routed -
+            if (plan.mailNotConnected) {
+                setOf(TaskTools.ToolClass.MAIL)
+            } else {
+                emptySet()
+            }
+        if (other.isNotEmpty()) {
+            parts.add(
+                "This job also names " +
+                    TaskTools.labelsFor(other) +
+                    " — that needs the computer lane, so she'll " +
+                    "do the parts this phone supports and mark " +
+                    "the rest in her report."
+            )
+        }
+        if (parts.isEmpty()) return null
+        return TaskTools.availableLine(plan) + " " +
+            parts.joinToString(" ")
     }
 
     /** The watchdog's visible trace (v1.0.2): when a forced
@@ -504,6 +542,26 @@ object TaskTransparency {
         }
         if (nowLine != null) {
             out.append("\n● ").append(nowLine)
+        }
+        // The recorded plan (v1.0.4, steal #8): sub-goals
+        // with their standing, from the plan notes — the
+        // user sees the shape of the work, not just steps.
+        TaskPlanning.planBlock(task)?.let {
+            out.append("\n").append(it)
+        }
+        // A pending approval names itself (v1.0.4): the
+        // plan or the send waiting on the user's word.
+        val approvalKind = task.optString(PlanAct.APPROVAL_KIND_FIELD)
+        if (approvalKind.isNotEmpty()) {
+            out.append("\n● ").append(
+                if (approvalKind == "gmail_send") {
+                    "Waiting on your word: an email send is ready " +
+                        "(say \"approve send\")"
+                } else {
+                    "Waiting on your word: a plan is ready " +
+                        "(say \"approve\")"
+                }
+            )
         }
         return out.toString()
     }

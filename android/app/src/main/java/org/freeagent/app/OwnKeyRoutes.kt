@@ -71,6 +71,24 @@ object OwnKeyRoutes {
     const val CUSTOM_MODEL_VAULT_KEY = "apikey.custom.model"
     const val CUSTOM_DEFAULT_MODEL = "default"
 
+    /** "Your computer" (v1.0.4, steal #13): the LAN route's
+     *  address + model live in the vault under these names.
+     *  The LAN route usually carries NO key (a local server
+     *  on the user's own network) — presence is the address
+     *  plus the Settings on-switch (LanRoute), never a key. */
+    const val LAN_URL_VAULT_KEY = "lan.base.url"
+    const val LAN_MODEL_VAULT_KEY = "lan.base.model"
+    const val LAN_DEFAULT_MODEL = "default"
+
+    /** The LAN route's spec shape: baseUrl null (the vault
+     *  holds the address, like CUSTOM), no vault key name
+     *  (no key exists to hold). */
+    fun lanSpec(): Spec = Spec(
+        BrainFailure.Route.LAN, "Your computer", "",
+        null, LAN_DEFAULT_MODEL,
+        "A model server on your own computer, on your network"
+    )
+
     val SPECS: List<Spec> = listOf(
         Spec(
             BrainFailure.Route.GROQ, "Groq", "apikey.groq",
@@ -120,7 +138,10 @@ object OwnKeyRoutes {
      * alone is not a route. Absent routes are simply not in
      * the chain: no nagging, no error, no placeholder.
      */
-    fun presentRoutes(hasSecret: (String) -> Boolean): Set<BrainFailure.Route> {
+    fun presentRoutes(
+        hasSecret: (String) -> Boolean,
+        lanEnabled: Boolean = false
+    ): Set<BrainFailure.Route> {
         val out = mutableSetOf<BrainFailure.Route>()
         for (spec in SPECS) {
             if (!hasSecret(spec.vaultKeyName)) continue
@@ -130,6 +151,12 @@ object OwnKeyRoutes {
                 continue
             }
             out.add(spec.route)
+        }
+        // The LAN route is present when the user switched
+        // it on AND gave an address — presence by address +
+        // switch, not by key (there is no key).
+        if (lanEnabled && hasSecret(LAN_URL_VAULT_KEY)) {
+            out.add(BrainFailure.Route.LAN)
         }
         return out
     }
@@ -146,10 +173,13 @@ object OwnKeyRoutes {
     fun modelsUrl(spec: Spec, customBaseUrl: String?): String =
         baseUrl(spec, customBaseUrl) + "/models"
 
-    /** The model a chat call names: the custom route's
-     *  user-given model when set, else the spec default. */
+    /** The model a chat call names: the user-given model
+     *  when set (the custom route's and the LAN route's —
+     *  both point at user-run servers), else the spec
+     *  default. */
     fun chatModel(spec: Spec, customModel: String?): String =
-        if (spec.route == BrainFailure.Route.CUSTOM &&
+        if ((spec.route == BrainFailure.Route.CUSTOM ||
+                spec.route == BrainFailure.Route.LAN) &&
             !customModel.isNullOrBlank()
         ) {
             customModel.trim()

@@ -98,9 +98,18 @@ class OwnKeyRoutesTest {
 
     @Test
     fun specsCoverExactlyTheOwnKeyOrder() {
+        // v1.0.4: the LAN route is in the walk order but has
+        // NO static spec — its address lives in the vault,
+        // so its spec is built by lanSpec() on demand. The
+        // static SPECS cover every other own-key route, in
+        // order.
         assertEquals(
-            BrainFailure.OWN_KEY_ORDER,
+            BrainFailure.OWN_KEY_ORDER - BrainFailure.Route.LAN,
             OwnKeyRoutes.SPECS.map { it.route }
+        )
+        assertEquals(
+            BrainFailure.Route.LAN,
+            OwnKeyRoutes.lanSpec().route
         )
         // No keyless route may appear as an own-key spec.
         for (spec in OwnKeyRoutes.SPECS) {
@@ -115,6 +124,7 @@ class OwnKeyRoutesTest {
         val all = BrainFailure.OWN_KEY_ORDER.toSet()
         assertEquals(
             listOf(
+                BrainFailure.Route.LAN,
                 BrainFailure.Route.GROQ,
                 BrainFailure.Route.GEMINI,
                 BrainFailure.Route.CEREBRAS,
@@ -178,13 +188,14 @@ class OwnKeyRoutesTest {
     fun ownKeyRoutesRestAndRecoverLikeKeylessOnes() {
         val chain = BrainFailure.chain(BrainFailure.OWN_KEY_ORDER.toSet())
         val now = 2_000_000L
-        // Groq (the lead) + the keyless pair resting: a new
-        // message starts at Gemini, the first healthy
-        // own-key route — resting leaders are skipped, not
-        // waited on, while another route exists.
+        // The leaders (the LAN route + Groq) + the keyless
+        // pair resting: a new message starts at Gemini, the
+        // first healthy own-key route — resting leaders are
+        // skipped, not waited on, while another route exists.
         val resting = mapOf(
             BrainFailure.Route.POLLINATIONS to now + 60_000L,
             BrainFailure.Route.HORDE to now + 60_000L,
+            BrainFailure.Route.LAN to now + 60_000L,
             BrainFailure.Route.GROQ to now + 60_000L
         )
         assertEquals(
@@ -192,9 +203,12 @@ class OwnKeyRoutesTest {
             BrainFailure.firstHealthy(chain, resting, now)
         )
         // After Groq fails, the walk skips a resting Gemini.
+        // (The LAN route rests longest here, so the recovery
+        // assertion below is about Groq's own rest expiring.)
         val geminiResting = mapOf(
             BrainFailure.Route.GEMINI to now + 600_000L,
-            BrainFailure.Route.GROQ to now + 60_000L
+            BrainFailure.Route.GROQ to now + 60_000L,
+            BrainFailure.Route.LAN to now + 600_000L
         )
         assertEquals(
             BrainFailure.Route.CEREBRAS,

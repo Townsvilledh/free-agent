@@ -155,6 +155,31 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingTop="8dp"
+            android:text="@string/settings_kit_title"
+            android:textColor="#F5EFE7"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp"
+            android:text="@string/settings_kit_hint"
+            android:textColor="#8A8378"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/settingsKitContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
             android:text="@string/settings_keys_title"
             android:textColor="#F5EFE7"
             android:textSize="17sp"

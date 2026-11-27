@@ -42,12 +42,14 @@ class ProactiveWorker(context: Context, params: WorkerParameters) :
             data = store,
             tasks = { taskStore.all() },
             fetch = fetch,
-            now = { System.currentTimeMillis() }
+            now = { System.currentTimeMillis() },
+            heartbeat = store
         )
         val summary = withContext(Dispatchers.IO) { pass.run() }
         for (taskId in summary.pickupTaskIds) {
             TaskWorker.enqueue(applicationContext, taskId)
         }
+        runDueScheduledJobs()
         // v0.12.1: the periodic pass also carries the
         // in-app update check — UpdateChecker's own 6-hour
         // throttle + once-per-version notification gate
@@ -55,6 +57,133 @@ class ProactiveWorker(context: Context, params: WorkerParameters) :
         // from ever becoming noise.
         UpdateChecker.maybeCheck(applicationContext, notify = true)
         return Result.success()
+    }
+
+    /** THE CRON LANE (v1.0.4, steal #6): scheduled jobs run
+     *  ISOLATED from the heartbeat — each due job becomes
+     *  its own light task record carrying only its own
+     *  instruction + its recipe's tool restrictions, and
+     *  the job's next run is settled by ScheduledJobs'
+     *  arithmetic (success reschedules; failure backs off,
+     *  capped; repeated failure surfaces in the debrief
+     *  through the store's reports). Jobs live in the
+     *  agent-state store's jobs section (they ride the
+     *  backup); a job names a recipe from the library. */
+    private fun runDueScheduledJobs() {
+        val stateStore = AgentStateStore(applicationContext)
+        val jobsText = stateStore.readSection(
+            AgentStateStore.SECTION_JOBS
+        ) ?: return
+        val jobsArr = try {
+            org.json.JSONArray(jobsText)
+        } catch (e: Exception) {
+            return
+        }
+        val jobs = MutableList(jobsArr.length()) {
+            jobsArr.getJSONObject(it)
+        }
+        val nowMs = System.currentTimeMillis()
+        val due = ScheduledJobs.dueJobs(jobs, nowMs)
+        if (due.isEmpty()) return
+        val libraryText = stateStore.readSection(
+            AgentStateStore.SECTION_RECIPES
+        )
+        val library = try {
+            if (libraryText != null) org.json.JSONObject(libraryText)
+            else org.json.JSONObject()
+        } catch (e: Exception) {
+            org.json.JSONObject()
+        }
+        val taskStore = TaskStore(applicationContext)
+        for (job in due) {
+            val recipeName = job.optString("recipeName")
+            val recipeRaw = library.optString(recipeName)
+            val recipe = try {
+                if (recipeRaw.isEmpty()) null
+                else org.json.JSONObject(recipeRaw)
+            } catch (e: Exception) {
+                null
+            }
+            if (recipe == null) {
+                settleJob(stateStore, jobs, job, false,
+                    "recipe \"$recipeName\" is not in the library")
+                continue
+            }
+            val values = mutableMapOf<String, String>()
+            val params = job.optJSONObject("params")
+            if (params != null) {
+                val keys = params.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    values[k] = params.optString(k)
+                }
+            }
+            val instruction = Recipes.substitute(recipe, values)
+            val task = taskStore.create(instruction)
+            val taskId = task.optString("id")
+            taskStore.update(taskId) {
+                it.put("kind", "recipe")
+                it.put("recipeName", recipeName)
+                it.put("recipeJson", recipe.toString())
+                it.put("scheduledJobId", job.optString("id"))
+            }
+            TaskWorker.enqueue(applicationContext, taskId)
+            settleJob(stateStore, jobs, job, true, "")
+        }
+    }
+
+    /** Settle one job after its run was dispatched: the
+     *  pure arithmetic decides the next run (or the end of
+     *  a one-shot), and a failure that keeps failing joins
+     *  the debrief instead of dying quietly. */
+    private fun settleJob(
+        stateStore: AgentStateStore,
+        jobs: MutableList<org.json.JSONObject>,
+        job: org.json.JSONObject,
+        ok: Boolean,
+        error: String
+    ) {
+        val nowMs = System.currentTimeMillis()
+        val settled = ScheduledJobs.afterRun(job, ok, error, nowMs)
+        for (i in jobs.indices) {
+            if (jobs[i].optString("id") == settled.optString("id")) {
+                jobs[i] = settled
+                break
+            }
+        }
+        val arr = org.json.JSONArray()
+        jobs.forEach { arr.put(it) }
+        stateStore.writeSection(
+            AgentStateStore.SECTION_JOBS, arr.toString()
+        )
+        if (!ok && ScheduledJobs.failureNeedsSurfacing(settled)) {
+            val store = ProactiveStore(applicationContext)
+            val reports = store.reports()
+            reports.add(
+                org.json.JSONObject()
+                    .put(
+                        "id",
+                        "rpt-" + java.util.UUID.randomUUID()
+                            .toString().substring(0, 8)
+                    )
+                    .put("status", "BLOCKED")
+                    .put(
+                        "title",
+                        "A scheduled job keeps failing: " +
+                            settled.optString("name")
+                    )
+                    .put(
+                        "body",
+                        "The scheduled job \"" +
+                            settled.optString("name") + "\" has " +
+                            "failed ${settled.optInt("failCount")} " +
+                            "times in a row. Last problem: " +
+                            settled.optString("lastError")
+                    )
+                    .put("at", nowMs)
+            )
+            store.saveReports(reports)
+        }
     }
 
     companion object {

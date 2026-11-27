@@ -128,10 +128,38 @@ object ChatTaskLink {
                 if (partialPlan != null) {
                     append("Done — the parts this phone can do ")
                     append("are finished (partial).")
-                    if (partialPlan.unavailable.isNotEmpty()) {
-                        append("\n\nNot done here (needs the ")
-                        append("computer lane): ")
-                        append(TaskTools.labelsFor(partialPlan.unavailable))
+                    // v1.0.4: the not-done parts are named by
+                    // their actual shape — routed work carries
+                    // its hand-off receipt; an unconnected
+                    // Gmail names its one Settings step.
+                    if (partialPlan.routed.isNotEmpty()) {
+                        append("\n\nHanded to the computer lane ")
+                        append("with a written brief (receipt: ")
+                        append(
+                            task.optString(
+                                "laneReceipt",
+                                "specs/${task.optString("id")}.json"
+                            )
+                        )
+                        append("): ")
+                        append(TaskTools.labelsFor(partialPlan.routed))
+                        append(".")
+                    }
+                    if (partialPlan.mailNotConnected) {
+                        append("\n\nThe email part is not done — ")
+                        append("Gmail isn't connected on this phone ")
+                        append("yet; one step in Settings connects it.")
+                    }
+                    val other = partialPlan.unavailable -
+                        partialPlan.routed -
+                        if (partialPlan.mailNotConnected) {
+                            setOf(TaskTools.ToolClass.MAIL)
+                        } else {
+                            emptySet()
+                        }
+                    if (other.isNotEmpty()) {
+                        append("\n\nNot done here: ")
+                        append(TaskTools.labelsFor(other))
                         append(".")
                     }
                 } else {
@@ -142,6 +170,48 @@ object ChatTaskLink {
                 }
                 if (summary.isNotEmpty()) {
                     append("\n\n").append(summary)
+                }
+                // VERIFY-STATE (v1.0.4, steal #2): the report
+                // stands on the re-read, not the claim — the
+                // verification (or the discrepancy) is a line
+                // of its own, from the record's stamp.
+                if (task.has(FinishVerifier.VERIFIED_FIELD)) {
+                    val detail = task.optString(
+                        FinishVerifier.VERIFY_DETAIL_FIELD
+                    )
+                    if (task.optBoolean(FinishVerifier.VERIFIED_FIELD)) {
+                        if (detail.isNotEmpty()) {
+                            append("\n\n").append(detail)
+                        }
+                    } else if (detail.isNotEmpty()) {
+                        append("\n\nOne claim did not check out: ")
+                        append(detail).append(".")
+                    }
+                }
+                // FINAL CHECKS (v1.0.4, steal #8): a check
+                // that failed at the finish line is named —
+                // the state discrepancy above covers
+                // state_unverified; the rest name themselves.
+                val failedChecks = task.optString(
+                    FinalChecks.FAILED_FIELD
+                ).split(",").map { it.trim() }
+                    .filter { it.isNotEmpty() && it != "state_unverified" }
+                if (failedChecks.isNotEmpty()) {
+                    val words = failedChecks.map { check ->
+                        when (check) {
+                            "subgoals_open" ->
+                                "some planned sub-goals were still open"
+                            "partial_unnamed" ->
+                                "the summary did not name everything " +
+                                    "left undone"
+                            "recipe_success_check" ->
+                                "the recipe's success check did not pass"
+                            else -> check
+                        }
+                    }
+                    append("\n\nOne check did not pass: ")
+                    append(words.joinToString("; "))
+                    append(".")
                 }
                 if (note != null && note != summary) {
                     append("\n\n").append(note)

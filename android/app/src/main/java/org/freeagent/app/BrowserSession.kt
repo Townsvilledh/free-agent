@@ -235,6 +235,46 @@ object BrowserSession {
         return collect(context)
     }
 
+    /** Tap a Set-of-Marks region (v1.0.4): the fallback for
+     *  pages with no element tree. The mark's centre, as a
+     *  fraction of the WebView, becomes a real touch pair
+     *  (down+up) dispatched to the view on the main thread —
+     *  the same gesture a finger makes, at the number the
+     *  model picked. Marks come from the LAST collected
+     *  state; a page that has since grown a tree answers
+     *  with refs instead, and the caller re-reads. */
+    fun clickMark(context: Context, n: Int): BrowserPerception.PageState {
+        pace()
+        val state = lastState
+            ?: throw BrowserException("no page collected yet — browser_read first")
+        val mark = BrowserPerception.mark(BrowserPerception.marksFor(state), n)
+            ?: throw BrowserException(
+                "no mark $n on this page (marks exist only when the " +
+                    "page gives no element tree — browser_read again)"
+            )
+        val wv = ensure(context)
+        onMain {
+            val x = mark.cx * wv.width
+            val y = mark.cy * wv.height
+            val down = android.view.MotionEvent.obtain(
+                android.os.SystemClock.uptimeMillis(),
+                android.os.SystemClock.uptimeMillis(),
+                android.view.MotionEvent.ACTION_DOWN, x, y, 0
+            )
+            val up = android.view.MotionEvent.obtain(
+                down.downTime,
+                android.os.SystemClock.uptimeMillis() + 60,
+                android.view.MotionEvent.ACTION_UP, x, y, 0
+            )
+            wv.dispatchTouchEvent(down)
+            wv.dispatchTouchEvent(up)
+            down.recycle()
+            up.recycle()
+        }
+        Thread.sleep(2_000)
+        return collect(context)
+    }
+
     /** Type into a field by ref. The live probe is the driver-side
      *  half of the type guards: plain typing into a SECRET field
      *  is refused (SECRET_FIELD), and a vault value into a

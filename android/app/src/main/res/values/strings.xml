@@ -91,6 +91,8 @@
     <string name="referral_copy">Copy link</string>
     <string name="referral_export">Export invite list</string>
     <string name="referral_import">Import invite list</string>
+    <string name="settings_kit_title">Lille\'s kit</string>
+    <string name="settings_kit_hint">Her connections and standing instructions: Gmail (read-only unless you turn sending on), your own computer as a brain, and the checklist her proactive passes work through while you are away.</string>
     <string name="settings_keys_title">Your API keys (optional)</string>
     <string name="settings_keys_hint">Lille works fully with no key at all — the free keyless brain is her default. If you have your OWN free key from one of these services, adding it gives her one more brain route to fall back to when the free routes are busy. A key is stored only on this phone, in her encrypted vault; it is sent only to that service, never shown, never logged. Adding or removing a key is always your choice, and she never asks for one.</string>
     <string name="delete_chat">Delete</string>

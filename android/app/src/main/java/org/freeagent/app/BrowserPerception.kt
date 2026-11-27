@@ -54,6 +54,56 @@ object BrowserPerception {
 
     class Article(val author: String, val text: String, val url: String)
 
+    /** A Set-of-Marks region (v1.0.4, steal #4 — DroidRun /
+     *  AppAgent): when a page yields NO element tree
+     *  (canvas apps, custom-rendered surfaces), the
+     *  screenshot is divided into a numbered grid and the
+     *  model picks a NUMBER — never raw pixels. Fractions
+     *  of the viewport, so any screen size resolves them. */
+    class Mark(
+        val n: Int, val fx: Float, val fy: Float,
+        val fw: Float, val fh: Float
+    ) {
+        /** The tap point: the region's centre. */
+        val cx: Float get() = fx + fw / 2f
+        val cy: Float get() = fy + fh / 2f
+    }
+
+    const val MARK_COLS = 3
+    const val MARK_ROWS = 4
+
+    /** True when the page gave no usable element tree —
+     *  the condition under which marks replace refs. */
+    fun treeEmpty(state: PageState): Boolean = state.elements.isEmpty()
+
+    /** The numbered grid for an empty-tree page: row-major,
+     *  1-based, [MARK_COLS] × [MARK_ROWS]. A page WITH an
+     *  element tree gets no marks — refs are strictly
+     *  better and the two never mix in one observation. */
+    fun marksFor(state: PageState): List<Mark> {
+        if (!treeEmpty(state)) return emptyList()
+        val out = mutableListOf<Mark>()
+        var n = 0
+        for (row in 0 until MARK_ROWS) {
+            for (col in 0 until MARK_COLS) {
+                n += 1
+                out.add(
+                    Mark(
+                        n,
+                        col.toFloat() / MARK_COLS,
+                        row.toFloat() / MARK_ROWS,
+                        1f / MARK_COLS,
+                        1f / MARK_ROWS
+                    )
+                )
+            }
+        }
+        return out
+    }
+
+    fun mark(marks: List<Mark>, n: Int): Mark? =
+        marks.firstOrNull { it.n == n }
+
     // ---------- JS scripts (fixed; the model never writes JS) ----------
 
     /** The collect script: same extraction as the host driver's
@@ -462,8 +512,29 @@ object BrowserPerception {
         if (state.elements.isNotEmpty()) {
             out.append("\nELEMENTS (${state.elements.size}):\n")
             out.append(state.elements.joinToString("\n") { elementLine(it, 70) })
+        } else {
+            appendMarks(out, state)
         }
         return out.toString()
+    }
+
+    /** The marks block for an empty-tree page: numbered
+     *  regions the model can tap by number
+     *  (browser_click_mark). Appended only when the tree
+     *  is empty — with refs present, marks never appear. */
+    private fun appendMarks(out: StringBuilder, state: PageState) {
+        val marks = marksFor(state)
+        if (marks.isEmpty()) return
+        out.append(
+            "\nMARKS (this page gave no element tree — the screen " +
+                "is a numbered grid instead; browser_click_mark{n} " +
+                "taps the centre of a region):\n"
+        )
+        out.append(
+            marks.joinToString("  ") { "[${it.n}]" } +
+                "\n(grid: $MARK_COLS across × $MARK_ROWS down, " +
+                "numbered left-to-right, top-to-bottom)"
+        )
     }
 
     fun formatLite(state: PageState, header: String): String {
@@ -478,6 +549,8 @@ object BrowserPerception {
             out.append("\nELEMENTS (${state.elements.size}):\n")
             out.append(state.elements.take(28)
                 .joinToString("\n") { elementLine(it, 40) })
+        } else {
+            appendMarks(out, state)
         }
         return out.toString()
     }

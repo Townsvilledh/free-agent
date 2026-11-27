@@ -159,10 +159,14 @@ class TaskToolsTest {
         TaskTools.stampPlan(record, TaskTools.planFor(agentwareJob))
         val declaration = TaskTransparency.declarationFor(record)!!
         assertTrue(declaration.contains("On this phone she has the browser"))
-        assertTrue(declaration.contains("email work"))
         assertTrue(declaration.contains("code and repository work"))
         assertTrue(declaration.contains("video work"))
-        assertTrue(declaration.contains("needs the computer lane"))
+        // v1.0.4: routed work is HANDED OFF with its receipt
+        // named; unconnected email names its one Settings
+        // step — neither is a bare "unavailable" any more.
+        assertTrue(declaration.contains("handed to the computer lane"))
+        assertTrue(declaration.contains("receipt:"))
+        assertTrue(declaration.contains("one step in Settings"))
         assertTrue(declaration.contains("mark the rest in her report"))
         // The 1.0.2 negative pin, kept: no route mechanics
         // on any surface — the declaration included.
@@ -252,6 +256,9 @@ class TaskToolsTest {
                 }
                 TaskTools.Executor.REFUSE_X -> TaskTools.X_REFUSAL
                 TaskTools.Executor.NOTES -> "note written"
+                TaskTools.Executor.CALENDAR -> "calendar"
+                TaskTools.Executor.MAIL -> "mail"
+                TaskTools.Executor.MEMORY -> "memory"
                 TaskTools.Executor.UNKNOWN -> "error: unknown tool"
             }
             observations.add(observation)

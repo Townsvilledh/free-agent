@@ -28,8 +28,28 @@ interface ProactiveData {
     fun savePickups(map: Map<String, String>)
 }
 
-class ProactiveStore(context: Context) : ProactiveData {
+class ProactiveStore(private val context: Context) : ProactiveData, HeartbeatData {
     private val file = File(context.filesDir, "lille_proactive.json")
+
+    // ---------- the heartbeat door (v1.0.4) ----------
+
+    /** The checklist lives in the agent-state store (it
+     *  rides the backup with her memory and skills); the
+     *  signature lives here, with the pass's own state. */
+    override fun heartbeatText(): String? =
+        AgentStateStore(context)
+            .readSection(AgentStateStore.SECTION_HEARTBEAT)
+
+    @Synchronized
+    override fun heartbeatSignature(): String =
+        root().optString("heartbeatSignature", "")
+
+    @Synchronized
+    override fun saveHeartbeatSignature(signature: String) {
+        val root = root()
+        root.put("heartbeatSignature", signature)
+        write(root)
+    }
 
     @Synchronized
     private fun root(): JSONObject {

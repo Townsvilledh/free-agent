@@ -133,10 +133,328 @@ class SettingsActivity : AppCompatActivity() {
             finish()
         }
 
+        val kit = findViewById<LinearLayout>(R.id.settingsKitContainer)
+        kit.addView(buildGmailBlock())
+        kit.addView(buildLanBlock())
+        kit.addView(buildHeartbeatBlock())
+
         val container = findViewById<LinearLayout>(R.id.settingsKeysContainer)
         for (spec in OwnKeyRoutes.SPECS) {
             container.addView(buildKeyBlock(spec))
         }
+    }
+
+    // ---------- Lille's kit (v1.0.4) ----------
+
+    /** True while a Gmail sign-in launched from here asked
+     *  for the send scope too — the result handler turns
+     *  the Settings send flag on only for that consent. */
+    private var gmailSendRequested = false
+
+    private val gmailSignIn = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        try {
+            val account = com.google.android.gms.auth.api.signin.GoogleSignIn
+                .getSignedInAccountFromIntent(result.data)
+                .getResult(
+                    com.google.android.gms.common.api.ApiException::class.java
+                )
+            if (account != null) {
+                GmailConnection.onSignedIn(this, account)
+                if (gmailSendRequested) {
+                    GmailConnection.setSendEnabled(this, true)
+                }
+                Toast.makeText(
+                    this, "Gmail connected.", Toast.LENGTH_SHORT
+                ).show()
+                recreate()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(
+                this, "That sign-in didn't complete — nothing changed.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        gmailSendRequested = false
+    }
+
+    private fun launchGmailSignIn(withSend: Boolean) {
+        gmailSendRequested = withSend
+        val client = com.google.android.gms.auth.api.signin.GoogleSignIn
+            .getClient(this, GmailConnection.signInOptions(withSend))
+        gmailSignIn.launch(client.signInIntent)
+    }
+
+    private fun blockTitle(text: String): TextView {
+        val v = TextView(this)
+        v.text = text
+        v.textSize = 16f
+        v.setTextColor(0xFFF5EFE7.toInt())
+        return v
+    }
+
+    private fun blockHint(text: String): TextView {
+        val v = TextView(this)
+        v.text = text
+        v.textSize = 12f
+        v.setTextColor(0xFF8A8378.toInt())
+        return v
+    }
+
+    private fun blockStatus(): TextView {
+        val v = TextView(this)
+        v.textSize = 13f
+        v.setTextColor(0xFFB9B0A2.toInt())
+        return v
+    }
+
+    private fun newBlock(): LinearLayout {
+        val block = LinearLayout(this)
+        block.orientation = LinearLayout.VERTICAL
+        block.setPadding(0, dp(10), 0, dp(6))
+        return block
+    }
+
+    private fun buttonRow(vararg buttons: Button): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        for (b in buttons) {
+            val p = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+            row.addView(b, p)
+        }
+        return row
+    }
+
+    /** Gmail (v1.0.4): a separate consent on the app's own
+     *  Google stack. Read-only first; sending is a second,
+     *  explicit step — its own scope request plus this
+     *  flag — and every send still parks for the user's
+     *  word in the chat (MailSendGate's triple gate). */
+    private fun buildGmailBlock(): LinearLayout {
+        val block = newBlock()
+        block.addView(blockTitle("Gmail"), wrapParams())
+        block.addView(
+            blockHint(
+                "Connect your Gmail so Lille can read and search " +
+                    "your mail inside tasks. What she reads is " +
+                    "redacted before it reaches her brain — codes " +
+                    "and secrets never do. Sending stays OFF until " +
+                    "you turn it on here, and even then every send " +
+                    "asks you first."
+            ),
+            wrapParams(2)
+        )
+        val status = blockStatus()
+        val connected = GmailConnection.isConnected(this)
+        status.text = if (connected) {
+            "Connected as ${GmailConnection.account(this)}" +
+                if (GmailConnection.sendScopeGranted(this)) {
+                    " — sending " +
+                        if (GmailConnection.sendEnabled(this)) {
+                            "ON (each send still asks you first)."
+                        } else {
+                            "off."
+                        }
+                } else {
+                    " — read-only."
+                }
+        } else {
+            "Not connected."
+        }
+        block.addView(status, wrapParams(4))
+
+        val connect = Button(this).apply {
+            text = if (connected) "Reconnect" else "Connect Gmail"
+        }
+        val disconnect = Button(this).apply { text = "Disconnect" }
+        val sendToggle = Button(this).apply {
+            text = if (GmailConnection.sendEnabled(this@SettingsActivity)) {
+                "Turn sending off"
+            } else {
+                "Enable sending"
+            }
+        }
+        block.addView(
+            buttonRow(connect, disconnect, sendToggle), wrapParams(6)
+        )
+        connect.setOnClickListener { launchGmailSignIn(withSend = false) }
+        disconnect.setOnClickListener {
+            GmailConnection.disconnect(this)
+            Toast.makeText(this, "Gmail disconnected.", Toast.LENGTH_SHORT)
+                .show()
+            recreate()
+        }
+        sendToggle.setOnClickListener {
+            when {
+                !GmailConnection.isConnected(this) ->
+                    Toast.makeText(
+                        this, "Connect Gmail first.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                GmailConnection.sendEnabled(this) -> {
+                    GmailConnection.setSendEnabled(this, false)
+                    recreate()
+                }
+                GmailConnection.sendScopeGranted(this) -> {
+                    GmailConnection.setSendEnabled(this, true)
+                    recreate()
+                }
+                else -> launchGmailSignIn(withSend = true)
+            }
+        }
+        return block
+    }
+
+    /** Your computer (v1.0.4, steal #13): the LAN brain
+     *  route. Address + model live in the vault; the switch
+     *  is LanRoute's. Off by default; when on and reachable
+     *  it leads her own routes, and when it is not there
+     *  she falls back without a word. */
+    private fun buildLanBlock(): LinearLayout {
+        val block = newBlock()
+        block.addView(blockTitle("Your computer"), wrapParams())
+        block.addView(
+            blockHint(
+                "Point Lille at a model server on your own " +
+                    "computer — LM Studio, Ollama, llama.cpp, any " +
+                    "OpenAI-compatible server on your network. " +
+                    "She prefers it while it answers and falls " +
+                    "back seamlessly when it doesn't."
+            ),
+            wrapParams(2)
+        )
+        val status = blockStatus()
+        fun refreshStatus() {
+            val hasAddress = vault.hasSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
+            status.text = when {
+                !hasAddress -> "No address saved."
+                LanRoute.isEnabled(this) ->
+                    "On — your computer leads when it answers."
+                else -> "Address saved — the route is off."
+            }
+        }
+        block.addView(status, wrapParams(4))
+
+        val urlField = EditText(this)
+        urlField.hint = "Server address — e.g. http://192.168.1.20:1234/v1"
+        urlField.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_VARIATION_URI
+        urlField.setSingleLine(true)
+        urlField.setText(vault.getSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY) ?: "")
+        block.addView(urlField, wrapParams(6))
+
+        val modelField = EditText(this)
+        modelField.hint = "Model name (optional)"
+        modelField.inputType = InputType.TYPE_CLASS_TEXT
+        modelField.setSingleLine(true)
+        modelField.setText(
+            vault.getSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY) ?: ""
+        )
+        block.addView(modelField, wrapParams(4))
+
+        val result = blockStatus()
+        block.addView(result, wrapParams(4))
+
+        val save = Button(this).apply { text = "Save" }
+        val test = Button(this).apply { text = "Test" }
+        val toggle = Button(this).apply {
+            text = if (LanRoute.isEnabled(this@SettingsActivity)) {
+                "Turn off"
+            } else {
+                "Turn on"
+            }
+        }
+        block.addView(buttonRow(save, test, toggle), wrapParams(6))
+        refreshStatus()
+
+        save.setOnClickListener {
+            val url = urlField.text.toString().trim()
+            if (url.isEmpty()) {
+                vault.removeSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
+                vault.removeSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY)
+                result.text = "Address cleared — the route is gone."
+            } else {
+                vault.putSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY, url)
+                val model = modelField.text.toString().trim()
+                if (model.isEmpty()) {
+                    vault.removeSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY)
+                } else {
+                    vault.putSecret(OwnKeyRoutes.LAN_MODEL_VAULT_KEY, model)
+                }
+                result.text = "Saved."
+            }
+            refreshStatus()
+        }
+        test.setOnClickListener {
+            val url = urlField.text.toString().trim()
+            if (url.isEmpty()) {
+                result.text = "Type the server address first."
+                return@setOnClickListener
+            }
+            test.isEnabled = false
+            result.text = "Asking your computer…"
+            Thread {
+                val ok = TaskRunner.lanHealthy(url)
+                runOnUiThread {
+                    result.text = if (ok) {
+                        "Your computer answered."
+                    } else {
+                        "No answer from that address right now — " +
+                            "she would fall back without a word."
+                    }
+                    test.isEnabled = true
+                }
+            }.start()
+        }
+        toggle.setOnClickListener {
+            LanRoute.setEnabled(this, !LanRoute.isEnabled(this))
+            recreate()
+        }
+        return block
+    }
+
+    /** The HEARTBEAT.md editor (v1.0.4, steal #1): the
+     *  checklist her proactive passes work through. Plain
+     *  text in the agent-state store — it rides the
+     *  encrypted backup like the rest of her kit. */
+    private fun buildHeartbeatBlock(): LinearLayout {
+        val block = newBlock()
+        block.addView(blockTitle("Heartbeat checklist"), wrapParams())
+        block.addView(
+            blockHint(
+                "One item per line, starting with - [ ]. While " +
+                    "you're away her passes check these and only " +
+                    "speak up when something needs you. Add " +
+                    "\"due: YYYY-MM-DD\" to an item to make it " +
+                    "surface on its day."
+            ),
+            wrapParams(2)
+        )
+        val store = AgentStateStore(this)
+        val field = EditText(this)
+        field.hint = "- [ ] Check the thing that matters"
+        field.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        field.minLines = 4
+        field.setText(
+            store.readSection(AgentStateStore.SECTION_HEARTBEAT)
+                ?: AgentStateStore.HEARTBEAT_TEMPLATE
+        )
+        block.addView(field, wrapParams(6))
+        val save = Button(this).apply { text = "Save checklist" }
+        block.addView(buttonRow(save), wrapParams(6))
+        save.setOnClickListener {
+            store.writeSection(
+                AgentStateStore.SECTION_HEARTBEAT,
+                field.text.toString()
+            )
+            Toast.makeText(this, "Checklist saved.", Toast.LENGTH_SHORT)
+                .show()
+        }
+        return block
     }
 
     /** The referrals block (REFERRALS.md): the user's
@@ -270,7 +588,7 @@ class SettingsActivity : AppCompatActivity() {
         block.addView(result, wrapParams(4))
 
         fun refreshStatus() {
-            val present = OwnKeyRoutes.presentRoutes { n -> vault.hasSecret(n) }
+            val present = OwnKeyRoutes.presentRoutes({ n -> vault.hasSecret(n) }, lanEnabled = LanRoute.isEnabled(this))
             status.text = if (spec.route in present) {
                 "Key saved — this is one of Lille's brain routes now."
             } else if (vault.hasSecret(spec.vaultKeyName)) {

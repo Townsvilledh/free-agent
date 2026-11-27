@@ -52,6 +52,7 @@ object BackupManager {
             tasksText = TaskStore(app).rawText(),
             proactiveText = ProactiveStore(app).rawText(),
             referralsText = ReferralStore(app).rawText(),
+            agentStateText = AgentStateStore(app).rawText(),
             prefs = prefsSnapshot,
             vaultSecrets = vault.exportSecrets(),
             vaultAccounts = vault.exportAccountsJson(),
@@ -276,6 +277,11 @@ object BackupManager {
             // records imported since the backup was taken must
             // survive a restore, and first referrer wins.
             parsed.referralsText?.let { ReferralStore(app).mergeFrom(it) }
+            // Her agent state (v1.0.4) restores whole, like
+            // chats and tasks: memory, skills, cards, the
+            // checklist, recipes and schedules are one
+            // document with one owner — this device, now.
+            parsed.agentStateText?.let { AgentStateStore(app).replaceRaw(it) }
             for ((file, entries) in parsed.prefs) {
                 if (file == "lille_backup") {
                     BackupPrefs.applyPayloadSnapshot(BackupPrefs(app), entries)

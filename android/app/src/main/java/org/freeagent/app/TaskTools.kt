@@ -26,13 +26,20 @@ import java.util.Locale
  *   text by keyword/shape matching: conservative, word-
  *   boundary phrases, no model call, no guessing beyond
  *   what the words say. The classes are BROWSER, MAIL,
- *   REPO_CODE and VIDEO; notes + web search are the base
- *   kit every task has and are never "required".
- * - WHAT THIS ENVIRONMENT HAS — on the phone: the browser
- *   (since this release), notes and web search. MAIL,
+ *   REPO_CODE, VIDEO and (v1.0.4) CALENDAR; notes + web
+ *   search + her memory are the base kit every task has
+ *   and are never "required".
+ * - WHAT THIS ENVIRONMENT HAS — computed against the
+ *   phone's live capabilities ([DeviceCaps]): the browser,
+ *   the calendar (CalendarContract), mail once Gmail is
+ *   connected in Settings, notes, web search, memory.
  *   REPO_CODE and VIDEO live in the Python core (the
- *   computer lane); they are named as such, never faked
- *   on-device and never silently dropped.
+ *   computer lane); since v1.0.4 they are ROUTED there —
+ *   exported as a spec with a receipt recorded on the
+ *   task — never faked on-device, never silently dropped,
+ *   and no longer a terminal "cannot execute". MAIL with
+ *   Gmail unconnected is declared up front with the ONE
+ *   Settings step that connects it.
  * - THE BROWSER ALLOWLIST — the Sentinel rule is a
  *   per-task domain allowlist; for a general task the
  *   allowlist is derived from the job itself: the URLs and
@@ -58,30 +65,58 @@ import java.util.Locale
  */
 object TaskTools {
 
-    enum class ToolClass { BROWSER, MAIL, REPO_CODE, VIDEO }
+    enum class ToolClass { BROWSER, MAIL, REPO_CODE, VIDEO, CALENDAR }
 
     /** Record fields the plan stamps. */
     const val REQUIRES_FIELD = "requiresClasses"
     const val UNAVAILABLE_FIELD = "unavailableClasses"
     const val BROWSER_TOOLS_FIELD = "browserTools"
+    const val ROUTED_FIELD = "routedClasses"
+    const val MAIL_NOT_CONNECTED_FIELD = "mailNotConnected"
+
+    /**
+     * What this phone can actually do right now (v1.0.4).
+     * The plan is computed against CAPABILITIES, not just
+     * the job text: the calendar is on the device, and mail
+     * is on the device once Gmail is connected in Settings
+     * (the app's own Google OAuth stack — the same sign-in
+     * machinery as the Drive backup). Repo/code and video
+     * remain computer-lane classes, but since v1.0.4 they
+     * ROUTE (a spec export with a receipt) instead of
+     * dead-ending the job.
+     */
+    data class DeviceCaps(val gmailConnected: Boolean = false)
 
     /** The plan for one general task: the classes its text
-     *  requires, the subset this phone does not have, and
-     *  the browser allowlist its own words authorise. */
+     *  requires, the subset that cannot be performed on
+     *  this phone in this run, the subset that is ROUTED
+     *  to the computer lane with a receipt, and the
+     *  browser allowlist its own words authorise. */
     data class Plan(
         val requires: Set<ToolClass>,
         val unavailable: Set<ToolClass>,
-        val browserDomains: List<String>
+        val browserDomains: List<String>,
+        val routed: Set<ToolClass> = emptySet(),
+        val mailNotConnected: Boolean = false
     ) {
         val requiresBrowser: Boolean get() = ToolClass.BROWSER in requires
+        val requiresCalendar: Boolean get() = ToolClass.CALENDAR in requires
+        val mailActive: Boolean
+            get() = ToolClass.MAIL in requires && !mailNotConnected
         val partial: Boolean get() = unavailable.isNotEmpty()
     }
 
     /** A packaged record (the X lanes) carries a "kind";
      *  general records never do. Packaged tasks keep their
      *  package's toolset and are never planned here. */
-    fun isPackaged(task: JSONObject): Boolean =
-        task.optString("kind").isNotEmpty()
+    fun isPackaged(task: JSONObject): Boolean {
+        val kind = task.optString("kind")
+        // A recipe (v1.0.4) is NOT a package: it runs on the
+        // general kit under its own tool allowlist, with the
+        // general plan/declaration discipline — its file is
+        // the instruction, not a hard-coded lane.
+        return kind.isNotEmpty() && kind != "recipe"
+    }
 
     // ---------- detection ----------
 
@@ -114,6 +149,46 @@ object TaskTools {
         "video", "screencast", "screen recording", "record a demo",
         "demo video", "film a", "youtube"
     )
+
+    /** Calendar phrases (v1.0.4): the job is ABOUT the
+     *  calendar — reading it or writing to it. Bare
+     *  reminders are deliberately absent: "remind me" is a
+     *  scheduling ask, not calendar work, and must not drag
+     *  the calendar class (or its tools) into a job that
+     *  never named the calendar. */
+    private val CALENDAR_PHRASES = listOf(
+        "calendar", "appointment", "schedule a meeting",
+        "schedule an event", "schedule a call", "add to my calendar",
+        "put it on my calendar", "create an event", "book a meeting",
+        "what's on my day", "what is on my day", "my agenda",
+        "meetings today", "events today", "free time", "am i free",
+        "are you free"
+    )
+
+    /** Consequential-work phrases (v1.0.4, PlanAct): the
+     *  job COMMITS the user to the outside world — sends,
+     *  pays, posts, books, deletes, creates accounts. A
+     *  general task whose words carry one of these starts
+     *  in PLAN mode (mutating tools absent) until the user
+     *  approves the plan in chat. Conservative on purpose:
+     *  research, drafting and reading never trip it. */
+    private val CONSEQUENTIAL_PHRASES = listOf(
+        "send an email", "send email", "send money", "send the email",
+        "make a payment", "pay for", "transfer money", "wire money",
+        "delete", "post on x", "post to x", "post it", "publish",
+        "book a", "book the", "buy ", "purchase", "place an order",
+        "create an account", "sign up for", "register for",
+        "schedule a meeting", "create an event", "add to my calendar",
+        "put it on my calendar"
+    )
+
+    /** True when the job's own words make it consequential
+     *  (PlanAct gate). Reads the user's words only — the
+     *  chat-intake direction is stripped first. */
+    fun isConsequential(text: String): Boolean {
+        val low = jobText(text).lowercase()
+        return CONSEQUENTIAL_PHRASES.any { low.contains(it) }
+    }
 
     /** Web-action phrases: the job cannot be done without
      *  opening pages. Deliberately action-shaped (a verb or
@@ -190,6 +265,9 @@ object TaskTools {
         if (VIDEO_PHRASES.any { low.contains(it) }) {
             out.add(ToolClass.VIDEO)
         }
+        if (CALENDAR_PHRASES.any { low.contains(it) }) {
+            out.add(ToolClass.CALENDAR)
+        }
         return out
     }
 
@@ -226,31 +304,54 @@ object TaskTools {
         return out
     }
 
-    /** Classes this phone does not have: they live in the
-     *  core (computer lane) and are declared, never faked. */
-    fun unavailableOnDevice(requires: Set<ToolClass>): Set<ToolClass> =
-        requires intersect setOf(
-            ToolClass.MAIL, ToolClass.REPO_CODE, ToolClass.VIDEO
-        )
+    /** Classes that can never run on the phone — they
+     *  belong to the computer lane. Since v1.0.4 they are
+     *  ROUTED there (spec export + receipt), not dropped. */
+    fun routedClasses(requires: Set<ToolClass>): Set<ToolClass> =
+        requires intersect setOf(ToolClass.REPO_CODE, ToolClass.VIDEO)
 
-    /** The plan for a general task's text. (Packaged tasks
-     *  are the caller's concern — see [isPackaged].) */
-    fun planFor(text: String): Plan {
+    /** Classes that cannot be performed on this phone in
+     *  this run, given what the phone can do right now:
+     *  the routed classes, plus mail when Gmail is not
+     *  connected. The calendar is device kit (v1.0.4) and
+     *  mail is device kit once connected — neither is ever
+     *  declared missing again. */
+    fun unavailableOnDevice(
+        requires: Set<ToolClass>, caps: DeviceCaps = DeviceCaps()
+    ): Set<ToolClass> {
+        val out = routedClasses(requires).toMutableSet()
+        if (ToolClass.MAIL in requires && !caps.gmailConnected) {
+            out.add(ToolClass.MAIL)
+        }
+        return out
+    }
+
+    /** The plan for a general task's text, against the
+     *  phone's current capabilities. (Packaged tasks are
+     *  the caller's concern — see [isPackaged].) */
+    fun planFor(text: String, caps: DeviceCaps = DeviceCaps()): Plan {
         val requires = requiredClasses(text)
+        val mailNotConnected =
+            ToolClass.MAIL in requires && !caps.gmailConnected
         return Plan(
             requires = requires,
-            unavailable = unavailableOnDevice(requires),
+            unavailable = unavailableOnDevice(requires, caps),
             browserDomains = if (ToolClass.BROWSER in requires) {
                 domainsFor(text)
             } else {
                 emptyList()
-            }
+            },
+            routed = routedClasses(requires),
+            mailNotConnected = mailNotConnected
         )
     }
 
     /** The plan recorded on [task], or null when the task
      *  was never planned (packaged tasks, pre-1.0.3
-     *  records the runner has not re-entered yet). */
+     *  records the runner has not re-entered yet). Legacy
+     *  records (pre-1.0.4) carry no routed/mail fields:
+     *  both are derived from the unavailable set, which is
+     *  exactly what those fields meant when stamped. */
     fun planFromRecord(task: JSONObject): Plan? {
         if (!task.has(REQUIRES_FIELD)) return null
         val requires = classSet(task.optJSONArray(REQUIRES_FIELD))
@@ -260,7 +361,17 @@ object TaskTools {
         if (arr != null) {
             for (i in 0 until arr.length()) domains.add(arr.optString(i))
         }
-        return Plan(requires, unavailable, domains)
+        val routed = if (task.has(ROUTED_FIELD)) {
+            classSet(task.optJSONArray(ROUTED_FIELD))
+        } else {
+            routedClasses(unavailable)
+        }
+        val mailNotConnected = if (task.has(MAIL_NOT_CONNECTED_FIELD)) {
+            task.optBoolean(MAIL_NOT_CONNECTED_FIELD)
+        } else {
+            ToolClass.MAIL in unavailable
+        }
+        return Plan(requires, unavailable, domains, routed, mailNotConnected)
     }
 
     private fun classSet(arr: JSONArray?): Set<ToolClass> {
@@ -293,6 +404,8 @@ object TaskTools {
     fun stampPlan(task: JSONObject, plan: Plan) {
         task.put(REQUIRES_FIELD, classArray(plan.requires))
         task.put(UNAVAILABLE_FIELD, classArray(plan.unavailable))
+        task.put(ROUTED_FIELD, classArray(plan.routed))
+        task.put(MAIL_NOT_CONNECTED_FIELD, plan.mailNotConnected)
         if (plan.requiresBrowser) {
             task.put(BROWSER_TOOLS_FIELD, true)
             if (!task.has("browserDomains")) {
@@ -311,6 +424,7 @@ object TaskTools {
         ToolClass.MAIL -> "email work"
         ToolClass.REPO_CODE -> "code and repository work"
         ToolClass.VIDEO -> "video work"
+        ToolClass.CALENDAR -> "calendar work"
     }
 
     /** The classes named as a list ("email work and video
@@ -329,12 +443,17 @@ object TaskTools {
     }
 
     /** What she HAS here, in work terms — the available
-     *  half of the up-front declaration. */
+     *  half of the up-front declaration. Only the classes
+     *  the job actually names are listed (plus the base
+     *  kit), so the line stays a statement about THIS job. */
     fun availableLine(plan: Plan): String {
         val parts = mutableListOf<String>()
         if (plan.requiresBrowser) parts.add("the browser")
+        if (plan.requiresCalendar) parts.add("the calendar")
+        if (plan.mailActive) parts.add("email")
         parts.add("notes")
         parts.add("web search")
+        parts.add("her memory")
         return "On this phone she has " +
             parts.joinToString(", ") + "."
     }
@@ -347,17 +466,32 @@ object TaskTools {
     fun environmentNote(plan: Plan): String {
         val out = StringBuilder()
         out.append("Environment note (this phone): your tools here are ")
-        out.append(
-            if (plan.requiresBrowser) {
+        val tools = mutableListOf<String>()
+        if (plan.requiresBrowser) {
+            tools.add(
                 "the browser tools (browser_open/read/click/type/" +
-                    "type_secret/upload/screenshot/wait), the vault " +
-                    "tools, write_note/read_note/list_notes, " +
-                    "web_search and finish."
-            } else {
-                "write_note/read_note/list_notes, web_search " +
-                    "and finish."
-            }
+                    "type_secret/upload/screenshot/wait), the vault tools"
+            )
+        }
+        if (plan.requiresCalendar) {
+            tools.add("calendar_read and calendar_create")
+        }
+        if (plan.mailActive) {
+            tools.add(
+                "gmail_list, gmail_search and gmail_read " +
+                    "(mail bodies reach you only as short redacted " +
+                    "snippets — codes and secrets are stripped " +
+                    "before you ever see them)"
+            )
+        }
+        tools.add("write_note/read_note/list_notes")
+        tools.add("web_search")
+        tools.add(
+            "memory_read/memory_write/memory_search (your stored " +
+                "memory of the user)"
         )
+        tools.add("plan_note and finish")
+        out.append(tools.joinToString(", ")).append(".")
         if (plan.requiresBrowser) {
             out.append(
                 " The browser is bound by this task's domain " +
@@ -377,15 +511,28 @@ object TaskTools {
                     "naming that exact wall."
             )
         }
-        if (plan.partial) {
+        if (plan.mailNotConnected) {
+            out.append(
+                " This job names email work, but Gmail is not " +
+                    "connected on this phone yet: the mail tools " +
+                    "will answer GMAIL_NOT_CONNECTED, naming the " +
+                    "one Settings step that connects it. Do NOT " +
+                    "ask the user to fetch or paste mail contents. " +
+                    "Do the other parts of the job, and in your " +
+                    "finish summary name the email part as not " +
+                    "done here."
+            )
+        }
+        if (plan.routed.isNotEmpty()) {
             out.append(
                 " This job also names " +
-                    labelsFor(plan.unavailable) +
-                    " — those tools are NOT available in this " +
-                    "environment (they live on the computer " +
-                    "lane). Do the parts this phone supports, " +
+                    labelsFor(plan.routed) +
+                    " — that part cannot run on a phone. It is " +
+                    "being sent to the computer lane with a " +
+                    "receipt (the export is recorded on this " +
+                    "task). Do the parts this phone supports, " +
                     "and in your finish summary name plainly " +
-                    "what remains for the computer lane. Never " +
+                    "what was sent to the computer lane. Never " +
                     "claim to have done a part you have no " +
                     "tool for."
             )
@@ -395,10 +542,13 @@ object TaskTools {
 
     // ---------- tool dispatch ----------
 
-    enum class Executor { BROWSER, NOTES, REFUSE_X, UNKNOWN }
+    enum class Executor {
+        BROWSER, NOTES, CALENDAR, MAIL, MEMORY, REFUSE_X, UNKNOWN
+    }
 
     private val BROWSER_FAMILY = setOf(
         "browser_open", "browser_read", "browser_click",
+        "browser_click_mark",
         "browser_type", "browser_type_secret", "browser_upload",
         "browser_screenshot", "browser_wait", "browser_handoff",
         "vault_gen_secret", "vault_record_account"
@@ -408,6 +558,42 @@ object TaskTools {
         "write_note", "read_note", "list_notes", "web_search"
     )
 
+    /** The device calendar (v1.0.4): on-device kit, gated
+     *  by the plan like the browser — a job that never
+     *  named the calendar gets no calendar tools. */
+    private val CALENDAR_FAMILY = setOf("calendar_read", "calendar_create")
+
+    /** On-device Gmail (v1.0.4): live only when the plan
+     *  requires mail AND Gmail is connected — a task whose
+     *  plan says mail is not connected hears the honest
+     *  NOT_CONNECTED from the mail executor instead. */
+    private val MAIL_FAMILY = setOf(
+        "gmail_list", "gmail_search", "gmail_read", "gmail_send"
+    )
+
+    /** Her stored memory (v1.0.4): base kit for every
+     *  general task, like notes — knowing the user is not
+     *  a class a job has to name. */
+    private val MEMORY_FAMILY = setOf(
+        "memory_read", "memory_write", "memory_search"
+    )
+
+    /** Tools that CHANGE the world (v1.0.4, PlanAct +
+     *  checkpoints): writes, sends, posts, creations,
+     *  anything whose effect survives the step. In PLAN
+     *  mode these are ABSENT from the offered registry;
+     *  in ACT mode each one is checkpointed before it
+     *  runs (where a snapshot exists — notes). */
+    val MUTATING_TOOLS: Set<String> = setOf(
+        "write_note", "calendar_create", "gmail_send",
+        "browser_click", "browser_click_mark", "browser_type",
+        "browser_type_secret", "browser_upload",
+        "vault_gen_secret", "vault_record_account",
+        "x_post", "memory_write"
+    )
+
+    fun isMutating(tool: String): Boolean = tool in MUTATING_TOOLS
+
     /** Which executor a tool call belongs to, for a task
      *  whose browser tools are [browserActive]. The X lane
      *  tools (x_*) belong to packaged X tasks alone: on a
@@ -415,11 +601,19 @@ object TaskTools {
      *  routed to the browser executor that implements them
      *  for the packaged lane. Pure, so the general runner's
      *  dispatch is testable end-to-end with a fake driver. */
-    fun executorFor(browserActive: Boolean, tool: String): Executor =
+    fun executorFor(
+        browserActive: Boolean, tool: String,
+        mailActive: Boolean = false, calendarActive: Boolean = false
+    ): Executor =
         when {
             tool.startsWith("x_") -> Executor.REFUSE_X
             tool in BROWSER_FAMILY ->
                 if (browserActive) Executor.BROWSER else Executor.UNKNOWN
+            tool in CALENDAR_FAMILY ->
+                if (calendarActive) Executor.CALENDAR else Executor.UNKNOWN
+            tool in MAIL_FAMILY ->
+                if (mailActive) Executor.MAIL else Executor.UNKNOWN
+            tool in MEMORY_FAMILY -> Executor.MEMORY
             tool in NOTE_FAMILY -> Executor.NOTES
             else -> Executor.UNKNOWN
         }
@@ -430,6 +624,17 @@ object TaskTools {
         "error: SENTINEL — the X tools belong to packaged X " +
             "tasks; this task has no X lane. Use the browser " +
             "tools on the sites this job names instead."
+
+    /** The Plan-mode refusal (v1.0.4): a mutating tool was
+     *  called while the task is still in PLAN mode. The
+     *  offered registry already omits these tools — this
+     *  is the second wall, for a model that names one
+     *  anyway. */
+    const val PLAN_REFUSAL =
+        "error: SENTINEL — this task is in PLAN mode: acting " +
+            "tools are not available until the user approves " +
+            "the plan. Call propose_plan with your plan and " +
+            "sub-goals instead."
 }
 
 /**
