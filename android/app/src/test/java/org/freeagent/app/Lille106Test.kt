@@ -724,20 +724,24 @@ class Lille106Test {
     fun theMenuContractIsPinnedForBothRolesAndTheLiveBubble() {
         // One source of truth serves stored bubbles of
         // both roles and the live bubble alike: the exact
-        // reactions row and the four items, in order.
+        // reactions row and the items, in order.
+        // v1.0.7: the items are THREE — Select was
+        // removed by Ethuram's standing order (chat text
+        // is never selectable); the pin now guards the
+        // smaller contract against silent change either
+        // way.
         assertEquals(
             listOf("👍", "❤️", "😂", "😮", "😢", "🙏"),
             MessageActions.REACTIONS
         )
         assertEquals(
-            listOf("Reply", "Copy", "Select", "Share"),
+            listOf("Reply", "Copy", "Share"),
             MessageActions.ITEMS.map { it.title }
         )
         assertEquals(
             listOf(
                 MessageActions.Item.REPLY,
                 MessageActions.Item.COPY,
-                MessageActions.Item.SELECT,
                 MessageActions.Item.SHARE
             ),
             MessageActions.ITEMS

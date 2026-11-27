@@ -6,30 +6,38 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 
-/** v1.0.6 (supersedes the v0.12.2 contract): chat bubbles
- *  are NOT text-selectable by default.
+/** v1.0.7 (supersedes the v1.0.6 contract): chat text is
+ *  NOT selectable — at all, by any path.
  *
- *  The v0.12.2 default (appendLine sets selectable=true)
- *  made chat text copyable — and, proven on-device
- *  2026-11-27, it also swallowed the long-press: Android
- *  text selection took the gesture, the user got
- *  selection handles + the system Copy/Share bar, and
- *  the LilleMenu (reactions, Reply / Copy / Select /
- *  Share) never opened. The menu was unreachable.
+ *  History: the v0.12.2 default (appendLine sets
+ *  selectable=true) made chat text copyable — and,
+ *  proven on-device 2026-11-27, it also swallowed the
+ *  long-press: Android text selection took the gesture,
+ *  the user got selection handles + the system
+ *  Copy/Share bar, and the LilleMenu never opened.
+ *  v1.0.6 made bubbles non-selectable by default but
+ *  left the menu's Select item as a selection door;
+ *  Ethuram's standing order the same morning closed it:
+ *  "the whole text should not be selectable… no
+ *  selecting of text — handle it like Muse's own chat
+ *  menu." Select is out of MessageActions.ITEMS, its
+ *  handler is deleted, and NO code path in the chat
+ *  screen enables selection on a bubble.
  *
- *  The 1.0.6 contract: appendLine — the single factory
- *  every chat bubble (user, Lille, live reply) comes
- *  from — builds bubbles NON-selectable; the long-press
- *  opens the menu on stored bubbles AND the live bubble
- *  (attachLiveMenu at both creation sites); the menu's
- *  Select item is the one place selection is enabled
- *  (on that bubble only; it resets on re-render). Copy
- *  lives in the menu. The login pairing-code block (XML)
- *  stays selectable as before.
+ *  The contract pinned here, at the source (a plain JVM
+ *  test cannot instantiate a TextView): appendLine —
+ *  the single factory every chat bubble (user, Lille,
+ *  live reply) comes from — builds bubbles
+ *  NON-selectable; the string "setTextIsSelectable(true)"
+ *  appears NOWHERE in MainActivity (the chat screen);
+ *  the long-press opens the menu on stored bubbles AND
+ *  the live bubble (attachLiveMenu at both creation
+ *  sites). Copy lives in the menu. Out of scope by the
+ *  order's own terms: the login pairing-code block, the
+ *  Settings and Wallet layouts keep their selectable
+ *  fields (addresses and keys are copy-targets there).
  *
- *  A plain JVM test cannot instantiate a TextView, so
- *  this pins the contract at the source. If any leg
- *  regresses, this test goes red. */
+ *  If any leg regresses, this test goes red. */
 class ChatBubbleSelectionTest {
 
     private fun locate(relativeFromModule: String): File {
@@ -74,12 +82,17 @@ class ChatBubbleSelectionTest {
     }
 
     @Test
-    fun theMenuSelectItemIsTheOneSelectionDoor() {
+    fun noChatCodePathEnablesSelection() {
         val source = mainActivitySource()
-        assertTrue(
-            "the shared menu's Select item enables selection " +
-                "on that bubble only",
-            source.contains("bubble.setTextIsSelectable(true)")
+        assertFalse(
+            "no code path in the chat screen may enable " +
+                "text selection on a bubble — the Select " +
+                "door is deleted, not just closed",
+            source.contains("setTextIsSelectable(true)")
+        )
+        assertFalse(
+            "the menu carries no Select item to resurrect",
+            source.contains("Item.SELECT")
         )
     }
 

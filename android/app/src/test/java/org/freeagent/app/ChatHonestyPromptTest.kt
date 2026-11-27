@@ -1,5 +1,6 @@
 package org.freeagent.app
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -71,16 +72,22 @@ class ChatHonestyPromptTest {
         assertTrue(prompt.contains("never narrate a finished result"))
     }
 
-    /** v0.13: when the model itself judges a message to be a
-     *  job the deterministic layer missed, it must ask the
-     *  one contractual question — JobDetect resolves the
-     *  user's "yes" from the thread by that exact wording. */
+    /** v1.0.7: the confirmation question is retired —
+     *  the prompt now FORBIDS it by its exact wording
+     *  (jobs are started by the app, never by asking).
+     *  Up to 1.0.6 this pin asserted the opposite: the
+     *  prompt instructed the model to ask it. */
     @Test
-    fun chatPromptCarriesTheTaskQuestion() {
+    fun chatPromptForbidsTheTaskQuestion() {
+        val prompt = normalisedPrompt()
+        assertTrue(prompt.contains("Never ask"))
         assertTrue(
-            normalisedPrompt().contains(
-                "Want me to take that on as a task?"
+            prompt.contains(
+                "jobs are started by the app, never by asking"
             )
         )
+        // The old instruction — ask it exactly, and
+        // nothing more about doing it — is gone.
+        assertFalse(prompt.contains("ask exactly"))
     }
 }

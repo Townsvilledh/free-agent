@@ -3,7 +3,13 @@ package org.freeagent.app
 /**
  * The long-press message menu (v1.0.1, patterned on the Muse
  * chat Ethuram screenshotted): a reactions row over Reply /
- * Copy / Select / Share, on ANY bubble — his or hers.
+ * Copy / Share, on ANY bubble — his or hers.
+ *
+ * v1.0.7: Select is GONE. Ethuram's standing order — chat
+ * text is never selectable, handled exactly like the Muse
+ * chat's own menu — so there is no selection door in the
+ * menu and no code path in the chat enables selection on a
+ * bubble. Copy is how text leaves a bubble.
  *
  * Reactions: one per message from him. Tapping another emoji
  * replaces it; tapping the same one clears it. The reaction
@@ -25,7 +31,6 @@ object MessageActions {
     enum class Item(val title: String) {
         REPLY("Reply"),
         COPY("Copy"),
-        SELECT("Select"),
         SHARE("Share")
     }
 

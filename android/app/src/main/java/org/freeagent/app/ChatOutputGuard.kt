@@ -46,15 +46,35 @@ package org.freeagent.app
  *   sent it there") and honest partial states ("Gmail
  *   isn't connected yet — one step in Settings") pass.
  *
- * - IDENTITY_ASK (v1.0.6): the reply asks the user for
- *   the AGENT'S OWN identity items — her handle, her
- *   mailbox, a password, a phone number — as an intake
- *   list or a request. Those items are hers, already set
- *   up on the phone; her password is self-generated into
- *   her vault and no password is ever requested in chat.
- *   A phone-verification demand is a park at the wall,
- *   never a chat question. Structural (request frame +
- *   identity item), like the homework detector below.
+ * - IDENTITY_DENIAL (v1.0.7): the reply denies she
+ *   HAS her own identity resources at all — "I don't
+ *   have a personal email address or password of my
+ *   own… I would need you to provide…" — contradicting
+ *   the kit the CapabilitySheet states. Same handling
+ *   as the identity ask; a second hit lands the
+ *   grounded [DENIAL_LINE] asserting the kit facts.
+ *
+ * - CONFIRMATION_QUESTION (v1.0.7): the reply IS the
+ *   retired "Want me to take that on as a task?" —
+ *   job-shaped input is taken on automatically now, so
+ *   the question is never a legitimate reply. Whole-
+ *   prose shape only.
+ *
+ * - IDENTITY_ASK (v1.0.6; explainer framing v1.0.7):
+ *   the reply asks the user for the AGENT'S OWN identity
+ *   items — her handle, her mailbox, a password, a phone
+ *   number — as an intake list or a request, OR claims
+ *   in explainer/conditional framing that progress waits
+ *   on being given them ("waiting for the specific
+ *   details you want to use (handle, email, password,
+ *   phone)… once I have those inputs I can move past…
+ *   let me know the missing details"). Those items are
+ *   hers, already set up on the phone; her password is
+ *   self-generated into her vault and no password is
+ *   ever requested in chat. A phone-verification demand
+ *   is a park at the wall, never a chat question.
+ *   Structural (request/dependence frame + identity
+ *   item), like the homework detector below.
  *
  * On a hit the glue silently regenerates ONCE on the next
  * route; on a second hit it shows [PLAIN_LINE] and logs
@@ -94,6 +114,17 @@ object ChatOutputGuard {
     const val IDENTITY_LINE =
         "I already have my own details set up on this " +
             "phone — I don't need those from you."
+
+    /** The grounded line for a second self-denial hit:
+     *  the CapabilitySheet's kit facts asserted in her
+     *  own voice — she HAS a handle and mailbox set up
+     *  on the phone, and a password she generated into
+     *  her encrypted vault. */
+    const val DENIAL_LINE =
+        "I do have my own details — my handle and " +
+            "mailbox are set up on this phone, and my " +
+            "password is one I generated into my " +
+            "encrypted vault. I don't need those from you."
 
     sealed class Verdict {
         object Clean : Verdict()
@@ -192,10 +223,63 @@ object ChatOutputGuard {
         if (ENV_DENIAL_RES.any { it.containsMatchIn(prose) }) {
             return Verdict.Rejected("capability-denial")
         }
+        if (selfDenial(prose)) {
+            return Verdict.Rejected("identity-denial")
+        }
         if (identityAsk(prose)) {
             return Verdict.Rejected("identity-ask")
         }
+        if (CONFIRM_QUESTION_RE.containsMatchIn(prose.trim())) {
+            return Verdict.Rejected("confirmation-question")
+        }
         return Verdict.Clean
+    }
+
+    /**
+     * SELF-DENIAL (v1.0.7, born of the 2026-11-27
+     * screenshots): corrected twice — "email and
+     * password should be handled by you end to end",
+     * "this is your personal x account you should sort
+     * your own email and password" — she answered "I
+     * don't have a personal email address or password
+     * of my own to use for an X account. To create the
+     * profile I would need you to provide: 1. An email
+     * address… 2. A password…" A flat denial of her own
+     * identity kit: her handle and mailbox ARE set up on
+     * the phone and her password is self-generated into
+     * her vault (the CapabilitySheet states exactly
+     * this in her context). Structural shapes:
+     *  - a first-person non-possession claim bound to an
+     *    identity item AND an own-marker ("I don't have
+     *    a … email … of my own", "I don't have my own
+     *    password", "I have no email … of my own",
+     *    "no email of my own");
+     *  - the need-you-to-provide frame over an identity
+     *    intake (the item named in the same sentence, or
+     *    two or more items listed in the reply — the
+     *    numbered list that follows the frame).
+     * Non-claims pass: "I don't have YOUR email address
+     * saved" carries no own-marker and denies nothing
+     * about her kit.
+     */
+    private fun selfDenial(prose: String): Boolean {
+        if (DENIAL_RES.any { it.containsMatchIn(prose) }) {
+            return true
+        }
+        if (!NEED_YOU_TO_PROVIDE_RE.containsMatchIn(prose)) {
+            return false
+        }
+        if (NEED_YOU_TO_PROVIDE_ITEM_RE.containsMatchIn(prose)) {
+            return true
+        }
+        val items = IDENTITY_ITEM_RE.findAll(prose)
+            .map {
+                it.value.lowercase()
+                    .replace("e-mail", "email")
+                    .replace("phone number", "phone")
+            }
+            .toSet()
+        return items.size >= 2
     }
 
     /**
@@ -217,6 +301,27 @@ object ChatOutputGuard {
      *  - the intake list: a need frame ("to continue I
      *    need", "I'll need") over a text naming two or
      *    more identity items.
+     *
+     * v1.0.7 — the EXPLAINER framing (the pasted X-
+     * creation reply): no request is ever made; instead
+     * a blockers table and a closing paragraph claim the
+     * flow is PAUSED because it waits on "the specific
+     * details you want to use (handle, email, password,
+     * phone)" and will move "once I have those inputs".
+     * Same offence, declarative mood. The structural
+     * widening: a DEPENDENCE frame — progress waits on,
+     * is paused for want of, or continues once given —
+     * bound to identity data as a set ("waiting for the
+     * … details", "details you … to use", "once I have
+     * those inputs", "let me know the missing details",
+     * each requiring the prose to actually name identity
+     * items) or to a single item under a giving/having
+     * clause ("once I have your email…", "paused until
+     * you give me the phone number", "waiting for you to
+     * provide the password"). Waiting on the WORLD —
+     * "waiting for the confirmation email to land in her
+     * mailbox" — names no details-set and no giving
+     * clause, and passes.
      * Facts ABOUT identity pass: "your password lives
      * only in the vault" requests nothing and carries no
      * request frame.
@@ -246,14 +351,121 @@ object ChatOutputGuard {
     private val IDENTITY_ITEM_RE =
         Regex("\\b$IDENTITY_ITEM\\b", RegexOption.IGNORE_CASE)
 
+    /** The self-denial shapes (see [selfDenial]) and
+     *  the retired confirmation question's shape (a
+     *  reply whose WHOLE substance is asking whether to
+     *  take the job on as a task — job-shaped input is
+     *  taken on automatically now, so the question is
+     *  never a legitimate reply; whole-prose match only,
+     *  quoting it mid-sentence in a real answer passes).
+     *  Declared here, after IDENTITY_ITEM, because the
+     *  patterns interpolate it. */
+    private val DENIAL_RES = listOf(
+        Regex(
+            "\\bi (don't|do not) have\\b[^.!?\\n]{0,50}" +
+                "\\b$IDENTITY_ITEM\\b[^.!?\\n]{0,30}" +
+                "\\b(of my own|my own)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bi (don't|do not) have\\b[^.!?\\n]{0,30}" +
+                "\\bmy own\\b[^.!?\\n]{0,30}\\b$IDENTITY_ITEM\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bi have no\\b[^.!?\\n]{0,40}" +
+                "\\b$IDENTITY_ITEM\\b[^.!?\\n]{0,30}" +
+                "\\b(of my own|my own)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bno (personal )?\\b$IDENTITY_ITEM\\b" +
+                "[^.!?\\n]{0,20}\\bof my own\\b",
+            RegexOption.IGNORE_CASE
+        )
+    )
+
+    private val NEED_YOU_TO_PROVIDE_RE = Regex(
+        "\\bi (would|will|'ll) need you to\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val NEED_YOU_TO_PROVIDE_ITEM_RE = Regex(
+        "\\bneed you to\\b[^.!?\\n]{0,60}\\b$IDENTITY_ITEM\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val CONFIRM_QUESTION_RE = Regex(
+        "^(do you )?want me to take (that|this|it) on " +
+            "as a task\\s*\\??$",
+        RegexOption.IGNORE_CASE
+    )
+
+
     private val NEED_FRAME_RE = Regex(
         "\\b(i need|i'll need|i will need|need from you|" +
             "to continue|required|requirements)\\b",
         RegexOption.IGNORE_CASE
     )
 
+    /** Dependence on a single identity item under a
+     *  giving/having clause — progress framed as
+     *  continuing once the item changes hands. */
+    private val IDENTITY_GIVEN_RES = listOf(
+        Regex(
+            "\\b(once|when|until)\\b[^.!?\\n]{0,20}" +
+                "\\b(i have|i get|i receive|you (give|provide|" +
+                "send|share|tell|enter|type))\\b" +
+                "[^.!?\\n]{0,50}\\b$IDENTITY_ITEM\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\byou to (provide|give|send|share|enter|type|" +
+                "tell)\\b[^.!?\\n]{0,40}\\b$IDENTITY_ITEM\\b",
+            RegexOption.IGNORE_CASE
+        )
+    )
+
+    /** Dependence on identity data AS A SET — the
+     *  explainer's "details"/"inputs" stand in for the
+     *  items, so these shapes fire only when the prose
+     *  also names at least one identity item (the set is
+     *  spelled out, in the pasted failure as a
+     *  parenthetical list). "Waiting for the details of
+     *  the shipment" names no identity item and passes. */
+    private val IDENTITY_DEPENDENCE_RES = listOf(
+        Regex(
+            "\\b(waiting|wait) for\\b[^.!?\\n]{0,40}" +
+                "\\b(details|inputs|information)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(details|inputs) you\\b[^.!?\\n]{0,20}\\bto use\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bonce i have\\b[^.!?\\n]{0,30}" +
+                "\\b(those|the|these|your) (inputs|details|" +
+                "information)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\blet me know the\\b[^.!?\\n]{0,30}" +
+                "\\b(details|inputs|information)\\b",
+            RegexOption.IGNORE_CASE
+        )
+    )
+
     private fun identityAsk(prose: String): Boolean {
         if (IDENTITY_ASK_RES.any { it.containsMatchIn(prose) }) {
+            return true
+        }
+        if (IDENTITY_GIVEN_RES.any { it.containsMatchIn(prose) }) {
+            return true
+        }
+        if (IDENTITY_ITEM_RE.containsMatchIn(prose) &&
+            IDENTITY_DEPENDENCE_RES.any { it.containsMatchIn(prose) }
+        ) {
             return true
         }
         if (!NEED_FRAME_RE.containsMatchIn(prose)) return false

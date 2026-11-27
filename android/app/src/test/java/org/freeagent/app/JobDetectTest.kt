@@ -27,14 +27,6 @@ class JobDetectTest {
         )
     }
 
-    private fun assertAsk(text: String) {
-        val out = classify(text)
-        assertTrue(
-            "expected AskQuestion for: $text — got $out",
-            out is JobDetect.Outcome.AskQuestion
-        )
-    }
-
     private fun assertChat(text: String) {
         val out = classify(text)
         assertEquals(
@@ -112,30 +104,40 @@ class JobDetectTest {
         chats.forEach { assertChat(it) }
     }
 
-    // ---------- ambiguous → AskQuestion ----------
+    // ---------- ambiguous → taken on (v1.0.7) ----------
 
+    /** v1.0.7: the ambiguous band no longer asks the
+     *  confirmation question — job-shaped input is taken
+     *  on automatically (chat-is-the-engine). These
+     *  fixtures expected AskQuestion up to 1.0.6; the
+     *  contract changed deliberately and the pins moved
+     *  with it. */
     @Test
-    fun ambiguousFixturesAskOnce() {
-        val asks = listOf(
+    fun ambiguousFixturesStartTasks() {
+        val jobs = listOf(
             "Find me a cheap flight to Abuja next week",
             "Check the price of gold right now",
             "Create an account for me",
             "Book a table for two on Friday night",
             "Research the best no-KYC freelance platforms",
-            "Find three hackathons I can enter this week"
+            "Find three hackathons I can enter this week",
+            // The 2026-11-27 screenshot's exact message:
+            // a plain job that got the retired question
+            // while her X lane was already running.
+            "create an email for yourself"
         )
-        asks.forEach { assertAsk(it) }
+        jobs.forEach { assertJob(it) }
     }
 
     @Test
-    fun mediumBriefAsks() {
+    fun mediumBriefStarts() {
         val brief = "Prepare the Stellar buildathon entry: the " +
             "repo, the demo script, the pitch deck outline and " +
             "the submission checklist, all before the deadline " +
             "on the first of December, and keep me posted as " +
             "each piece lands so I can review them in order."
         assertTrue(brief.length in 200..599)
-        assertAsk(brief)
+        assertJob(brief)
     }
 
     // ---------- fluency intake: links, fragments, files ----------

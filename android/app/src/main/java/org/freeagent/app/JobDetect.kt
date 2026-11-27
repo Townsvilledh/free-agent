@@ -17,15 +17,21 @@ import org.json.JSONObject
  *    ask, an explicit delegation, or a long pasted brief —
  *    make a task immediately. A message whose satisfaction
  *    plausibly needs the tool lane but carries no checkable
- *    target is AMBIGUOUS: she asks ONE short question
- *    ([QUESTION]) instead of guessing. Everything else is
- *    ordinary chat and goes to the brain untouched.
- * 2. The model path: the chat system prompt instructs the
- *    brain, when IT judges a message to be a job this layer
- *    missed, to reply with exactly [QUESTION]. The user's
- *    "yes" is then resolved HERE, deterministically, from
- *    the stored thread: [pendingInstruction] finds the ask
- *    that preceded the question, whichever layer asked it.
+ *    target is AMBIGUOUS — and since v1.0.7 it is taken on
+ *    automatically too: job-shaped input starts the work,
+ *    and the confirmation question ([QUESTION]) is retired
+ *    (see classify step 3). Everything else is ordinary
+ *    chat and goes to the brain untouched.
+ * 2. The model path (legacy): the chat system prompt used
+ *    to instruct the brain, when IT judged a message to be
+ *    a job this layer missed, to reply with exactly
+ *    [QUESTION]; the user's "yes" was then resolved HERE,
+ *    deterministically, from the stored thread:
+ *    [pendingInstruction] finds the ask that preceded the
+ *    question. The prompt no longer instructs it (v1.0.7)
+ *    and the guard rejects the question as a reply — but
+ *    the resolution stays, so a thread an older build
+ *    left mid-question still completes honestly.
  *
  * Conservative by design: a missed job stays a chat answer
  * (the user can rephrase, or say "take that on as a task"),
@@ -54,15 +60,23 @@ import org.json.JSONObject
  */
 object JobDetect {
 
-    /** The one clarifying question. Wording is contractual:
-     *  the system prompt tells the model to ask it verbatim,
-     *  and [pendingInstruction] recognises a thread by it. */
+    /** The retired clarifying question (v1.0.7). Kept as
+     *  a constant for ONE reason: [pendingInstruction]
+     *  recognises a legacy thread by it, so a "yes" to a
+     *  question an older build asked still starts the
+     *  ask. Nothing asks it any more — not this layer
+     *  (the ambiguous band starts the task), not the
+     *  brain (the prompt forbids it), and the chat guard
+     *  rejects it as a reply. */
     const val QUESTION = "Want me to take that on as a task?"
 
     sealed class Outcome {
         /** Take [instruction] on as a durable task now. */
         data class StartTask(val instruction: String) : Outcome()
-        /** Ask [QUESTION]; [instruction] is what a "yes" starts. */
+        /** Legacy: ask [QUESTION]; [instruction] is what a
+         *  "yes" starts. No longer produced by [classify]
+         *  since v1.0.7 — retained so the type (and the
+         *  glue's handling) stays total. */
         data class AskQuestion(val instruction: String) : Outcome()
         /** Ordinary chat — the brain answers. */
         object NotJob : Outcome()
@@ -110,8 +124,8 @@ object JobDetect {
 
     /** Verbs whose object lives in the live world (a price, a
      *  flight, a listing) — she cannot answer those from chat
-     *  knowledge, but without a target the shape is genuinely
-     *  ambiguous, so they ask rather than spawn. */
+     *  knowledge; without a target the shape is the ambiguous
+     *  band (taken on automatically since v1.0.7). */
     private val LOOKUP_VERBS = listOf(
         "find", "check", "look up", "lookup", "research", "search for",
         "get me", "book", "create an account", "open an account",
@@ -213,8 +227,16 @@ object JobDetect {
 
         // 3. Ambiguous band: a work-shaped imperative whose
         //    satisfaction plausibly needs tools or the live
-        //    world, but with no checkable target — ask once.
-        if (isAmbiguous(raw, low)) return Outcome.AskQuestion(raw)
+        //    world, but with no checkable target. v1.0.7:
+        //    taken on automatically — the confirmation
+        //    question is RETIRED (chat-is-the-engine:
+        //    job-shaped input starts the work; the reply
+        //    is the start ack, never "Want me to take that
+        //    on as a task?"). The screenshot that ended it:
+        //    "create an email for yourself" — a plain job
+        //    in this band — got the question while her X
+        //    lane was already running.
+        if (isAmbiguous(raw, low)) return Outcome.StartTask(raw)
 
         return Outcome.NotJob
     }

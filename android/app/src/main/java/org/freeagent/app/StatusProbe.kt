@@ -383,6 +383,224 @@ object StatusProbe {
         }
     }
 
+    // ---------- needs / blockers probe (v1.0.7) ----------
+
+    /**
+     * NEEDS GRAMMAR (v1.0.7 — structure, not a phrase
+     * table, same discipline as the probe grammar):
+     * "how can we help her over all this" — Ethuram
+     * asked what she NEEDS, and in 1.0.6 that question
+     * fell to the brain, which answered with a blockers
+     * table and a claim that her own X creation was
+     * paused waiting for HIM to supply her handle,
+     * email, password and phone. A needs question in a
+     * chat with live work is a question about the
+     * RECORD, and the record's truth is narrow: she
+     * works on her own, and the only thing that can
+     * ever need the user is a human step in the browser
+     * panel. So the whole family is deterministic too.
+     *
+     * A needs probe is a whole message composed ONLY of
+     * closed-class words (the probe function words plus
+     * the needs content words) carrying one of three
+     * frames:
+     *  (a) an OFFER of help toward her — "help" with
+     *      "you", or the "how can/could … help" shape;
+     *  (b) HER need asked of her — a need word with
+     *      "you", in question shape (a question-word
+     *      lead, "from me", or a trailing "?");
+     *  (c) what is IN HER WAY — a block word with "you"
+     *      in question shape.
+     * Any open-class word breaks the parse: "what do
+     * you need for the report" carries "report" and
+     * flows to the brain untouched — it is a question
+     * about a job's inputs, not a control question.
+     * "I need help" parses as nothing: the frames all
+     * point at HER need, never the user's.
+     */
+    private val NEEDS_CONTENT = setOf(
+        "help", "need", "needs", "needed",
+        "blocking", "blocked", "blockers", "stopping",
+        "assist", "assistance"
+    )
+
+    private val NEEDS_FUNCTION = PROBE_FUNCTION + setOf(
+        "anything", "something", "else"
+    )
+
+    private val NEEDS_VOCAB = NEEDS_CONTENT + NEEDS_FUNCTION
+
+    private val NEED_WORDS = setOf("need", "needs", "needed")
+
+    private val BLOCK_WORDS =
+        setOf("blocking", "blocked", "blockers", "stopping")
+
+    /** Leads that make a message a question directed at
+     *  her (frame b/c shape evidence). */
+    private val NEEDS_QUESTION_LEADS = setOf(
+        "what", "what's", "how", "how's", "do", "does",
+        "is", "can", "could", "anything", "something"
+    )
+
+    /** True when the whole message is a needs/blockers
+     *  question in the family above. The caller gates on
+     *  the chat having work in a needs state ([needsTaskFor])
+     *  — in a chat with no live work it is ordinary chat. */
+    fun isNeedsProbe(text: String): Boolean {
+        val norm = normalise(text)
+        if (norm.isEmpty() || norm.length > 48) return false
+        val tokens = norm.split(" ")
+        if (tokens.size > 8) return false
+        if (tokens.any { it !in NEEDS_VOCAB }) return false
+        val set = tokens.toSet()
+        val questioned = text.trim().endsWith("?") ||
+            tokens[0] in NEEDS_QUESTION_LEADS ||
+            ("from" in set && "me" in set)
+        // (a) an offer of help toward her.
+        if ("help" in set || "assist" in set ||
+            "assistance" in set
+        ) {
+            if ("you" in set) return true
+            if (tokens[0] == "how" &&
+                ("can" in set || "could" in set)
+            ) {
+                return true
+            }
+        }
+        // (b) her need, asked of her.
+        if (set.any { it in NEED_WORDS } && "you" in set &&
+            questioned
+        ) {
+            return true
+        }
+        // (c) what is in her way.
+        if (set.any { it in BLOCK_WORDS } && "you" in set &&
+            questioned
+        ) {
+            return true
+        }
+        return false
+    }
+
+    /** The states a needs question speaks to: work that
+     *  is active, paused, resting or parked — the brief's
+     *  family. Finished work asks nothing and a failed
+     *  record's "what do you need" is a different
+     *  conversation; neither is intercepted. */
+    private val NEEDS_STATES = setOf(
+        TaskStates.QUEUED, TaskStates.RUNNING,
+        TaskStates.WAITING_ROUTE, TaskStates.WAITING_NETWORK,
+        TaskStates.PAUSED, TaskStates.PARKED_AT_WALL,
+        TaskStates.NEEDS_RUNNER
+    )
+
+    /** The chat's newest work when it stands in a needs
+     *  state, else null — the gate for [isNeedsProbe],
+     *  mirroring the other probes' latest-record rule. */
+    fun needsTaskFor(
+        tasks: List<JSONObject>, chatId: String
+    ): JSONObject? =
+        latestTaskForChat(tasks, chatId)?.takeIf {
+            it.optString("state") in NEEDS_STATES
+        }
+
+    /**
+     * The deterministic answer to a needs question,
+     * composed ONLY from the record: the state and step,
+     * what she does next ON HER OWN, and the only thing
+     * that can ever need the user — a human check in the
+     * browser panel, named when the record is parked at
+     * one (an approval word or a browser hand-back when
+     * the record says exactly that). It never requests
+     * details, credentials or inputs — her own identity
+     * items are hers, and a needs answer that asked for
+     * them would be the 2026-11-27 failure wearing a
+     * deterministic coat. The text is itself clean under
+     * the chat guard (pinned).
+     */
+    fun needsAnswerFor(task: JSONObject, now: Long): String {
+        val title = TaskTransparency.titleFor(task)
+        val state = task.optString("state")
+        val steps = task.optInt("steps", 0)
+        val stepBit = when {
+            steps <= 0 -> ""
+            steps == 1 -> " at 1 step"
+            else -> " at $steps steps"
+        }
+        val panelLine = "The only step that can ever need " +
+            "you is a human check in the browser panel — " +
+            "if one comes up she parks there and shows it."
+        return when (state) {
+            TaskStates.PARKED_AT_WALL -> {
+                val step = task.optString("wallStep").trim()
+                val stepText = if (step.isNotEmpty()) {
+                    step
+                } else {
+                    "the step waiting in the browser panel"
+                }
+                val sep = if (stepText.endsWith(".")) " " else ". "
+                "One thing, and it's in the panel, not in " +
+                    "chat: “$title” is parked at $stepText" +
+                    sep + "Pass it there and hand back — " +
+                    "she does everything else herself, and " +
+                    "she needs no details or inputs from you."
+            }
+            TaskStates.PAUSED -> when {
+                task.optString(PlanAct.APPROVAL_KIND_FIELD)
+                    .isNotEmpty() ->
+                    "One thing: “$title” is paused$stepBit " +
+                        "waiting on your word — a plan is " +
+                        "ready for your approval (say " +
+                        "“approve”). Nothing else is needed " +
+                        "from you; the rest she does herself."
+                task.optBoolean("browserTakeover", false) ->
+                    "One thing: you have her browser right " +
+                        "now — hand it back and “$title” " +
+                        "continues on its own. Nothing else " +
+                        "is needed from you."
+                else -> {
+                    val note = NarrationGuard.cleanOrNull(
+                        task.optString("note")
+                    )
+                    val noteBit = if (note != null) {
+                        " — " + note.trim().trimEnd('.')
+                    } else {
+                        ""
+                    }
+                    "Nothing — “$title” is paused$stepBit" +
+                        noteBit + ". She needs no details or " +
+                        "inputs from you; say “resume” and " +
+                        "she picks it up herself."
+                }
+            }
+            TaskStates.WAITING_NETWORK ->
+                "Nothing — “$title” is waiting on the " +
+                    "network$stepBit, and she continues on " +
+                    "her own the moment it returns. " +
+                    panelLine
+            TaskStates.WAITING_ROUTE ->
+                "Nothing — “$title” is resting$stepBit " +
+                    "between work sessions, and she " +
+                    "continues on her own" +
+                    retryBit(task, now) + ". " + panelLine
+            TaskStates.RUNNING ->
+                "Nothing — she's working on “$title” " +
+                    "now" + lastStepBit(task) + ", and she " +
+                    "carries on by herself. " + panelLine
+            TaskStates.QUEUED ->
+                "Nothing — “$title” is queued and starts " +
+                    "on its own. " + panelLine
+            TaskStates.NEEDS_RUNNER ->
+                "Nothing — “$title” runs on the computer " +
+                    "lane, not this phone, and it was handed " +
+                    "there with a written brief. Nothing is " +
+                    "needed from you here."
+            else ->
+                "Nothing — the record for “$title” asks " +
+                    "nothing of you."
+        }
+    }
+
     /**
      * The acknowledgement when a packaged action (her X
      * creation/connect, the user's X connect) is tapped

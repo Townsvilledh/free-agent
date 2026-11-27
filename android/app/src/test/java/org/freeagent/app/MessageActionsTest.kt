@@ -7,8 +7,10 @@ import org.junit.Test
 
 /**
  * The long-press message menu model (v1.0.1): the reactions
- * row from Ethuram's screenshot of the Muse chat, the four
- * actions, and the one-reaction toggle rule.
+ * row from Ethuram's screenshot of the Muse chat, the
+ * actions, and the one-reaction toggle rule. v1.0.7: the
+ * actions are three — Select is gone; chat text is never
+ * selectable (Ethuram's standing order).
  */
 class MessageActionsTest {
 
@@ -28,9 +30,9 @@ class MessageActionsTest {
     }
 
     @Test
-    fun menuItemsAreReplyCopySelectShare() {
+    fun menuItemsAreReplyCopyShare() {
         assertEquals(
-            listOf("Reply", "Copy", "Select", "Share"),
+            listOf("Reply", "Copy", "Share"),
             MessageActions.ITEMS.map { it.title }
         )
     }

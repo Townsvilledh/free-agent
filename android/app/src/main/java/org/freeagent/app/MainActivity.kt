@@ -134,9 +134,10 @@ class MainActivity : AppCompatActivity() {
             "are starting it and what happens next, in the present " +
             "tense — never narrate a finished result. If the user is " +
             "giving you a job to do in the world — not a question to " +
-            "answer — and no task has been started for it, ask exactly " +
-            "this and nothing more about doing it: " +
-            "\"Want me to take that on as a task?\""
+            "answer — and no task has been started for it, answer in " +
+            "chat as far as chat reaches. Never ask " +
+            "\"Want me to take that on as a task?\" — jobs are " +
+            "started by the app, never by asking."
         private const val MAX_HISTORY = 20
         // v0.2.1 smart recovery: stream continuations + one refusal reframe.
         private const val MAX_CONTINUATIONS = 3
@@ -687,8 +688,8 @@ class MainActivity : AppCompatActivity() {
                 else m.optString("content")
             // v1.0.1: the stored reaction shows under the
             // bubble's text; the long-press menu (reactions,
-            // Reply / Copy / Select / Share) hangs off every
-            // stored bubble, his and hers alike.
+            // Reply / Copy / Share) hangs off every stored
+            // bubble, his and hers alike.
             val reaction = ReplyQuote.reaction(m)
             var shown = if (reaction != null) display + "\n" + reaction
                 else display
@@ -876,15 +877,15 @@ class MainActivity : AppCompatActivity() {
      * LilleMenu component; v1.0.6: shared by stored AND
      * live bubbles, so the two can never drift): a
      * reactions row (with "+" for more) over Reply / Copy /
-     * Select / Share — the items and reactions come from
+     * Share — the items and reactions come from
      * MessageActions alone, for both roles and both bubble
      * kinds. Only the reaction SINK differs: a stored
      * bubble toggles on its record at once; the live
      * bubble queues onto the record it settles into.
-     * Select enables text selection on that one bubble —
-     * bubbles are not selectable by default (v1.0.6), so
-     * the long-press reaches this menu instead of the
-     * system selection bar.
+     * Chat text is NOT selectable at all (v1.0.7): no menu
+     * item and no code path here enables selection on a
+     * bubble — the long-press reaches this menu, never
+     * the system selection bar.
      */
     private fun showMessageMenuCard(
         role: String, display: String, bubble: TextView,
@@ -923,15 +924,6 @@ class MainActivity : AppCompatActivity() {
                         )
                         Toast.makeText(
                             this@MainActivity, "Copied",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                    MessageActions.Item.SELECT -> {
-                        bubble.setTextIsSelectable(true)
-                        bubble.requestFocus()
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Drag the handles to select text",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -1020,9 +1012,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The live bubble's menu: Copy / Select / Share /
-     *  Reply act on the text as it stands; a reaction
-     *  queues onto the record the reply settles into
+    /** The live bubble's menu: Copy / Share / Reply act
+     *  on the text as it stands; a reaction queues onto
+     *  the record the reply settles into
      *  ([queueLiveReaction] + [applyPendingLiveReaction]). */
     private fun showLiveMessageMenu(chatId: String, bubble: TextView) {
         val display = liveReplyText(chatId)
@@ -1250,6 +1242,38 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // NEEDS FROM THE RECORD (v1.0.7): "how can I
+        // help", "what do you need", "what's blocking
+        // you" — in a chat with live work these ask what
+        // SHE needs, and the record's answer is narrow:
+        // she works on her own; the only thing that can
+        // ever need him is a human step in the browser
+        // panel. In 1.0.6 the question fell to the brain,
+        // which answered with a blockers table claiming
+        // her X creation was paused for want of HER OWN
+        // handle, email, password and phone from him
+        // (2026-11-27 paste). Checked after the reason
+        // probe (its shapes are disjoint — "stopping" is
+        // not probe vocabulary) and gated on the chat's
+        // newest work standing in a needs state; job-
+        // shaped lookalikes ("what do you need for the
+        // report") carry an open-class object and are
+        // never intercepted.
+        if (!hadAttachment && StatusProbe.isNeedsProbe(raw)) {
+            val task = StatusProbe.needsTaskFor(
+                TaskStore(this).all(), chatId
+            )
+            if (task != null) {
+                appendAssistantMessage(
+                    chatId,
+                    StatusProbe.needsAnswerFor(
+                        task, System.currentTimeMillis()
+                    )
+                )
+                return
+            }
+        }
+
         // STATUS FROM STATE (v1.0.1): a bare status probe
         // in a chat with work of its own is answered from
         // the record — state, steps, the parked step — with
@@ -1322,6 +1346,55 @@ class MainActivity : AppCompatActivity() {
                 .substringAfter(" ").trim().lowercase()
             startRecipeInChat(chatId, name)
             return
+        }
+
+        // STEERING A PACKAGED LANE (v1.0.7): in a chat
+        // whose newest live work is a packaged lane (the
+        // X lanes), a message about that work's conduct —
+        // a correction ("email and password should be
+        // handled by you end to end"), a suggestion ("for
+        // your username try …"), a direction — is a STEER,
+        // not conversation and not a new job. It is
+        // recorded on the task record (the pendingSteers
+        // queue the step-boundary machinery consumes,
+        // plus a steer event) and answered from the
+        // record: what the lane is doing — already
+        // running, when it is — and what it uses. In
+        // 1.0.6 the v1.0.4 steer recorded the words but
+        // the BRAIN still answered them, with an intake
+        // list for her own identity items and then a flat
+        // denial that she has any (2026-11-27
+        // screenshots). Probes (status / reason / needs)
+        // run earlier and keep their answers; this net is
+        // for the conduct messages they don't shape.
+        if (!hadAttachment) {
+            val task = StatusProbe.latestTaskForChat(
+                TaskStore(this).all(), chatId
+            )
+            if (task != null &&
+                !TaskStates.isTerminal(task.optString("state")) &&
+                TaskSteer.isPackaged(task) &&
+                TaskSteer.isConductMessage(raw)
+            ) {
+                val identityRef = TaskSteer.referencesIdentity(raw)
+                val taskId = task.optString("id")
+                TaskStore(this).update(taskId) {
+                    val steers = it.optJSONArray("pendingSteers")
+                        ?: JSONArray()
+                    steers.put(raw)
+                    it.put("pendingSteers", steers)
+                    EventLog.append(
+                        it, "steer",
+                        System.currentTimeMillis(),
+                        JSONObject().put("text", raw.take(120))
+                    )
+                }
+                appendAssistantMessage(
+                    chatId,
+                    TaskSteer.steerAnswerFor(task, identityRef)
+                )
+                return
+            }
         }
 
         // v0.13 — CHAT→TASK (the chat is the command surface):
@@ -2770,6 +2843,7 @@ class MainActivity : AppCompatActivity() {
         val fallback = when (reason) {
             "capability-denial" -> CapabilitySheet.GROUNDED_LINE
             "identity-ask" -> ChatOutputGuard.IDENTITY_LINE
+            "identity-denial" -> ChatOutputGuard.DENIAL_LINE
             else -> ChatOutputGuard.PLAIN_LINE
         }
         if (!flight.guardRetried) {
@@ -2779,7 +2853,9 @@ class MainActivity : AppCompatActivity() {
             )
             if (next != null) {
                 flight.guardRetried = true
-                if (reason == "capability-denial") {
+                if (reason == "capability-denial" ||
+                    reason == "identity-denial"
+                ) {
                     flight.guardReassert = true
                 }
                 dispatchBrainRoute(chatId, userText, 0, false, historyText, next)
@@ -3587,17 +3663,16 @@ class MainActivity : AppCompatActivity() {
         val bubble = TextView(this)
         bubble.text = styledText(text)
         // v1.0.6 (supersedes the v0.12.2 selectable default):
-        // bubbles are NOT selectable by default. On-device
-        // proof (2026-11-27): a selectable TextView swallows
-        // the long-press into text selection — the user got
+        // bubbles are NOT selectable. On-device proof
+        // (2026-11-27): a selectable TextView swallows the
+        // long-press into text selection — the user got
         // selection handles and the system Copy/Share bar,
-        // and the LilleMenu (reactions, Reply/Copy/Select/
-        // Share) never opened. Now the long-press is the
-        // menu's alone; the menu's Select item enables
-        // selection on that one bubble (the v0.12.2 copying
-        // path, one tap deeper), and selection resets when
-        // the thread re-renders. Copy in the menu covers
-        // the quick case.
+        // and the LilleMenu (reactions, Reply/Copy/Share)
+        // never opened. v1.0.7 completes the order: chat
+        // text is not selectable AT ALL — no menu item, no
+        // code path in this screen enables selection on a
+        // bubble (ChatBubbleSelectionTest pins the source).
+        // Copy in the menu is how text leaves a bubble.
         bubble.setTextIsSelectable(false)
         bubble.textSize = 15f
         bubble.setPadding(dp(14), dp(9), dp(14), dp(9))
