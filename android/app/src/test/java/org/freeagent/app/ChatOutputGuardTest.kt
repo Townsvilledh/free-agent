@@ -103,6 +103,35 @@ class ChatOutputGuardTest {
         assertTrue(ChatOutputGuard.isClean(withCode))
     }
 
+    /** v1.0.5 (capability grounding): a reply denying a
+     *  capability she has — the 2026-11-27 "why paused"
+     *  failure's core move — is rejected with the
+     *  capability-denial reason, while an honest hand-off
+     *  to the computer lane and a not-connected partial
+     *  state pass untouched. (The full fixture matrix
+     *  lives in Lille105Test.) */
+    @Test
+    fun capabilityDenialIsRejected() {
+        assertEquals(
+            ChatOutputGuard.Verdict.Rejected("capability-denial"),
+            ChatOutputGuard.verdict(
+                "The required tools are not available in this environment."
+            )
+        )
+        assertTrue(
+            ChatOutputGuard.isClean(
+                "That part needs the computer lane — I've sent " +
+                    "it there with a written brief."
+            )
+        )
+        assertTrue(
+            ChatOutputGuard.isClean(
+                "Gmail isn't connected yet — one step in " +
+                    "Settings connects it."
+            )
+        )
+    }
+
     @Test
     fun plainLineIsItselfCleanAndPlain() {
         assertTrue(ChatOutputGuard.isClean(ChatOutputGuard.PLAIN_LINE))

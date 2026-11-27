@@ -173,6 +173,32 @@ class StatusProbeTest {
         assertTrue(answer.contains("Working on it here"))
     }
 
+    /** v1.0.5: reason probes are their own shapes — and a
+     *  killed record's status line names his act, not the
+     *  bare state. (The full reason-answer matrix lives in
+     *  Lille105Test.) */
+    @Test
+    fun reasonProbesAndKilledLines() {
+        assertTrue(StatusProbe.isReasonProbe("why paused"))
+        assertTrue(StatusProbe.isReasonProbe("why did you stop"))
+        assertTrue(StatusProbe.isReasonProbe("why"))
+        assertFalse(StatusProbe.isReasonProbe("why is the sky blue"))
+        assertFalse(
+            StatusProbe.isReasonProbe("explain why paused trading is risky")
+        )
+        val killed = task(TaskStates.CANCELLED)
+            .put(TaskControl.KILLED_FIELD, true)
+            .put(TaskControl.KILL_COMMAND_FIELD, "kill all task")
+        assertEquals(
+            "Stopped — you stopped this.",
+            StatusProbe.statusLineFor(killed)
+        )
+        assertTrue(
+            StatusProbe.reasonAnswerFor(killed, now)
+                .contains("kill all task")
+        )
+    }
+
     @Test
     fun statusLinesArePlainForEveryState() {
         for (state in TaskStates.ALL) {

@@ -310,7 +310,16 @@ object TaskTransparency {
         val state = task.optString("state")
         val steps = stepsFor(task)
         val out = StringBuilder()
-        out.append(headlineFor(state)).append(" — ").append(titleFor(task))
+        // A task killed by the user's own hand headlines
+        // as HIS act (v1.0.5) — "Stopped", with the detail
+        // "You stopped this." — the same words the status
+        // line and the reason probe use, on every surface.
+        val headline = if (TaskControl.wasKilled(task)) {
+            "Stopped"
+        } else {
+            headlineFor(state)
+        }
+        out.append(headline).append(" — ").append(titleFor(task))
         if (steps.isNotEmpty()) {
             out.append("\nLast step: ").append(renderStep(steps.last()))
         }
@@ -346,7 +355,9 @@ object TaskTransparency {
      *  the user's exact step (parked), the verified summary
      *  (completed), the vetted reason (failed/paused). */
     private fun detailFor(task: JSONObject, state: String, now: Long): String? =
-        when (state) {
+        if (TaskControl.wasKilled(task)) {
+            "You stopped this."
+        } else when (state) {
             TaskStates.QUEUED ->
                 "Starts on its own — nothing needed from you."
             TaskStates.RUNNING ->

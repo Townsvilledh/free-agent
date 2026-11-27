@@ -88,7 +88,7 @@ class ChatListActivity : AppCompatActivity() {
             // this list and the threads are where work shows.
             val workMark = StatusProbe.latestTaskForChat(
                 TaskStore(this).all(), id
-            )?.let { ChatWorkMark.markFor(it.optString("state")) }
+            )?.let { ChatWorkMark.markFor(it) }
             val meta = TextView(this)
             meta.text = "$count message${if (count == 1) "" else "s"} · " +
                 (if (updated > 0) dateFormat.format(Date(updated)) else "") +

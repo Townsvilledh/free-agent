@@ -1,5 +1,7 @@
 package org.freeagent.app
 
+import org.json.JSONObject
+
 /**
  * The work mark on a chat's row in the chats list
  * (2026-11-26, CHAT IS THE ENGINE + the Tasks screen is
@@ -27,4 +29,17 @@ object ChatWorkMark {
         TaskStates.FAILED -> "· failed"
         else -> null
     }
+
+    /** The record form (v1.0.5): a task the user killed
+     *  by hand marks "· stopped" — the glance form of the
+     *  "Stopped — you stopped this." every other surface
+     *  renders — instead of vanishing like a quiet
+     *  completion. A plain cancelled record (not killed
+     *  by hand) keeps the state form's silence. */
+    fun markFor(task: JSONObject): String? =
+        if (TaskControl.wasKilled(task)) {
+            "· stopped"
+        } else {
+            markFor(task.optString("state"))
+        }
 }

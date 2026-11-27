@@ -30,6 +30,22 @@ package org.freeagent.app
  *   staging a conversation with itself. A single marker
  *   (a heading "Update: …") is ordinary prose and passes.
  *
+ * - CAPABILITY_DENIAL (v1.0.5): the reply claims a
+ *   capability she HAS is unavailable "in this
+ *   environment", or offers the user instructions to run
+ *   locally / a wait for "a future environment" in place
+ *   of doing the work. Born of the 2026-11-27 "why
+ *   paused" answer, which denied her browser/Gmail/
+ *   video tools wholesale on a build that has them all.
+ *   The capability sheet in her context states the facts;
+ *   this detector is the net when a route contradicts
+ *   them anyway. Shapes are narrow — a sentence-local
+ *   negation bound to availability, the local-instructions
+ *   offer, the future-environment wait — so legitimate
+ *   hand-offs ("that part needs the computer lane — I've
+ *   sent it there") and honest partial states ("Gmail
+ *   isn't connected yet — one step in Settings") pass.
+ *
  * On a hit the glue silently regenerates ONCE on the next
  * route; on a second hit it shows [PLAIN_LINE] and logs
  * the rejected text to the trace only. The verdict's
@@ -79,6 +95,52 @@ object ChatOutputGuard {
     fun proseOnly(text: String): String =
         INLINE_CODE_RE.replace(FENCE_RE.replace(text, " "), " ")
 
+    /** Capability-denial shapes (see the class doc):
+     *  a negation bound to availability in the same
+     *  sentence — "tools are not available", "aren't
+     *  available in this environment" — the offer of
+     *  instructions the user can run locally, and the
+     *  wait for a future environment. */
+    private val ENV_DENIAL_RES = listOf(
+        Regex(
+            "\\b(aren't|isn't|are not|is not|not|no|never)\\b" +
+                "[^.!?\\n]{0,60}\\bavailable in this environment\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(tools?|capabilit\\w+|features?)\\b" +
+                "[^.!?\\n]{0,50}\\b(aren't|isn't|are not|is not|not)" +
+                " available\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(tools?|capabilit\\w+|features?)\\b" +
+                "[^.!?\\n]{0,50}\\bunavailable\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bunavailable in this environment\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\byou can run( \\w+)? locally\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(instructions|steps|guide|commands)\\b" +
+                "[^.!?\\n]{0,50}\\brun locally\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(wait|waiting) for a future environment\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\ba future environment where\\b",
+            RegexOption.IGNORE_CASE
+        )
+    )
+
     fun verdict(text: String): Verdict {
         val prose = proseOnly(text)
         if (ANGLE_PLACEHOLDER_RE.containsMatchIn(prose) ||
@@ -92,6 +154,9 @@ object ChatOutputGuard {
         val turns = SPEAKER_TURN_RE.findAll(prose).count()
         if (turns >= 2) {
             return Verdict.Rejected("self-dialogue")
+        }
+        if (ENV_DENIAL_RES.any { it.containsMatchIn(prose) }) {
+            return Verdict.Rejected("capability-denial")
         }
         return Verdict.Clean
     }

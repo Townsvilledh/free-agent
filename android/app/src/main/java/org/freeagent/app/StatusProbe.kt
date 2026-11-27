@@ -46,16 +46,64 @@ object StatusProbe {
         "give me an update", "give me a status update"
     )
 
+    /** The shared whole-message normalisation: lowercase,
+     *  trimmed, trailing . ! ? stripped, whitespace
+     *  collapsed. Every deterministic chat command (probes,
+     *  reason probes, kill — TaskControl) reads the message
+     *  through this one lens. */
+    fun normalise(text: String): String = text.trim().lowercase()
+        .trimEnd('.', '!', '?', ' ')
+        .replace(Regex("\\s+"), " ")
+
     /** True when the whole message is a bare status probe.
      *  Attachments and multi-sentence messages are never
      *  probes (the caller also gates on no-attachment). */
     fun isProbe(text: String): Boolean {
-        val norm = text.trim().lowercase()
-            .trimEnd('.', '!', '?', ' ')
-            .replace(Regex("\\s+"), " ")
+        val norm = normalise(text)
         if (norm.isEmpty() || norm.length > 40) return false
         if (norm.split(" ").size > 6) return false
         return norm in EXACT_PROBES
+    }
+
+    /**
+     * REASON PROBES (v1.0.5, born of the 2026-11-27
+     * screenshot): "why paused" is a status question too —
+     * it asks for the CAUSE the record carries. Before
+     * this set existed it fell through to the brain, which
+     * invented a cause (a recycled "tools aren't available
+     * in this environment" narrative) for a pause the user
+     * himself had caused and then restarted. The shapes
+     * are whole-message and exact, under the same
+     * lookalike discipline as [isProbe]: a message
+     * carrying an object ("explain why paused trading is
+     * risky", "why is the sky blue") is a question for the
+     * brain and is NOT intercepted. "what happened" was
+     * already a probe; it is a reason shape too and is
+     * answered by [reasonAnswerFor].
+     */
+    private val REASON_PROBES = setOf(
+        "why",
+        "why paused", "why is it paused", "why are you paused",
+        "why did it pause", "why did you pause",
+        "why stopped", "why is it stopped", "why has it stopped",
+        "why did it stop", "why did you stop", "why did you stop it",
+        "why isn't it running", "why is it not running",
+        "why isn't it working", "why is it not working",
+        "why aren't you working",
+        "why is it stuck", "why is it waiting",
+        "what happened"
+    )
+
+    /** True when the whole message asks WHY the chat's
+     *  work is in the state it is in. The caller gates on
+     *  the chat having work of its own, exactly as for
+     *  [isProbe] — in a chat with no work, "why" is
+     *  ordinary conversation. */
+    fun isReasonProbe(text: String): Boolean {
+        val norm = normalise(text)
+        if (norm.isEmpty() || norm.length > 40) return false
+        if (norm.split(" ").size > 6) return false
+        return norm in REASON_PROBES
     }
 
     /** The newest work record belonging to [chatId] — the
@@ -78,6 +126,13 @@ object StatusProbe {
      *  since v1.0.2 (a bare count was the thin rendering
      *  Ethuram called not transparent). */
     fun statusLineFor(task: JSONObject): String {
+        // A task the user killed by hand reads as HIS act
+        // on every surface (v1.0.5) — never the bare state
+        // name, which let a killed X run masquerade as
+        // merely "cancelled" next to an "under way" claim.
+        if (TaskControl.wasKilled(task)) {
+            return "Stopped — you stopped this."
+        }
         val state = task.optString("state")
         val steps = task.optInt("steps", 0)
         val stepBit = when {
@@ -119,4 +174,195 @@ object StatusProbe {
     fun answerFor(
         task: JSONObject, now: Long, noChangeSince: Long? = null
     ): String = TaskTransparency.probeAnswer(task, now, noChangeSince)
+
+    /**
+     * The deterministic answer to a REASON probe, composed
+     * ONLY from the record: the task named, its state, and
+     * the reason the record itself carries — killed by the
+     * user's own command (his command quoted back), a
+     * budget rest, a parked wall step, a stall park, a
+     * browser takeover, an approval wait, a recorded note
+     * (vetted). When the record carries no reason, the
+     * answer says exactly that — a cause is never invented
+     * (the 2026-11-27 failure was an invented cause). One
+     * or two plain lines; no model is consulted.
+     */
+    fun reasonAnswerFor(task: JSONObject, now: Long): String {
+        val title = TaskTransparency.titleFor(task)
+        val state = task.optString("state")
+        val steps = task.optInt("steps", 0)
+        val stepBit = when {
+            steps <= 0 -> ""
+            steps == 1 -> " at 1 step"
+            else -> " at $steps steps"
+        }
+        // A restart by the user's own tap is part of the
+        // story whenever the run is live again: the pickup
+        // is stated, never silent inheritance.
+        val resumed = TaskControl.resumedAtStep(task)
+        val restartBit = if (resumed != null &&
+            (state == TaskStates.PAUSED || state == TaskStates.RUNNING)
+        ) {
+            "You restarted it — it picked up at step $resumed. "
+        } else {
+            ""
+        }
+        if (TaskControl.wasKilled(task)) {
+            val command = TaskControl.killCommand(task)
+            return if (command.isNotEmpty()) {
+                "You stopped “$title” yourself — your message " +
+                    "was “$command”. It stays stopped until you " +
+                    "start it again."
+            } else {
+                "You stopped “$title” yourself. It stays " +
+                    "stopped until you start it again."
+            }
+        }
+        return when (state) {
+            TaskStates.RUNNING ->
+                restartBit + "“$title” isn't paused — she's " +
+                    "working on it now" +
+                    lastStepBit(task) + "."
+            TaskStates.QUEUED ->
+                "“$title” isn't paused — it's queued and " +
+                    "starts on its own."
+            TaskStates.WAITING_NETWORK ->
+                "“$title” isn't paused — she's waiting for " +
+                    "the network to come back, and she " +
+                    "continues on her own when it does."
+            TaskStates.WAITING_ROUTE ->
+                if (task.optBoolean(StepBudget.REST_FLAG)) {
+                    "“$title” isn't paused — it's resting " +
+                        "between work sessions after a stretch " +
+                        "of steps, and it continues on its own" +
+                        retryBit(task, now) + "."
+                } else {
+                    "“$title” isn't paused — it's taking a " +
+                        "short pause before the next step, and " +
+                        "it continues on its own" +
+                        retryBit(task, now) + "."
+                }
+            TaskStates.PARKED_AT_WALL -> {
+                val step = task.optString("wallStep").trim()
+                val note = NarrationGuard.cleanOrNull(
+                    task.optString("note")
+                )
+                when {
+                    step.isNotEmpty() ->
+                        "“$title” is waiting on one step from " +
+                            "you: $step"
+                    note != null ->
+                        "“$title” is waiting on one step from " +
+                            "you. $note"
+                    else ->
+                        "“$title” is waiting on one step from " +
+                            "you — the step waiting in the " +
+                            "browser panel."
+                }
+            }
+            TaskStates.PAUSED -> restartBit + pausedReason(task, title, stepBit)
+            TaskStates.NEEDS_RUNNER ->
+                "“$title” isn't paused — that job needs code " +
+                    "execution, which runs on the computer " +
+                    "lane, so it was handed there with a " +
+                    "written brief instead of being faked here."
+            TaskStates.COMPLETED -> {
+                val summary = task.optString("summary").trim()
+                if (summary.isNotEmpty()) {
+                    "“$title” finished — " +
+                        TaskTransparency.gist(summary, 140)
+                } else {
+                    "“$title” finished — the work is done."
+                }
+            }
+            TaskStates.FAILED -> {
+                val note = NarrationGuard.cleanOrNull(
+                    task.optString("note")
+                )
+                if (note != null) {
+                    "“$title” stopped$stepBit. Why: $note"
+                } else {
+                    "“$title” failed$stepBit — the record " +
+                        "doesn't carry a reason."
+                }
+            }
+            TaskStates.CANCELLED ->
+                "“$title” was cancelled — it isn't running."
+            else ->
+                "“$title” is in state $state — that's all " +
+                    "the record says."
+        }
+    }
+
+    /** The recorded reason a PAUSED task carries, in
+     *  priority order: an approval wait (a fact of the
+     *  record, not a note), the user's own browser
+     *  takeover, then the vetted note the runner left
+     *  (a step-budget park and a stall park both record
+     *  their reason there). No reason recorded → the
+     *  answer says so plainly. */
+    private fun pausedReason(
+        task: JSONObject, title: String, stepBit: String
+    ): String {
+        if (task.optString(PlanAct.APPROVAL_KIND_FIELD).isNotEmpty()) {
+            return "“$title” is paused$stepBit — it's waiting " +
+                "on your word: a plan is ready for your " +
+                "approval (say “approve”)."
+        }
+        if (task.optBoolean("browserTakeover", false)) {
+            return "“$title” is paused$stepBit — you took " +
+                "the browser over in the chat, so she's " +
+                "paused while you're driving. Hand it back " +
+                "and she resumes."
+        }
+        val note = NarrationGuard.cleanOrNull(task.optString("note"))
+        if (note != null) {
+            return "“$title” is paused$stepBit — $note"
+        }
+        return "“$title” is paused$stepBit, and the record " +
+            "doesn't say why — say the word here and she " +
+            "picks it back up."
+    }
+
+    /** " (last step: …)" from the recorded history, or ""
+     *  when no step can be named. */
+    private fun lastStepBit(task: JSONObject): String {
+        val last = TaskTransparency.stepsFor(task).lastOrNull()
+            ?: return ""
+        return " (last step: " + last.name + ")"
+    }
+
+    /** " around 4:05 PM" when a retry time is recorded
+     *  and still ahead; "" otherwise. */
+    private fun retryBit(task: JSONObject, now: Long): String {
+        val next = task.optLong("nextRetryAt", 0L)
+        return if (next > now) {
+            " around " + TaskTransparency.clockLabel(next)
+        } else {
+            ""
+        }
+    }
+
+    /**
+     * The acknowledgement when a packaged action (her X
+     * creation/connect, the user's X connect) is tapped
+     * while its record is already live — ONE composer, so
+     * the lead-in can never contradict the state it
+     * prefixes (v1.0.5: the shipped text read "already
+     * under way — paused here", an impossible pairing).
+     * "Under way" is claimed ONLY for states that are
+     * actually in motion; a paused record is announced as
+     * paused, a parked one as waiting on the user, a
+     * killed one as stopped — by his hand.
+     */
+    fun liveAckFor(label: String, task: JSONObject): String {
+        val line = statusLineFor(task)
+            .replaceFirstChar { it.lowercase() }
+        return when (task.optString("state")) {
+            TaskStates.QUEUED, TaskStates.RUNNING,
+            TaskStates.WAITING_ROUTE, TaskStates.WAITING_NETWORK ->
+                "$label is already under way — $line"
+            else -> "$label — $line"
+        }
+    }
 }

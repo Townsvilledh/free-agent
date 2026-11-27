@@ -207,6 +207,13 @@ class TaskRunner(private val context: Context) {
      *  count) is restored from the store. */
     fun runTask(id: String): String {
         var task = store.get(id) ?: return TaskStates.FAILED
+        // A terminal record never re-enters (v1.0.5): a
+        // kill that landed before this pass is final — the
+        // run returns the state untouched instead of
+        // forcing an illegal transition (or an export)
+        // onto a record the user already stopped.
+        val entryState = task.optString("state")
+        if (TaskStates.isTerminal(entryState)) return entryState
         val text = task.optString("text")
         val browserTask = isBrowserTask(task)
         // TOOL AVAILABILITY (v1.0.3, TaskTools): a general
@@ -268,6 +275,13 @@ class TaskRunner(private val context: Context) {
             return TaskStates.NEEDS_RUNNER
         }
 
+        // Same guard at the run's own door (v1.0.5): a
+        // kill that landed during this pass's setup is
+        // honoured here, not overridden by the RUNNING
+        // transition below.
+        val doorState = store.get(id)?.optString("state")
+            ?: return TaskStates.FAILED
+        if (TaskStates.isTerminal(doorState)) return doorState
         store.update(id, TaskStates.RUNNING) {
             // The plan is stamped at run start (creation
             // stamps it too, for the chat's first status):

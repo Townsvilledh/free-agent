@@ -1,5 +1,6 @@
 package org.freeagent.app
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -29,6 +30,24 @@ class ChatWorkMarkTest {
         assertNull(ChatWorkMark.markFor(TaskStates.CANCELLED))
         assertNull(ChatWorkMark.markFor(null))
         assertNull(ChatWorkMark.markFor(""))
+    }
+
+    /** v1.0.5: the record form — a task killed by the
+     *  user's own hand marks "· stopped" (the glance form
+     *  of "Stopped — you stopped this."); a plain
+     *  cancelled record stays quiet, exactly like the
+     *  state form. */
+    @Test
+    fun killedRecordsMarkStopped() {
+        val killed = JSONObject()
+            .put("state", TaskStates.CANCELLED)
+            .put(TaskControl.KILLED_FIELD, true)
+        assertEquals("· stopped", ChatWorkMark.markFor(killed))
+        val plainCancelled = JSONObject()
+            .put("state", TaskStates.CANCELLED)
+        assertNull(ChatWorkMark.markFor(plainCancelled))
+        val running = JSONObject().put("state", TaskStates.RUNNING)
+        assertEquals("· working", ChatWorkMark.markFor(running))
     }
 
     /** The glance obeys the same law as the full status

@@ -180,6 +180,12 @@ class MainActivity : AppCompatActivity() {
          *  already used its one silent regeneration. Reset
          *  per fresh ask. */
         var guardRetried = false
+        /** Capability grounding (v1.0.5): the pending
+         *  regeneration follows a capability-denial
+         *  rejection, so its system prompt carries the
+         *  capability sheet's re-assert line. Reset per
+         *  fresh ask and on delivery, like [guardRetried]. */
+        var guardReassert = false
     }
 
     private lateinit var transcript: LinearLayout
@@ -1012,6 +1018,48 @@ class MainActivity : AppCompatActivity() {
             WalletPrompt.Result.NotWallet -> Unit
         }
 
+        // KILL ALL (v1.0.5): "kill all task" is a COMMAND,
+        // handled deterministically — never a brain
+        // utterance. Before this existed, the message fell
+        // through to the brain, which announced "all tasks
+        // stopped" with no machinery behind the claim
+        // (2026-11-27 screenshot). The kill stops every
+        // non-terminal record — general and packaged alike
+        // (one store) — stamps each as killed by his hand
+        // with his command on it, cancels its scheduled
+        // work, and replies from what it actually stopped.
+        // CANCELLED is terminal: no watchdog, budget rest
+        // or boot pass can resurrect a killed task.
+        if (!hadAttachment && TaskControl.isKillAll(raw)) {
+            killAllTasks(chatId, raw.trim())
+            return
+        }
+
+        // REASON FROM THE RECORD (v1.0.5): "why paused" —
+        // and its kin — ask for the CAUSE the record
+        // carries, and get it deterministically: killed by
+        // his own command (named), a budget rest, a stall
+        // park, a takeover, a wall. Before this, the shape
+        // fell through to the brain, which invented a cause
+        // (the same screenshot). Checked before the plain
+        // status probe: "what happened" is both, and the
+        // reason answer is the fuller truth. A chat with
+        // no work of its own is not intercepted.
+        if (!hadAttachment && StatusProbe.isReasonProbe(raw)) {
+            val task = StatusProbe.latestTaskForChat(
+                TaskStore(this).all(), chatId
+            )
+            if (task != null) {
+                appendAssistantMessage(
+                    chatId,
+                    StatusProbe.reasonAnswerFor(
+                        task, System.currentTimeMillis()
+                    )
+                )
+                return
+            }
+        }
+
         // STATUS FROM STATE (v1.0.1): a bare status probe
         // in a chat with work of its own is answered from
         // the record — state, steps, the parked step — with
@@ -1173,6 +1221,48 @@ class MainActivity : AppCompatActivity() {
         updateComposerState()
     }
 
+    /** The kill-all command (v1.0.5): stop EVERY
+     *  non-terminal task on the store — general and
+     *  packaged (the X lanes) alike — stamp each record
+     *  killed-by-user with his command on it, cancel its
+     *  WorkManager work, and refresh this chat's living
+     *  status card when its own work was among the
+     *  stopped, so the card reads "Stopped — you stopped
+     *  this." in the same breath as the reply. The reply
+     *  is composed by TaskControl from the titles actually
+     *  stopped — the claim is the deed, counted. */
+    private fun killAllTasks(chatId: String, command: String) {
+        val store = TaskStore(this)
+        val now = System.currentTimeMillis()
+        val stoppedTitles = mutableListOf<String>()
+        val stoppedIds = mutableSetOf<String>()
+        for (task in store.all()) {
+            if (!TaskControl.isStoppable(task)) continue
+            val id = task.optString("id")
+            if (id.isEmpty()) continue
+            TaskWorker.cancel(this, id)
+            store.update(id, TaskStates.CANCELLED) {
+                TaskControl.stampKill(it, command, now)
+            }
+            stoppedTitles.add(TaskTransparency.titleFor(task))
+            stoppedIds.add(id)
+        }
+        // This chat's own status card follows the kill in
+        // the same turn — no stale "under way" left on
+        // screen above the reply.
+        val own = StatusProbe.latestTaskForChat(store.all(), chatId)
+        if (own != null && own.optString("id") in stoppedIds) {
+            val text = StatusProbe.answerFor(own, now)
+            chatStore.upsertTaskStatus(
+                chatId, own.optString("id"), text,
+                own.optLong("updatedAt", 0L)
+            )
+            if (chatId == renderedChatId && uiAlive) renderChat(chatId)
+        }
+        appendAssistantMessage(chatId, TaskControl.replyFor(stoppedTitles))
+        BackupManager.requestBackup(this)
+    }
+
     /** v1.0.2 (TRANSPARENCY): a status probe is answered
      *  from the record by REWRITING the task's ONE living
      *  status message in place — never by appending another
@@ -1205,6 +1295,30 @@ class MainActivity : AppCompatActivity() {
         chatStore.appendMessage(chatId, "assistant", text)
         if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
         BackupManager.requestBackup(this)
+    }
+
+    /** A re-tap that re-adopts a paused or parked run is
+     *  a RESTART by his hand (v1.0.5): the pickup is
+     *  stamped on the record (TaskControl.stampRestart —
+     *  restartedAt, resumedAtStep, restartCount, the
+     *  event) so the reason probe can say "you restarted
+     *  it — it picked up at step N" instead of the
+     *  inheritance being silent state. A run still in
+     *  motion is merely re-linked: no stamp, nothing
+     *  restarted. A KILLED record is terminal and never
+     *  reaches this path — the callers' live search
+     *  excludes it, and a fresh record is created instead:
+     *  a restart never resurrects a killed task's
+     *  identity. */
+    private fun stampRestartIfPickup(task: JSONObject) {
+        val state = task.optString("state")
+        if (state == TaskStates.PAUSED ||
+            state == TaskStates.PARKED_AT_WALL
+        ) {
+            TaskStore(this).update(task.optString("id")) {
+                TaskControl.stampRestart(it, System.currentTimeMillis())
+            }
+        }
     }
 
     /** Link a task record to the chat it lives in and
@@ -1455,11 +1569,10 @@ class MainActivity : AppCompatActivity() {
                 if (live.optString("state") == TaskStates.QUEUED) {
                     TaskWorker.enqueue(this, id)
                 }
+                stampRestartIfPickup(live)
                 appendAssistantMessage(
                     chatId,
-                    "Creating her X account is already under way — " +
-                        StatusProbe.statusLineFor(live)
-                            .replaceFirstChar { it.lowercase() }
+                    StatusProbe.liveAckFor("Creating her X account", live)
                 )
             }
             tasks.any { XAccountTask.isUnavailableRecord(it) } ->
@@ -1504,11 +1617,10 @@ class MainActivity : AppCompatActivity() {
             if (live.optString("state") == TaskStates.QUEUED) {
                 TaskWorker.enqueue(this, id)
             }
+            stampRestartIfPickup(live)
             appendAssistantMessage(
                 chatId,
-                "Reconnecting her X session is already under way — " +
-                    StatusProbe.statusLineFor(live)
-                        .replaceFirstChar { it.lowercase() }
+                StatusProbe.liveAckFor("Reconnecting her X session", live)
             )
             return
         }
@@ -1536,11 +1648,10 @@ class MainActivity : AppCompatActivity() {
             if (live.optString("state") == TaskStates.QUEUED) {
                 TaskWorker.enqueue(this, id)
             }
+            stampRestartIfPickup(live)
             appendAssistantMessage(
                 chatId,
-                "Connecting your X account is already under way — " +
-                    StatusProbe.statusLineFor(live)
-                        .replaceFirstChar { it.lowercase() }
+                StatusProbe.liveAckFor("Connecting your X account", live)
             )
             return
         }
@@ -2175,6 +2286,7 @@ class MainActivity : AppCompatActivity() {
         val flight = flightFor(chatId)
         if (carry.isEmpty() && continuations == 0) {
             flight.guardRetried = false
+            flight.guardReassert = false
             // v0.12.1: the chain is rebuilt per fresh ask —
             // keyless pair first, then the user's own-key
             // routes for keys actually saved (OwnKeyRoutes).
@@ -2212,12 +2324,53 @@ class MainActivity : AppCompatActivity() {
         askBrainNow(chatId, userText, attempt, reframed, carry, continuations, historyText)
     }
 
+    /** The chat brain's system prompt for one ask: the
+     *  standing prompt + the CAPABILITY SHEET (v1.0.5) —
+     *  her real capabilities as a fact block, generated
+     *  from the live connection state read at this moment
+     *  (Gmail connected or not, her X account's standing,
+     *  the wallet families that exist, the user's own
+     *  computer configured or not). A reply that denies a
+     *  capability she has is a contradiction of this
+     *  sheet; the output guard's capability-denial rule is
+     *  the net, and a regeneration after such a rejection
+     *  carries the sheet's re-assert line (the flight's
+     *  guardReassert flag). */
+    private fun chatSystemPrompt(chatId: String): String {
+        val tasks = TaskStore(this).all()
+        val wallet = AgentWallet(this)
+        val facts = CapabilitySheet.Facts(
+            gmailConnected = GmailConnection.isConnected(this),
+            xLine = CapabilitySheet.xLineFor(
+                LilleXState.verifiedHandle(tasks),
+                tasks.any {
+                    LilleXState.isCreationTask(it) &&
+                        !TaskStates.isTerminal(it.optString("state"))
+                }
+            ),
+            walletFamilies = listOfNotNull(
+                if (wallet.hasWallet()) "Ethereum" else null,
+                if (wallet.hasBtcWallet()) "Bitcoin" else null,
+                if (wallet.hasSolWallet()) "Solana" else null
+            ),
+            lanConfigured = LanRoute.isEnabled(this) &&
+                vault.hasSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
+        )
+        val base = SYSTEM_PROMPT + "\n\n" + CapabilitySheet.render(facts)
+        return if (flightFor(chatId).guardReassert) {
+            base + "\n\n" + CapabilitySheet.REASSERT_LINE
+        } else {
+            base
+        }
+    }
+
     /** Deliver a finished chat answer: history, store,
      *  bubble, backup, flight end — the one path every
      *  route's answer lands through. */
     private fun deliverChatAnswer(chatId: String, historyText: String, shown: String) {
         val flight = flightFor(chatId)
         flight.guardRetried = false
+        flight.guardReassert = false
         flight.history.add(JSONObject().put("role", "user").put("content", historyText))
         flight.history.add(JSONObject().put("role", "assistant").put("content", shown))
         chatStore.appendMessage(chatId, "assistant", shown)
@@ -2232,13 +2385,29 @@ class MainActivity : AppCompatActivity() {
      *  silently regenerated ONCE on the next route. A
      *  second rejection — or no next route — lands the one
      *  plain line. The user never sees the rejected text,
-     *  and never hears about the machinery. */
+     *  and never hears about the machinery.
+     *
+     *  v1.0.5 (capability grounding): a capability-denial
+     *  rejection regenerates with the capability sheet
+     *  RE-ASSERTED in the system prompt (the flight's
+     *  guardReassert flag), and a second denial lands the
+     *  sheet's one grounded line instead of the generic
+     *  plain line — the user hears a true sentence about
+     *  what she can do, never the denial and never a
+     *  shrug. */
     private fun guardRegenerateOrPlain(
         chatId: String, userText: String, historyText: String,
         fromRoute: BrainFailure.Route, rejectedText: String
     ) {
         val flight = flightFor(chatId)
         logGuardRejection(rejectedText)
+        val reason = (ChatOutputGuard.verdict(rejectedText)
+            as? ChatOutputGuard.Verdict.Rejected)?.reason
+        val fallback = if (reason == "capability-denial") {
+            CapabilitySheet.GROUNDED_LINE
+        } else {
+            ChatOutputGuard.PLAIN_LINE
+        }
         if (!flight.guardRetried) {
             val next = BrainFailure.pickNext(
                 fromRoute, brainChain, routeCoolingUntil,
@@ -2246,11 +2415,14 @@ class MainActivity : AppCompatActivity() {
             )
             if (next != null) {
                 flight.guardRetried = true
+                if (reason == "capability-denial") {
+                    flight.guardReassert = true
+                }
                 dispatchBrainRoute(chatId, userText, 0, false, historyText, next)
                 return
             }
         }
-        deliverChatAnswer(chatId, historyText, ChatOutputGuard.PLAIN_LINE)
+        deliverChatAnswer(chatId, historyText, fallback)
     }
 
     /** Rejected reply text goes to a bounded trace file —
@@ -2303,7 +2475,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val messages = JSONArray()
-        messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
+        messages.put(JSONObject().put("role", "system").put("content", chatSystemPrompt(chatId)))
         for (m in flight.history.takeLast(MAX_HISTORY)) messages.put(m)
         messages.put(JSONObject().put("role", "user").put("content", userText))
         if (carry.isNotEmpty()) {
@@ -2567,7 +2739,7 @@ class MainActivity : AppCompatActivity() {
         val flight = flightFor(chatId)
         val gen = flight.generation
         val prompt = buildString {
-            append(SYSTEM_PROMPT).append("\n\n")
+            append(chatSystemPrompt(chatId)).append("\n\n")
             for (m in flight.history.takeLast(MAX_HISTORY)) {
                 append(
                     if (m.optString("role") == "user") "User: " else "Lille: "
@@ -2814,7 +2986,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val messages = JSONArray()
-        messages.put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
+        messages.put(JSONObject().put("role", "system").put("content", chatSystemPrompt(chatId)))
         for (m in flight.history.takeLast(MAX_HISTORY)) messages.put(m)
         messages.put(JSONObject().put("role", "user").put("content", userText))
         val bodyJson = JSONObject()
