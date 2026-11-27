@@ -54,7 +54,12 @@ object LoopGuard {
      *  enough to tell wandering from working. */
     fun clusterFor(url: String): String {
         if (url.isEmpty()) return ""
+        // www. is the same ground: guerrillamail.com and
+        // www.guerrillamail.com are one cluster, or the
+        // breaker counts them as two and the circle the
+        // breaker exists to catch slips under it.
         val host = BrowserPerception.domainOf(url)
+            .removePrefix("www.")
         val afterScheme = url.substringAfter("://", "")
         val first = afterScheme.substringAfter("/", "")
             .substringBefore("/").substringBefore("?")

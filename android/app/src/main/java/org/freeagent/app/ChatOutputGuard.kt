@@ -269,7 +269,12 @@ object ChatOutputGuard {
      */
     private val STATUS_CANT_RES = listOf(
         Regex(
-            "\\bi\\s+(?:can'?t|cannot|can\\s+not)\\b",
+            // One optional adverb between the subject and
+            // the modal: the screenshot sentence is "I
+            // STILL can't verify…" — an adjacency-only
+            // pattern waves it through.
+            "\\bi\\s+(?:(?:still|just|really|actually|even|also|truly)\\s+)?" +
+                "(?:can'?t|cannot|can\\s+not)\\b",
             RegexOption.IGNORE_CASE
         ),
         Regex("\\bi(?:'?m|\\s+am)\\s+unable\\s+to\\b", RegexOption.IGNORE_CASE),

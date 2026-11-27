@@ -149,10 +149,14 @@ object FinishGate {
         if (url.isEmpty() || handle.isEmpty()) return false
         if (BrowserPerception.domainOf(url) != "x.com") return false
         val afterScheme = url.substringAfter("://", "")
+        // The profile page is the path that IS the handle
+        // — one segment, nothing under it. A page under
+        // the handle (a status, a followers list) is not
+        // the profile loading as hers.
         val path = afterScheme.substringAfter("/", "")
-        val first = path.substringBefore("/")
             .substringBefore("?").substringBefore("#")
-        return first.equals(handle, ignoreCase = true)
+            .trimEnd('/')
+        return path.equals(handle, ignoreCase = true)
     }
 
     // ---------- wording (work terms, from the record) ----------
