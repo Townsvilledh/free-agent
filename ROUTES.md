@@ -70,12 +70,18 @@ table above the hunt is the KEYLESS record and stays that way:
 the hunt's verdicts are about what answers with no key at all.
 This section is a different door, opened by Ethuram's
 2026-11-26 direction — a user's OWN free-tier keys as extra
-fallbacks behind the keyless pair:
+routes. Since 2026-11-27 (v1.0.2, OWN KEYS LEAD) they are
+no longer fallbacks behind the keyless pair:
 
-- **Order:** keyless first (Pollinations, AI Horde, health
-  behaviour unchanged), then Groq → Gemini → Cerebras →
-  OpenRouter → AgentRouter → custom. Identical in the app
-  (chat + task brain) and the Python core.
+- **Order:** a user's own keys LEAD — Groq → Gemini →
+  Cerebras → OpenRouter → AgentRouter → custom, each only
+  when its key is actually saved — and the keyless pair
+  (Pollinations, AI Horde, health behaviour unchanged) is
+  the fallback. With no own key saved, the keyless pair
+  leads exactly as before. Identical in the app (chat +
+  task brain) and the Python core. The reorder never
+  widens eligibility: privacy routing still bars private
+  content from every untrusted route, own-key included.
 - **Where keys live:** in the app, the Keystore-wrapped
   DeviceVault, entered in Settings → "Your API keys" — never
   plaintext, never in chat/task context, never logged; they

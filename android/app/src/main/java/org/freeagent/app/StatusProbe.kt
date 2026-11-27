@@ -71,8 +71,12 @@ object StatusProbe {
                 maxOf(it.optLong("createdAt"), it.optLong("updatedAt"))
             }
 
-    /** The short state line for the in-thread status card:
-     *  state + steps, plain words, no causes. */
+    /** The SHORT state line: state + step count, plain
+     *  words, no causes. Kept for mid-sentence embeddings
+     *  ("already under way — …"); the in-thread status
+     *  surface itself is TaskTransparency's rich block
+     *  since v1.0.2 (a bare count was the thin rendering
+     *  Ethuram called not transparent). */
     fun statusLineFor(task: JSONObject): String {
         val state = task.optString("state")
         val steps = task.optInt("steps", 0)
@@ -99,30 +103,20 @@ object StatusProbe {
     }
 
     /** The full deterministic answer to a status probe,
-     *  composed ONLY from the record: state line, the
-     *  parked step when there is one, the verified summary
-     *  when finished, and the runner's note when it is
-     *  clean (NarrationGuard vets it — a legacy note
-     *  carrying route narration is withheld, never echoed). */
-    fun answerFor(task: JSONObject): String {
-        val state = task.optString("state")
-        val out = StringBuilder(statusLineFor(task))
-        if (state == TaskStates.PARKED_AT_WALL) {
-            val step = task.optString("wallStep").trim()
-            if (step.isNotEmpty()) {
-                out.append("\n\nYour step: ").append(step)
-            }
-        }
-        if (state == TaskStates.COMPLETED) {
-            val summary = task.optString("summary").trim()
-            if (summary.isNotEmpty()) {
-                out.append("\n\n").append(summary)
-            }
-        }
-        val note = NarrationGuard.cleanOrNull(task.optString("note"))
-        if (note != null && state != TaskStates.COMPLETED) {
-            out.append("\n\n").append(note)
-        }
-        return out.toString()
-    }
+     *  composed ONLY from the record — since v1.0.2 that
+     *  is [TaskTransparency]'s rich rendering: the last
+     *  step BY NAME, the state in work terms (what she is
+     *  waiting for, when she continues, the exact parked
+     *  step), the verified summary when finished, and the
+     *  last-movement time. Notes reach it only through
+     *  NarrationGuard (a legacy note carrying route
+     *  narration is withheld, never echoed). [noChangeSince]
+     *  is the record's updatedAt when the task has not
+     *  moved since the chat's living status message last
+     *  reflected it — the answer then says so in one short
+     *  line instead of repeating the block as a new bubble
+     *  (the caller upserts; there is only ever one). */
+    fun answerFor(
+        task: JSONObject, now: Long, noChangeSince: Long? = null
+    ): String = TaskTransparency.probeAnswer(task, now, noChangeSince)
 }

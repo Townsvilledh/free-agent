@@ -77,4 +77,17 @@ object TaskStates {
     /** A parked task is waiting on a HUMAN, not on the network:
      *  not a failure, not terminal, never auto-resumed. */
     fun isParked(state: String): Boolean = state == PARKED_AT_WALL
+
+    /** The ids of every record currently in a waiting state —
+     *  the WAKE ON NEW CAPACITY pass (v1.0.2): when new brain
+     *  capacity lands (an own key saved in Settings), every
+     *  waiting task gets an expedited retry instead of
+     *  sleeping out a rest that was timed against capacity
+     *  that no longer bounds it. Parked tasks are NOT woken:
+     *  they wait on a human, never on a timer. Pure selector
+     *  over the records; TaskWorker does the enqueueing. */
+    fun waitingTaskIds(tasks: List<org.json.JSONObject>): List<String> =
+        tasks.filter { isWaiting(it.optString("state")) }
+            .map { it.optString("id") }
+            .filter { it.isNotEmpty() }
 }

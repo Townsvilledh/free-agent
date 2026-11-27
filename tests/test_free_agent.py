@@ -12,21 +12,25 @@ def prov(name, trusted=False):
     return ProviderCfg(name, "https://example.invalid/v1", "NOPE_KEY", ["m"], trusted_for_private=trusted)
 
 class TestRouterFallback(unittest.TestCase):
+    # Neutral provider names on purpose: this class pins the
+    # STATUS fall-through discipline, not the walk order
+    # (TestOwnKeyRoutes pins the order). Names that are real
+    # own-key providers would be reordered by OWN KEYS LEAD.
     def test_fallback_on_402_429_503(self):
         for status in (402, 429, 503):
             calls = []
             def transport(p, messages, _s=status):
                 calls.append(p.name)
-                return (_s, "") if p.name == "agentrouter" else (200, "from-groq")
-            r = Router(cfg_with([prov("agentrouter"), prov("groq")]), transport=transport)
+                return (_s, "") if p.name == "first-route" else (200, "from-second")
+            r = Router(cfg_with([prov("first-route"), prov("second-route")]), transport=transport)
             out = r.chat([{"role": "user", "content": "hi"}])
-            self.assertEqual(out["provider"], "groq", f"status {status}")
-            self.assertEqual(calls, ["agentrouter", "groq"])
+            self.assertEqual(out["provider"], "second-route", f"status {status}")
+            self.assertEqual(calls, ["first-route", "second-route"])
 
     def test_no_fallback_needed_on_200(self):
-        r = Router(cfg_with([prov("agentrouter"), prov("groq")]),
+        r = Router(cfg_with([prov("first-route"), prov("second-route")]),
                    transport=lambda p, m: (200, "ok"))
-        self.assertEqual(r.chat([])["provider"], "agentrouter")
+        self.assertEqual(r.chat([])["provider"], "first-route")
 
 class TestKeylessProvider(unittest.TestCase):
     def test_keyless_is_default_first_and_needs_no_key(self):
@@ -56,11 +60,14 @@ class TestKeylessProvider(unittest.TestCase):
     def test_keyless_402_falls_through_to_next(self):
         keyless = ProviderCfg("keyless-pollinations", "https://text.pollinations.ai/openai",
                               "", ["openai"], chat_path="", keyless=True)
+        calls = []
         def transport(p, messages):
-            return (402, "") if p.name == "keyless-pollinations" else (200, "from-groq")
-        r = Router(cfg_with([keyless, prov("groq")]), transport=transport)
+            calls.append(p.name)
+            return (402, "") if p.name == "keyless-pollinations" else (200, "from-next")
+        r = Router(cfg_with([keyless, prov("second-route")]), transport=transport)
         out = r.chat([{"role": "user", "content": "hi"}])
-        self.assertEqual(out["provider"], "groq")
+        self.assertEqual(out["provider"], "second-route")
+        self.assertEqual(calls, ["keyless-pollinations", "second-route"])
 
     def test_private_blocked_from_keyless(self):
         keyless = ProviderCfg("keyless-pollinations", "https://text.pollinations.ai/openai",
@@ -482,7 +489,10 @@ class TestOwnKeyRoutes(unittest.TestCase):
     Absent env = the route is disabled (absent from the
     walked chain); present env = enabled, in the order
     groq -> gemini -> cerebras -> openrouter -> agentrouter
-    -> custom, after the keyless pair. Dummy values only."""
+    -> custom. v1.0.2 (OWN KEYS LEAD): enabled own-key
+    routes walk BEFORE the keyless pair; with no key
+    anywhere the keyless pair leads as it always has.
+    Dummy values only."""
 
     OWN_KEY_ENVS = {
         "GROQ_API_KEY": "groq",
@@ -544,40 +554,88 @@ class TestOwnKeyRoutes(unittest.TestCase):
         self.assertEqual(custom.base_url, "https://example.invalid/v1")
         self.assertEqual(custom.models, ["my-model"])
 
-    def test_chain_order_keyless_then_own_keys(self):
+    def test_walk_order_own_keys_lead_keyless_fallback(self):
+        from free_agent.router import effective_providers
         env = {name: "dummy-key-value" for name in self.OWN_KEY_ENVS}
         env["CUSTOM_LLM_BASE_URL"] = "https://example.invalid/v1"
         env["CUSTOM_LLM_API_KEY"] = "dummy-key-value"
         cfg = self._cfg(env)
-        enabled = [p.name for p in cfg.providers if p.enabled]
-        self.assertEqual(enabled, [
-            "keyless-pollinations", "ai-horde", "groq", "gemini-free",
-            "cerebras", "openrouter-free", "agentrouter", "custom-openai",
+        walked = [p.name for p in effective_providers(cfg.providers)
+                  if p.enabled]
+        self.assertEqual(walked, [
+            "groq", "gemini-free", "cerebras", "openrouter-free",
+            "agentrouter", "custom-openai",
+            "keyless-pollinations", "ai-horde",
         ])
 
-    def test_router_falls_through_keyless_to_env_key_route(self):
+    def test_walk_order_no_keys_keyless_leads(self):
+        from free_agent.router import effective_providers
+        cfg = self._cfg({})
+        walked = [p.name for p in effective_providers(cfg.providers)
+                  if p.enabled]
+        self.assertEqual(walked, ["keyless-pollinations", "ai-horde"])
+
+    def test_router_tries_own_key_first(self):
         cfg = self._cfg({"GROQ_API_KEY": "dummy-key-value"})
         calls = []
         def transport(p, messages):
             calls.append(p.name)
-            return (402, "") if p.name == "keyless-pollinations" else (200, "from-groq")
+            return (200, "from-groq") if p.name == "groq" else (200, "from-keyless")
         r = Router(cfg, transport=transport)
         r.horde_transport = lambda p, m: (0, "", None)
         out = r.chat([{"role": "user", "content": "hi"}])
         self.assertEqual(out["provider"], "groq")
         self.assertEqual(out["text"], "from-groq")
         self.assertEqual(
-            calls, ["keyless-pollinations", "groq"],
-            "horde runs on its own transport; the openai transport "
-            "must see pollinations then groq, in chain order",
+            calls, ["groq"],
+            "with a Groq key saved, Groq is attempted FIRST and "
+            "the keyless routes are never touched on its success",
         )
+
+    def test_router_falls_through_own_key_to_keyless(self):
+        cfg = self._cfg({"GROQ_API_KEY": "dummy-key-value"})
+        calls = []
+        def transport(p, messages):
+            calls.append(p.name)
+            return (429, "") if p.name == "groq" else (200, "from-keyless")
+        r = Router(cfg, transport=transport)
+        r.horde_transport = lambda p, m: (0, "", None)
+        out = r.chat([{"role": "user", "content": "hi"}])
+        self.assertEqual(out["provider"], "keyless-pollinations")
+        self.assertEqual(out["text"], "from-keyless")
+        self.assertEqual(
+            calls, ["groq", "keyless-pollinations"],
+            "a rate-limited own key falls through silently to "
+            "the keyless fallback, in that order",
+        )
+
+    def test_private_content_never_reaches_own_key_route(self):
+        # OWN KEYS LEAD reorders only among routes already
+        # eligible for the content class: private content is
+        # barred from every untrusted route — the user's own
+        # Groq included — whatever the walk order.
+        cfg = self._cfg({"GROQ_API_KEY": "dummy-key-value"})
+        seen = []
+        def transport(p, messages):
+            seen.append(p.name); return 200, "should-not-happen"
+        r = Router(cfg, transport=transport)
+        r.horde_transport = lambda p, m: (0, "", None)
+        with self.assertRaises(PrivacyBlocked):
+            r.chat([{"role": "user", "content": "mail"}],
+                   category="private:gmail", private=True)
+        self.assertEqual(seen, [])
+        skipped = {e.provider for e in r.audit
+                   if e.outcome == "skipped-privacy"}
+        self.assertIn("groq", skipped)
+        self.assertIn("keyless-pollinations", skipped)
 
     def test_route_table_matches_the_same_order(self):
         from free_agent.routes import ROUTE_TABLES
         names = [name for name, _s, _k in ROUTE_TABLES["text"]]
-        self.assertEqual(names[:8], [
-            "keyless-pollinations", "ai-horde", "groq", "gemini-free",
-            "cerebras", "openrouter-free", "agentrouter", "custom-openai",
+        self.assertEqual(names[:9], [
+            "groq", "gemini-free", "cerebras", "openrouter-free",
+            "agentrouter", "custom-openai", "cloudflare-workers-ai",
+            "keyless-pollinations", "ai-horde",
         ])
         own = {name: key for name, _s, key in ROUTE_TABLES["text"]}
         for name in self.OWN_KEY_ENVS.values():

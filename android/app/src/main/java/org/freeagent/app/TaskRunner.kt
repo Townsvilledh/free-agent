@@ -185,6 +185,14 @@ class TaskRunner(private val context: Context) {
         }
         var stepsDone = task.optInt("steps", 0)
         val maxSteps = if (browserTask) BROWSER_MAX_STEPS else MAX_STEPS
+        // OWN KEYS LEAD + NO SLEEPING WHILE A ROUTE LIVES
+        // (v1.0.2): callModel walks the user's own-key routes
+        // first, and ALL pacing/cooldown discipline is PER
+        // ROUTE inside callModel — a route's floor or rest
+        // never throttles another route, and the task's rest
+        // after an all-routes failure is the shortest
+        // per-route cooldown (BrainPacing.restMs), never an
+        // escalating task-level backoff.
         var lastChallenge: BrowserPerception.Challenge? = null
         var pendingHandoffStep: String? = null
 
@@ -196,24 +204,13 @@ class TaskRunner(private val context: Context) {
                 TaskStates.PAUSED -> return TaskStates.PAUSED
             }
 
-            // Brain-call pacing (v0.9.1, BrainPacing): the keyless
-            // anonymous tier tolerates roughly one call per ~45 s
-            // per IP. Firing calls back-to-back trips 402/429 and
-            // the run stalls in waiting_route (proven live
-            // 2026-11-26: steps frozen at 3). The last-call
-            // timestamp lives in the task record, so the interval
-            // survives process death and worker retries; a call
-            // that would come early becomes a pacing wait instead.
-            // Pre-0.9.1 records have no lastBrainCallAt — it
-            // defaults to 0, which BrainPacing reads as "call now".
-            val paceMs = BrainPacing.remainingIntervalMs(
-                fresh.optLong("lastBrainCallAt", 0L),
-                System.currentTimeMillis()
-            )
-            if (paceMs > 0L) {
-                return wait(id, TaskStates.WAITING_ROUTE,
-                    BrainPacing.pacingNote(paceMs), paceMs)
-            }
+            // Brain-call pacing lives inside callModel now
+            // (v1.0.2): per route, from per-route timestamps
+            // in the record. There is deliberately NO task-
+            // level gate here — a step the lead route can
+            // serve proceeds at once, whatever another
+            // route's floor says. lastBrainCallAt stays as
+            // evidence (the last call, any route).
             store.update(id) {
                 it.put("lastBrainCallAt", System.currentTimeMillis())
             }
@@ -249,7 +246,7 @@ class TaskRunner(private val context: Context) {
             val reply: JSONObject
             BrainLane.shared.taskStarted(id)
             try {
-                reply = callModel(messages)
+                reply = callModel(id, messages)
             } catch (e: IOException) {
                 return wait(id, TaskStates.WAITING_NETWORK,
                     "Network unreachable — task is waiting, not failed.", 60_000L)
@@ -258,26 +255,25 @@ class TaskRunner(private val context: Context) {
             }
             val httpCode = reply.optInt("http", 200)
             if (httpCode == 402 || httpCode == 429) {
-                // Escalating cooldown (v0.9.1): 60 s × 2^streak,
-                // a larger Retry-After wins, capped at 15 min.
-                // The streak persists in the record and resets on
-                // the first HTTP 200 (below).
-                val streak = fresh.optInt("consecutiveRateLimits", 0)
-                val waitMs = BrainPacing.cooldownMs(
-                    if (reply.has("retryAfterSec"))
-                        reply.optLong("retryAfterSec") else null,
-                    streak
-                )
-                store.update(id) {
-                    it.put("consecutiveRateLimits",
-                        BrainPacing.nextCounter(streak, httpCode))
+                // NO SLEEPING WHILE A ROUTE LIVES (v1.0.2):
+                // the rest is the SHORTEST per-route cooldown
+                // among configured routes, computed by
+                // callModel from the per-route state it just
+                // updated (BrainPacing.restMs — capped at
+                // ~60 s, never escalating at task level; the
+                // escalation lives on each route's own streak
+                // inside callModel). A rest of 0 means a route
+                // is available NOW — loop straight into the
+                // fresh attempt instead of waiting at all.
+                val waitMs = if (reply.has("restMs")) {
+                    reply.optLong("restMs")
+                        .coerceIn(0L, BrainPacing.MAX_REST_MS)
+                } else {
+                    BrainPacing.MAX_REST_MS
                 }
+                if (waitMs <= 0L) continue
                 return wait(id, TaskStates.WAITING_ROUTE,
                     BrainPacing.rateLimitNote(waitMs), waitMs)
-            }
-            if (fresh.optInt("consecutiveRateLimits", 0) != 0) {
-                // First success after a rate-limit streak: reset.
-                store.update(id) { it.put("consecutiveRateLimits", 0) }
             }
             if (httpCode != 200) {
                 // Seamless law: the user-visible note is
@@ -612,27 +608,79 @@ class TaskRunner(private val context: Context) {
         return JSONObject().put("http", 0)
     }
 
-    /** One model call, walking the brain chain (v0.12.1):
-     *  Pollinations → AI Horde → the user's own-key routes
-     *  for keys actually saved, in BrainFailure.OWN_KEY_ORDER
+    /** One model call, walking the brain chain. OWN KEYS
+     *  LEAD (v1.0.2): the user's own-key routes for keys
+     *  actually saved walk FIRST, in BrainFailure.OWN_KEY_ORDER
      *  (Groq → Gemini → Cerebras → OpenRouter → AgentRouter
-     *  → custom; OwnKeyRoutes). The first route to answer
-     *  200 serves the step and is named in the result.
-     *  Failures fall through WITHIN the call; the aggregate
-     *  keeps the runner's existing waiting discipline: any
-     *  rate-limit seen (and no success) returns that
-     *  rate-limit result (-> waiting_route with its
-     *  Retry-After), else the last hard HTTP failure is
-     *  returned (the FAILED path), else an IOException is
-     *  thrown (-> waiting_network). Own keys are resolved
-     *  from the vault at call time and cross only into the
-     *  Authorization header. */
-    private fun callModel(messages: JSONArray): JSONObject {
+     *  → custom; OwnKeyRoutes), and the keyless pair
+     *  (Pollinations → AI Horde) is the fallback — with no
+     *  keys saved the walk is the keyless pair alone, as it
+     *  has always been. The first route to answer 200 serves
+     *  the step and is named in the result. Failures fall
+     *  through WITHIN the call, silently (seamless law);
+     *  the aggregate keeps the runner's waiting discipline:
+     *  any rate-limit seen (and no success) returns that
+     *  rate-limit result (-> waiting_route), else the last
+     *  hard HTTP failure is returned (the FAILED path), else
+     *  an IOException is thrown (-> waiting_network). Own keys
+     *  are resolved from the vault at call time and cross
+     *  only into the Authorization header.
+     *
+     *  NO SLEEPING WHILE A ROUTE LIVES (v1.0.2): every
+     *  route's pacing floor, rate-limit streak and rest
+     *  deadline are PER ROUTE, persisted in the task record
+     *  (routeLastCallAt / routeStreaks / routeRestUntil), so
+     *  they survive process death like everything else in
+     *  the record. A route that is resting or inside its own
+     *  pacing floor is SKIPPED in this walk — the next route
+     *  is tried in the same breath, never after a sleep. A
+     *  402/429 escalates only THAT route's cooldown
+     *  (BrainPacing.cooldownMs on its own streak). When the
+     *  walk ends without success, the result carries
+     *  "restMs": BrainPacing.restMs over the waits that
+     *  actually bind (routes that rate-limited this call +
+     *  routes skipped for rest/pacing) — the shortest one,
+     *  capped at ~60 s. When EVERY route was skipped (none
+     *  attempted), the result is a synthetic 429 carrying
+     *  that same restMs, so the runner waits exactly until
+     *  the first route frees up and no longer. */
+    private fun callModel(id: String, messages: JSONArray): JSONObject {
         var rateLimit: JSONObject? = null
         var lastFailure: JSONObject? = null
         var lastIo: IOException? = null
+        var attempted = 0
+        val bindingWaits = mutableListOf<Long>()
+
+        val record = store.get(id)
+        val restUntil = record?.optJSONObject("routeRestUntil") ?: JSONObject()
+        val streaks = record?.optJSONObject("routeStreaks") ?: JSONObject()
+        val lastCallAt = record?.optJSONObject("routeLastCallAt") ?: JSONObject()
+        fun persistRouteState() {
+            store.update(id) {
+                it.put("routeRestUntil", restUntil)
+                it.put("routeStreaks", streaks)
+                it.put("routeLastCallAt", lastCallAt)
+            }
+        }
 
         fun attempt(routeName: String, call: () -> JSONObject): JSONObject? {
+            val now = System.currentTimeMillis()
+            val restWait = (restUntil.optLong(routeName, 0L) - now)
+                .coerceAtLeast(0L)
+            val paceWait = BrainPacing.routePacingWaitMs(
+                routeName, lastCallAt.optLong(routeName, 0L), now
+            )
+            val blockedWait = maxOf(restWait, paceWait)
+            if (blockedWait > 0L) {
+                // This route cannot serve now; another may.
+                // Skip it in the same breath — its wait only
+                // binds the task if EVERY route is blocked.
+                bindingWaits.add(blockedWait)
+                return null
+            }
+            attempted += 1
+            lastCallAt.put(routeName, now)
+            persistRouteState()
             val r = try {
                 call()
             } catch (e: IOException) {
@@ -640,8 +688,27 @@ class TaskRunner(private val context: Context) {
                 return null
             }
             val http = r.optInt("http", 0)
-            if (http == 200) return r.put("route", routeName)
+            if (http == 200) {
+                streaks.put(routeName, 0)
+                restUntil.put(routeName, 0L)
+                persistRouteState()
+                return r.put("route", routeName)
+            }
             if (http == 402 || http == 429) {
+                val streak = streaks.optInt(routeName, 0)
+                val cooldown = BrainPacing.cooldownMs(
+                    if (r.has("retryAfterSec"))
+                        r.optLong("retryAfterSec") else null,
+                    streak
+                )
+                streaks.put(
+                    routeName, BrainPacing.nextCounter(streak, http)
+                )
+                restUntil.put(
+                    routeName, System.currentTimeMillis() + cooldown
+                )
+                persistRouteState()
+                bindingWaits.add(cooldown)
                 if (rateLimit == null) rateLimit = r.put("route", routeName)
             } else if (http != 0) {
                 lastFailure = r.put("route", routeName)
@@ -649,9 +716,6 @@ class TaskRunner(private val context: Context) {
             return null
         }
 
-        attempt("pollinations") { callOpenAi(TEXT_ENDPOINT, MODEL, null, messages) }
-            ?.let { return it }
-        attempt("horde") { callHorde(messages) }?.let { return it }
         val present = OwnKeyRoutes.presentRoutes { name -> vault.hasSecret(name) }
         for (route in BrainFailure.OWN_KEY_ORDER) {
             if (route !in present) continue
@@ -675,7 +739,22 @@ class TaskRunner(private val context: Context) {
                 )
             }?.let { return it }
         }
-        rateLimit?.let { return it }
+        // The keyless fallback (OWN KEYS LEAD: walked only
+        // after every present own-key route has had its
+        // attempt — or first, when no key is saved at all).
+        attempt("pollinations") { callOpenAi(TEXT_ENDPOINT, MODEL, null, messages) }
+            ?.let { return it }
+        attempt("horde") { callHorde(messages) }?.let { return it }
+        rateLimit?.let {
+            return it.put("restMs", BrainPacing.restMs(bindingWaits))
+        }
+        if (attempted == 0 && bindingWaits.isNotEmpty()) {
+            // Every route is resting or inside its pacing
+            // floor: wait exactly for the first to free up.
+            return JSONObject().put("http", 429)
+                .put("restMs", BrainPacing.restMs(bindingWaits))
+                .put("pacingOnly", true)
+        }
         lastFailure?.let { return it }
         throw lastIo ?: IOException("all brain routes unreachable")
     }

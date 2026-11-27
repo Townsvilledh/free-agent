@@ -37,6 +37,13 @@ import org.json.JSONObject
  * the user's own hand) composes nothing: waiting states
  * resolve themselves, and silence about them is the honest
  * report.
+ *
+ * Since v1.0.2 (TRANSPARENCY) the finished and parked
+ * reports also carry the named step list above the
+ * outcome — what was actually done, in order, derived
+ * from the recorded tool history by [TaskTransparency].
+ * A report that only announces an outcome is the same
+ * opacity Ethuram rejected in the status line.
  */
 object ChatTaskLink {
 
@@ -102,9 +109,16 @@ object ChatTaskLink {
         // legacy note carrying route narration is withheld
         // (seamless law) — the report stands on the state.
         val note = NarrationGuard.cleanOrNull(task.optString("note"))
+        // v1.0.2: the named step list, graded from the
+        // recorded tool history — above the outcome, so the
+        // report shows the work, not just the verdict.
+        val stepsBlock = TaskTransparency.reportSteps(task)
         return when (newState) {
             TaskStates.COMPLETED -> buildString {
                 append("Done — that work is finished.")
+                if (stepsBlock != null) {
+                    append("\n\n").append(stepsBlock)
+                }
                 if (summary.isNotEmpty()) {
                     append("\n\n").append(summary)
                 }
@@ -116,6 +130,9 @@ object ChatTaskLink {
             TaskStates.FAILED -> buildString {
                 append("That work failed — it did not complete, and ")
                 append("nothing about it counts as done.")
+                if (stepsBlock != null) {
+                    append("\n\n").append(stepsBlock)
+                }
                 if (note != null) {
                     append("\n\nWhy: ").append(note)
                 }
@@ -124,6 +141,9 @@ object ChatTaskLink {
             }
             TaskStates.PARKED_AT_WALL -> buildString {
                 append("I need you for one step on this work.")
+                if (stepsBlock != null) {
+                    append("\n\n").append(stepsBlock)
+                }
                 val step = task.optString("wallStep").trim()
                 if (step.isNotEmpty()) {
                     append("\n\n").append(step)
@@ -138,12 +158,18 @@ object ChatTaskLink {
                 append("can't do on this phone — I exported it as ")
                 append("a task spec for the runner lane instead of ")
                 append("faking it.")
+                if (stepsBlock != null) {
+                    append("\n\n").append(stepsBlock)
+                }
                 if (note != null) {
                     append("\n\n").append(note)
                 }
             }
             TaskStates.PAUSED -> buildString {
                 append("That work paused before it finished.")
+                if (stepsBlock != null) {
+                    append("\n\n").append(stepsBlock)
+                }
                 if (note != null) {
                     append("\n\n").append(note)
                 }

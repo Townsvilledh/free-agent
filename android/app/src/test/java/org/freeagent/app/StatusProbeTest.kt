@@ -16,6 +16,8 @@ import org.junit.Test
  */
 class StatusProbeTest {
 
+    private val now = 61_000L
+
     private fun task(
         state: String,
         chatId: String = "chat-1",
@@ -24,14 +26,17 @@ class StatusProbeTest {
         note: String = "",
         wallStep: String = "",
         createdAt: Long = 1_000L,
-        updatedAt: Long = 1_000L
+        updatedAt: Long = 1_000L,
+        nextRetryAt: Long = 0L
     ): JSONObject {
         val t = JSONObject()
             .put("id", "task-x")
+            .put("text", "Do the thing")
             .put("state", state)
             .put("steps", steps)
             .put("summary", summary)
             .put("note", note)
+            .put("nextRetryAt", nextRetryAt)
             .put("createdAt", createdAt)
             .put("updatedAt", updatedAt)
         if (chatId.isNotEmpty()) t.put(ChatTaskLink.ORIGIN_FIELD, chatId)
@@ -84,11 +89,51 @@ class StatusProbeTest {
 
     @Test
     fun runningAnswerComesFromTheRecord() {
+        // v1.0.2: the answer is the rich rendering — title,
+        // state in work terms, last-movement time — not the
+        // bare step count 1.0.1 shipped (steps here carry
+        // no recorded messages, so no step can be named;
+        // named-step pins live in TaskTransparencyTest).
         val answer = StatusProbe.answerFor(
-            task(TaskStates.RUNNING, steps = 3)
+            task(TaskStates.RUNNING, steps = 3), now
         )
         assertTrue(answer.contains("Working on it here"))
-        assertTrue(answer.contains("3 steps done"))
+        assertTrue(answer.contains("Do the thing"))
+        assertTrue(answer.contains("Last movement"))
+    }
+
+    @Test
+    fun waitingAnswerCarriesTheReasonAndRetryTime() {
+        val answer = StatusProbe.answerFor(
+            task(
+                TaskStates.WAITING_ROUTE, steps = 4,
+                updatedAt = 1_000L, nextRetryAt = 181_000L
+            ),
+            now
+        )
+        assertTrue(answer.contains("Taking a short pause before the next step"))
+        assertTrue(answer.contains("she continues on her own"))
+        assertTrue(
+            answer.contains(
+                "Next try around " + TaskTransparency.clockLabel(181_000L) + "."
+            )
+        )
+    }
+
+    @Test
+    fun probeAnswerMarksNoChangeHonestly() {
+        val t = task(TaskStates.RUNNING, steps = 2, updatedAt = 1_000L)
+        val answer = StatusProbe.answerFor(t, now, noChangeSince = 1_000L)
+        assertTrue(
+            answer.contains(
+                "No change since " + TaskTransparency.clockLabel(1_000L) + "."
+            )
+        )
+        // Without the no-change stamp the same block
+        // carries no such line.
+        assertFalse(
+            StatusProbe.answerFor(t, now).contains("No change since")
+        )
     }
 
     @Test
@@ -97,7 +142,8 @@ class StatusProbeTest {
             task(
                 TaskStates.PARKED_AT_WALL, steps = 5,
                 wallStep = "Complete the human check on x.com."
-            )
+            ),
+            now
         )
         assertTrue(answer.contains("Waiting on one step from you"))
         assertTrue(answer.contains("Complete the human check on x.com."))
@@ -106,7 +152,8 @@ class StatusProbeTest {
     @Test
     fun completedAnswerCarriesTheSummary() {
         val answer = StatusProbe.answerFor(
-            task(TaskStates.COMPLETED, steps = 4, summary = "Wrote digest.txt.")
+            task(TaskStates.COMPLETED, steps = 4, summary = "Wrote digest.txt."),
+            now
         )
         assertTrue(answer.contains("Finished"))
         assertTrue(answer.contains("Wrote digest.txt."))
@@ -118,7 +165,8 @@ class StatusProbeTest {
             task(
                 TaskStates.RUNNING, steps = 1,
                 note = "Free route rate-limited — retrying on the community route."
-            )
+            ),
+            now
         )
         assertFalse(answer.contains("rate-limited"))
         assertFalse(answer.contains("community route"))

@@ -108,21 +108,21 @@ class OwnKeyRoutesTest {
         }
     }
 
-    // ---- chain order ----
+    // ---- chain order (OWN KEYS LEAD, v1.0.2) ----
 
     @Test
-    fun chainIsKeylessFirstThenOwnKeysInOrder() {
+    fun chainIsOwnKeysFirstThenKeylessFallback() {
         val all = BrainFailure.OWN_KEY_ORDER.toSet()
         assertEquals(
             listOf(
-                BrainFailure.Route.POLLINATIONS,
-                BrainFailure.Route.HORDE,
                 BrainFailure.Route.GROQ,
                 BrainFailure.Route.GEMINI,
                 BrainFailure.Route.CEREBRAS,
                 BrainFailure.Route.OPENROUTER,
                 BrainFailure.Route.AGENTROUTER,
-                BrainFailure.Route.CUSTOM
+                BrainFailure.Route.CUSTOM,
+                BrainFailure.Route.POLLINATIONS,
+                BrainFailure.Route.HORDE
             ),
             BrainFailure.chain(all)
         )
@@ -137,13 +137,38 @@ class OwnKeyRoutesTest {
         )
         assertEquals(
             listOf(
-                BrainFailure.Route.POLLINATIONS,
-                BrainFailure.Route.HORDE,
                 BrainFailure.Route.GROQ,
                 BrainFailure.Route.OPENROUTER,
-                BrainFailure.Route.CUSTOM
+                BrainFailure.Route.CUSTOM,
+                BrainFailure.Route.POLLINATIONS,
+                BrainFailure.Route.HORDE
             ),
             BrainFailure.chain(present)
+        )
+    }
+
+    @Test
+    fun ownKeyLeadsWhenPresentKeylessLeadsWhenNot() {
+        // A saved Groq key leads the chain; the keyless
+        // pair is its fallback.
+        val withGroq = BrainFailure.chain(setOf(BrainFailure.Route.GROQ))
+        assertEquals(BrainFailure.Route.GROQ, withGroq.first())
+        assertEquals(BrainFailure.KEYLESS_CHAIN, withGroq.drop(1))
+        // No keys at all: the keyless pair leads, exactly
+        // as it always has.
+        assertEquals(
+            BrainFailure.Route.POLLINATIONS,
+            BrainFailure.chain(emptySet()).first()
+        )
+        // A failed own-key route falls through TO the
+        // keyless pair (seamless fallback, new order).
+        assertEquals(
+            BrainFailure.Route.POLLINATIONS,
+            BrainFailure.pickNext(
+                BrainFailure.Route.CUSTOM,
+                BrainFailure.chain(BrainFailure.OWN_KEY_ORDER.toSet()),
+                emptyMap(), 1_000L
+            )
         )
     }
 
@@ -153,8 +178,10 @@ class OwnKeyRoutesTest {
     fun ownKeyRoutesRestAndRecoverLikeKeylessOnes() {
         val chain = BrainFailure.chain(BrainFailure.OWN_KEY_ORDER.toSet())
         val now = 2_000_000L
-        // Keyless pair + Groq resting: a new message starts
-        // at Gemini, the first healthy own-key route.
+        // Groq (the lead) + the keyless pair resting: a new
+        // message starts at Gemini, the first healthy
+        // own-key route — resting leaders are skipped, not
+        // waited on, while another route exists.
         val resting = mapOf(
             BrainFailure.Route.POLLINATIONS to now + 60_000L,
             BrainFailure.Route.HORDE to now + 60_000L,
@@ -164,25 +191,30 @@ class OwnKeyRoutesTest {
             BrainFailure.Route.GEMINI,
             BrainFailure.firstHealthy(chain, resting, now)
         )
-        // After Horde fails, the walk skips resting Groq.
-        assertEquals(
-            BrainFailure.Route.GEMINI,
-            BrainFailure.pickNext(BrainFailure.Route.HORDE, chain, resting, now)
+        // After Groq fails, the walk skips a resting Gemini.
+        val geminiResting = mapOf(
+            BrainFailure.Route.GEMINI to now + 600_000L,
+            BrainFailure.Route.GROQ to now + 60_000L
         )
-        // When Groq's rest expires it is picked again —
+        assertEquals(
+            BrainFailure.Route.CEREBRAS,
+            BrainFailure.pickNext(
+                BrainFailure.Route.GROQ, chain, geminiResting, now
+            )
+        )
+        // When Groq's rest expires it leads again —
         // automatic recovery, no manual reset.
         assertEquals(
             BrainFailure.Route.GROQ,
-            BrainFailure.pickNext(
-                BrainFailure.Route.HORDE, chain, resting, now + 61_000L
-            )
+            BrainFailure.firstHealthy(chain, geminiResting, now + 61_000L)
         )
         // The demotion arithmetic itself is route-agnostic.
         assertEquals(120_000L, BrainFailure.routeCooldownMs(1))
         assertEquals(1_800_000L, BrainFailure.routeCooldownMs(5))
-        // Nothing exists after the last own-key route.
+        // Nothing exists after the last route (Horde, the
+        // keyless fallback of last resort).
         assertNull(
-            BrainFailure.pickNext(BrainFailure.Route.CUSTOM, chain, emptyMap(), now)
+            BrainFailure.pickNext(BrainFailure.Route.HORDE, chain, emptyMap(), now)
         )
     }
 

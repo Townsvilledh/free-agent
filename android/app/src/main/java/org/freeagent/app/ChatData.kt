@@ -145,6 +145,85 @@ object ChatData {
         return true
     }
 
+    // ---------- the ONE living status message (v1.0.2) ----------
+
+    /** Message-record field marking the chat's living
+     *  status message for a task; the value is the task id.
+     *  A task has exactly ONE such message in its chat:
+     *  status refreshes and probe answers rewrite it in
+     *  place instead of appending near-identical twins
+     *  (the 1.0.1 stacking Ethuram screenshotted). */
+    const val TASK_STATUS_FIELD = "taskStatus"
+
+    /** Message-record field: the task updatedAt the living
+     *  status message currently reflects — the probe path
+     *  compares it against the record to say honestly
+     *  whether anything has moved. */
+    const val TASK_STATUS_AT_FIELD = "taskStatusAt"
+
+    /** The living status message for [taskId] in a chat,
+     *  or null when the chat carries none yet. */
+    fun taskStatusMessage(
+        root: JSONObject, chatId: String, taskId: String
+    ): JSONObject? {
+        val chat = findChat(root, chatId) ?: return null
+        val arr = chat.optJSONArray("messages") ?: return null
+        for (i in 0 until arr.length()) {
+            val m = arr.getJSONObject(i)
+            if (m.optString(TASK_STATUS_FIELD) == taskId) return m
+        }
+        return null
+    }
+
+    /** The task updatedAt the living status message for
+     *  [taskId] reflects, or null when there is no status
+     *  message (or it predates the field). */
+    fun taskStatusReflectedAt(
+        root: JSONObject, chatId: String, taskId: String
+    ): Long? {
+        val msg = taskStatusMessage(root, chatId, taskId) ?: return null
+        if (!msg.has(TASK_STATUS_AT_FIELD)) return null
+        return msg.optLong(TASK_STATUS_AT_FIELD)
+    }
+
+    /**
+     * Create-or-rewrite the ONE living status message for
+     * [taskId] in a chat: an existing marked message is
+     * edited in place (content replaced, any stale display
+     * override dropped, the reflected-at stamp moved);
+     * otherwise a fresh assistant message carrying the
+     * marker is appended. Returns false when the chat does
+     * not exist.
+     */
+    fun upsertTaskStatus(
+        root: JSONObject,
+        chatId: String,
+        taskId: String,
+        text: String,
+        reflectedAt: Long,
+        now: Long
+    ): Boolean {
+        val chat = findChat(root, chatId) ?: return false
+        val existing = taskStatusMessage(root, chatId, taskId)
+        if (existing != null) {
+            existing.put("content", text)
+            existing.remove("display")
+            existing.put(TASK_STATUS_AT_FIELD, reflectedAt)
+        } else {
+            val messages = chat.optJSONArray("messages")
+                ?: JSONArray().also { chat.put("messages", it) }
+            messages.put(
+                JSONObject()
+                    .put("role", "assistant")
+                    .put("content", text)
+                    .put(TASK_STATUS_FIELD, taskId)
+                    .put(TASK_STATUS_AT_FIELD, reflectedAt)
+            )
+        }
+        chat.put("updatedAt", now)
+        return true
+    }
+
     /**
      * Set or clear (emoji == null) the reaction on the message
      * at [index] in a chat. False when the chat or the index

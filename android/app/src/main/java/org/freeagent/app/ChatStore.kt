@@ -115,6 +115,28 @@ class ChatStore(context: Context) {
         return ok
     }
 
+    /** v1.0.2: create-or-rewrite the ONE living status
+     *  message for a task in its chat (ChatData owns the
+     *  shape; this owns the file). */
+    @Synchronized
+    fun upsertTaskStatus(
+        chatId: String, taskId: String, text: String, reflectedAt: Long
+    ): Boolean {
+        val root = root()
+        val ok = ChatData.upsertTaskStatus(
+            root, chatId, taskId, text, reflectedAt,
+            System.currentTimeMillis()
+        )
+        if (ok) writeRoot(root)
+        return ok
+    }
+
+    /** v1.0.2: the task updatedAt the chat's living status
+     *  message for [taskId] currently reflects. */
+    @Synchronized
+    fun taskStatusReflectedAt(chatId: String, taskId: String): Long? =
+        ChatData.taskStatusReflectedAt(root(), chatId, taskId)
+
     /** v1.0.1: set/clear a message reaction (long-press menu). */
     @Synchronized
     fun setReaction(chatId: String, index: Int, emoji: String?): Boolean {

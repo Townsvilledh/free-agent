@@ -20,6 +20,26 @@ it is up. Private work with no trusted route queues/blocks honestly.
 # capability -> ordered list of (route name, status, key requirement)
 ROUTE_TABLES = {
     "text": [
+        # Own-key routes (v0.12.1): live code in BOTH the core
+        # (keys from environment variables only) and the app
+        # (keys from the user's encrypted vault, Settings ->
+        # "Your API keys"). "stub" here means what it always
+        # meant — disabled until the user adds their OWN key;
+        # absent key = absent route. OWN KEYS LEAD (v1.0.2):
+        # enabled own-key routes walk FIRST, in this order —
+        # groq -> gemini -> cerebras -> openrouter ->
+        # agentrouter -> custom — and the keyless pair below
+        # is the fallback. With no own key present the keyless
+        # pair leads, exactly as it did before v1.0.2.
+        ("groq", "stub", "own-key"),
+        ("gemini-free", "stub", "own-key"),
+        ("cerebras", "stub", "own-key"),
+        ("openrouter-free", "stub", "own-key"),
+        ("agentrouter", "stub", "own-key"),
+        ("custom-openai", "stub", "own-key"),
+        ("cloudflare-workers-ai", "stub", "own-key"),
+        # The keyless pair — the fallback since v1.0.2, and
+        # still the whole chain when no own key exists.
         ("keyless-pollinations", "live", "none"),
         # v0.12: second genuinely-keyless route, live-verified
         # 2026-11-26. Slow community queue — fallback of last
@@ -33,21 +53,6 @@ ROUTE_TABLES = {
         # Every other verdict — refused / needs-key / dead /
         # broken / challenge-walled — is recorded in ROUTES.md.
         ("ai-horde", "live", "none"),
-        # Own-key routes (v0.12.1): live code in BOTH the core
-        # (keys from environment variables only) and the app
-        # (keys from the user's encrypted vault, Settings ->
-        # "Your API keys"). "stub" here means what it always
-        # meant — disabled until the user adds their OWN key;
-        # absent key = absent route. Walk order after the
-        # keyless pair: groq -> gemini -> cerebras ->
-        # openrouter -> agentrouter -> custom.
-        ("groq", "stub", "own-key"),
-        ("gemini-free", "stub", "own-key"),
-        ("cerebras", "stub", "own-key"),
-        ("openrouter-free", "stub", "own-key"),
-        ("agentrouter", "stub", "own-key"),
-        ("custom-openai", "stub", "own-key"),
-        ("cloudflare-workers-ai", "stub", "own-key"),
         # local-ollama is deliberately NOT in the public text chain:
         # it is the trusted PRIVATE path (privacy routing), not a
         # fallback for public traffic.

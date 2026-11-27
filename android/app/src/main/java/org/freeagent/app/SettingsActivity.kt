@@ -324,6 +324,13 @@ class SettingsActivity : AppCompatActivity() {
                 keyField.text.clear()
                 result.text = "Saved — it lives only in the encrypted " +
                     "vault on this phone."
+                // WAKE ON NEW CAPACITY (v1.0.2): a waiting
+                // task's rest was timed against the routes
+                // that existed before this key — it must not
+                // keep sleeping now that a new route can
+                // carry it. Expedited retry for every
+                // waiting task, no waiting for timers.
+                TaskWorker.wakeWaitingTasks(this)
             } else {
                 result.text = "That key couldn't be saved to the vault."
             }

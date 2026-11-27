@@ -1,6 +1,7 @@
 package org.freeagent.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -28,5 +29,19 @@ class ChatWorkMarkTest {
         assertNull(ChatWorkMark.markFor(TaskStates.CANCELLED))
         assertNull(ChatWorkMark.markFor(null))
         assertNull(ChatWorkMark.markFor(""))
+    }
+
+    /** The glance obeys the same law as the full status
+     *  (v1.0.2): a mark is work language only — no state
+     *  may surface mechanics vocabulary in the list. */
+    @Test
+    fun marksCarryNoMechanicsVocabulary() {
+        for (state in TaskStates.ALL) {
+            val mark = ChatWorkMark.markFor(state) ?: continue
+            assertFalse(
+                "state $state mark must be clean: $mark",
+                NarrationGuard.containsNarration(mark)
+            )
+        }
     }
 }

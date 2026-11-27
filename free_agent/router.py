@@ -4,10 +4,15 @@ Fallback law (Lubrica's routing discipline, applied to AI providers):
 every capability has an ordered route chain (see routes.py /
 ROUTES.md). The router:
 
-- tries routes in order — the KEYLESS public provider (Pollinations)
-  is the default first brain; optional personal-key providers
-  (AgentRouter, Groq, ...) follow, enabled only when the user supplied
-  their OWN key;
+- tries routes in order — OWN KEYS LEAD (v1.0.2, Ethuram 2026-11-27):
+  an ENABLED personal-key provider (the user's OWN key: Groq first,
+  then Gemini, Cerebras, OpenRouter, AgentRouter, custom) is tried
+  FIRST, and the KEYLESS public providers (Pollinations, AI Horde)
+  are the fallback; with no own key supplied the keyless pair leads
+  exactly as it always has. The reorder is order-only: it never
+  widens which routes are eligible for a content class (privacy
+  routing below is applied per provider, before and regardless of
+  position);
 - respects rate limits: on HTTP 402/429/503 (or a network error) it
   COOLS THAT ROUTE DOWN — records an unlock time from the provider's
   Retry-After when the transport reports one, else the route's
@@ -106,6 +111,35 @@ def _with_tool_catalogue(messages, tools):
     if not done:
         out.insert(0, {"role": "system", "content": extra.strip()})
     return out
+
+# Own-key provider names in walk order — mirrors the app's
+# BrainFailure.OWN_KEY_ORDER (Groq leads among own keys).
+OWN_KEY_ORDER = [
+    "groq", "gemini-free", "cerebras",
+    "openrouter-free", "agentrouter", "custom-openai",
+]
+
+
+def effective_providers(providers):
+    """The walk order for one call (OWN KEYS LEAD, v1.0.2):
+    enabled own-key providers first (in OWN_KEY_ORDER), then
+    the keyless providers, then everything else in catalogue
+    order (the trusted local path, disabled stubs). Pure
+    reordering of the SAME set — eligibility (enabled,
+    has-models, privacy trust) is judged by the caller per
+    provider exactly as before, so no content can reach a
+    route this order merely moved."""
+    own = [p for p in providers
+           if p.name in OWN_KEY_ORDER and p.enabled]
+    own.sort(key=lambda p: OWN_KEY_ORDER.index(p.name))
+    own_ids = {id(p) for p in own}
+    keyless = [p for p in providers
+               if getattr(p, "keyless", False) and id(p) not in own_ids]
+    keyless_ids = {id(p) for p in keyless}
+    rest = [p for p in providers
+            if id(p) not in own_ids and id(p) not in keyless_ids]
+    return own + keyless + rest
+
 
 class Router:
     def __init__(self, config, transport=None, audit=None, clock=None, stream_transport=None):
@@ -378,7 +412,7 @@ class Router:
         PrivacyBlocked / AllProvidersFailed exactly like chat()."""
         now = self.clock()
         tried, unlock_times, saw_trusted = [], [], False
-        for p in self.config.providers:
+        for p in effective_providers(self.config.providers):
             if not p.enabled or not p.models:
                 continue
             if private and not p.trusted_for_private and not override_privacy:
@@ -542,7 +576,7 @@ class Router:
         unlock_times = []     # unlock ts of every route that is cooling
         saw_trusted = False   # a privacy-eligible route exists at all
 
-        for p in self.config.providers:
+        for p in effective_providers(self.config.providers):
             if not p.enabled or not p.models:
                 continue
             if exclude and p.name in exclude:

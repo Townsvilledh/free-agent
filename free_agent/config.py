@@ -52,7 +52,12 @@ class Config:
             calendar_write_enabled=os.environ.get("FREEAGENT_CALENDAR_WRITE", "0") == "1",
         )
         c.providers = [
-            # DEFAULT brain (v0.2, NO-KEYS DOCTRINE): Pollinations keyless
+            # This list is the CATALOGUE, not the walk order: the
+            # router computes the effective order per call
+            # (router.effective_providers — OWN KEYS LEAD since
+            # v1.0.2: enabled own-key providers first, the keyless
+            # pair as fallback, the rest after).
+            # KEYLESS FLOOR (v0.2, NO-KEYS DOCTRINE): Pollinations keyless
             # public endpoint. No key, no signup, nothing to collect from
             # anybody. POST https://text.pollinations.ai/openai
             # (OpenAI-compatible). Anonymous limits are real (~1 concurrent
@@ -76,10 +81,13 @@ class Config:
                         cooldown_seconds=300, kind="horde"),
             # OPTIONAL personal keys (user's own, vault-only, never shipped
             # in the app and never collected by us). Enabled only when the
-            # user has actually supplied their own key. v0.12.1: the chain
-            # order after the keyless pair is Groq -> Gemini -> Cerebras ->
-            # OpenRouter -> AgentRouter -> custom, the same order the app
-            # walks (OwnKeyRoutes). Keys come from the environment ONLY;
+            # user has actually supplied their own key. v0.12.1: the own-key
+            # walk order is Groq -> Gemini -> Cerebras -> OpenRouter ->
+            # AgentRouter -> custom, the same order the app walks
+            # (OwnKeyRoutes). v1.0.2 (OWN KEYS LEAD): enabled own-key
+            # providers walk BEFORE the keyless pair — the router's
+            # effective_providers performs the reorder; this catalogue
+            # order is unchanged. Keys come from the environment ONLY;
             # absent = the route is simply not in the chain.
             # Groq free tier. External provider => not trusted by default.
             # Model order matters: the router sends models[0] only, and

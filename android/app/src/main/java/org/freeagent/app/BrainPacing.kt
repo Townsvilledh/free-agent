@@ -17,12 +17,23 @@ package org.freeagent.app
  *
  * The rules here:
  * - A minimum interval between brain calls (MIN_INTERVAL_MS),
- *   enforced from a timestamp persisted in the task record so
- *   it survives process death and worker retries.
+ *   enforced PER ROUTE from a timestamp persisted in the task
+ *   record so it survives process death and worker retries.
+ *   The floor binds only the route that demands it (the
+ *   keyless anonymous tier); a route with no floor is never
+ *   delayed by another route's pacing (v1.0.2, NO SLEEPING
+ *   WHILE A ROUTE LIVES).
  * - An escalating cooldown after each 402/429: 60 s × 2^n for
  *   the n-th consecutive rate limit, honouring a larger
- *   Retry-After, capped at MAX_COOLDOWN_MS.
+ *   Retry-After, capped at MAX_COOLDOWN_MS. The streak is
+ *   PER ROUTE — escalation lives on the route that earned
+ *   it, never on the task.
  * - The consecutive counter resets on the first HTTP 200.
+ * - A TASK's rest after an all-routes failure is [restMs]:
+ *   the SHORTEST per-route cooldown among configured routes,
+ *   capped at MAX_REST_MS — never an escalating task-level
+ *   backoff. While any route is configured, no single rest
+ *   exceeds ~60 s without a fresh all-routes attempt.
  */
 object BrainPacing {
 
@@ -96,4 +107,66 @@ object BrainPacing {
     /** The one plain waiting note for task records. */
     const val WAITING_NOTE =
         "Waiting — continues automatically (task is waiting, not failed)."
+
+    // ---- v1.0.2: NO SLEEPING WHILE A ROUTE LIVES ----
+    //
+    // Ethuram's hard requirement (2026-11-27): the old design
+    // let a task sit in escalating task-level rests (up to
+    // ~15 min) even when another route could carry it, and a
+    // rest timed before he pasted an own key kept running
+    // after the key landed. The fix is arithmetic, here:
+    // rests derive from PER-ROUTE state only.
+
+    /** No single task rest exceeds this while at least one
+     *  route is configured: after ~60 s there is always a
+     *  fresh all-routes attempt. */
+    const val MAX_REST_MS = 60_000L
+
+    /**
+     * The task's rest after a brain call exhausted every
+     * route: the SHORTEST per-route cooldown among the
+     * configured routes, capped at [MAX_REST_MS]. A route
+     * that is healthy now contributes 0 — the rest is 0 and
+     * the next attempt fires at once. This function takes NO
+     * streak: repeated all-routes failures with the same
+     * per-route state return the same rest, forever — the
+     * task level never escalates. (Each route's own cooldown
+     * may escalate via [cooldownMs]; that is the route's
+     * business, and the shortest one still governs the rest.)
+     * An empty collection (no route configured — not a state
+     * the app can reach, the keyless pair is always present)
+     * rests one capped stretch rather than spinning.
+     */
+    fun restMs(routeCooldownsMs: Collection<Long>): Long {
+        if (routeCooldownsMs.isEmpty()) return MAX_REST_MS
+        val shortest = routeCooldownsMs.minOrNull() ?: MAX_REST_MS
+        return shortest.coerceIn(0L, MAX_REST_MS)
+    }
+
+    /** Routes whose anonymous tier demands a minimum interval
+     *  between calls (the Pollinations-class per-IP limit).
+     *  Every other route — the user's own keys, the Horde
+     *  queue — has NO floor here: their own limits surface as
+     *  402/429 and land in the per-route cooldown instead. */
+    private val PACING_FLOOR_ROUTES = setOf("pollinations")
+
+    /** The minimum-interval floor for ONE route; 0 for any
+     *  route that does not demand one. */
+    fun pacingFloorMs(routeKey: String): Long =
+        if (routeKey in PACING_FLOOR_ROUTES) MIN_INTERVAL_MS else 0L
+
+    /**
+     * How long before [routeKey] may be called again under
+     * ITS OWN pacing floor, given when THAT route was last
+     * called; 0 = call now. Another route's last call is
+     * never an input — the floor binds per route only, so a
+     * step a healthy route can serve is never delayed by a
+     * different route's pacing.
+     */
+    fun routePacingWaitMs(routeKey: String, lastCallAtMs: Long, nowMs: Long): Long {
+        val floor = pacingFloorMs(routeKey)
+        if (floor <= 0L || lastCallAtMs <= 0L) return 0L
+        val elapsed = nowMs - lastCallAtMs
+        return if (elapsed >= floor) 0L else floor - elapsed
+    }
 }

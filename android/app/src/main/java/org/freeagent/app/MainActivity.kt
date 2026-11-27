@@ -31,7 +31,6 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -243,6 +242,13 @@ class MainActivity : AppCompatActivity() {
     private var renderedMtime: Long = -1L
 
     private val flights = mutableMapOf<String, Flight>()
+
+    /** v1.0.2: task ids whose living status message is
+     *  currently expanded to the full named step list in
+     *  the rendered thread (tap the status line to toggle).
+     *  View state only — the record is the truth, this set
+     *  is just which lists are open on screen. */
+    private val expandedTaskIds = mutableSetOf<String>()
 
     /** Bubbles of the RENDERED chat's queued user messages,
      *  FIFO-parallel to that chat flight's queue, so a badge
@@ -569,6 +575,35 @@ class MainActivity : AppCompatActivity() {
         liveBubble = null
         queuedBubbles.clear()
 
+        // v1.0.2 (TRANSPARENCY): refresh the chat's living
+        // status messages from the task records BEFORE
+        // reading the thread — each task's ONE status
+        // message is rewritten in place when the record has
+        // moved since it last reflected it, so what renders
+        // below is always the current truth and never a
+        // stack of twins. A terminal task with a status
+        // message gets its final rewrite the same way; a
+        // terminal task without one is left to its graded
+        // report (no line is created for it here).
+        val allTasks = TaskStore(this).all()
+        val tasksById = allTasks.associateBy { it.optString("id") }
+        val nowMs = System.currentTimeMillis()
+        for (task in allTasks) {
+            if (task.optString(ChatTaskLink.ORIGIN_FIELD) != chatId) continue
+            val taskId = task.optString("id")
+            val reflected = chatStore.taskStatusReflectedAt(chatId, taskId)
+            if (reflected == null &&
+                TaskStates.isTerminal(task.optString("state"))
+            ) continue
+            if (reflected != task.optLong("updatedAt", 0L)) {
+                chatStore.upsertTaskStatus(
+                    chatId, taskId,
+                    TaskTransparency.statusText(task, nowMs),
+                    task.optLong("updatedAt", 0L)
+                )
+            }
+        }
+
         val root = chatStore.root()
         val messages = ChatData.messages(root, chatId)
         val flight = flights[chatId]
@@ -583,12 +618,46 @@ class MainActivity : AppCompatActivity() {
             // Reply / Copy / Select / Share) hangs off every
             // stored bubble, his and hers alike.
             val reaction = ReplyQuote.reaction(m)
-            val shown = if (reaction != null) display + "\n" + reaction
+            var shown = if (reaction != null) display + "\n" + reaction
                 else display
+            // v1.0.2: the task's ONE living status message —
+            // tapping it expands the full named step list
+            // in-thread (rendered fresh from the record, so
+            // the expansion is as current as the line), and
+            // tapping again collapses it. The hint is render
+            // chrome only; the stored text stays clean.
+            val statusTaskId = m.optString(ChatData.TASK_STATUS_FIELD)
+            val statusTask = if (statusTaskId.isNotEmpty()) {
+                tasksById[statusTaskId]
+            } else null
+            if (statusTask != null) {
+                shown += if (expandedTaskIds.contains(statusTaskId)) {
+                    "\n\n" + TaskTransparency.expandedText(
+                        statusTask, System.currentTimeMillis()
+                    ) + "\n(Tap to close)"
+                } else {
+                    "\n(Tap for the step list)"
+                }
+            }
             val bubble = appendLine(if (role == "user") "You" else "Lille", shown)
             bubble.setOnLongClickListener {
                 showMessageMenu(chatId, index, role, display, bubble)
                 true
+            }
+            if (statusTask != null) {
+                // Selectable text swallows taps; the status
+                // line's tap-to-expand wins (its text is
+                // generated, and the long-press menu still
+                // offers Copy).
+                bubble.setTextIsSelectable(false)
+                bubble.setOnClickListener {
+                    if (expandedTaskIds.contains(statusTaskId)) {
+                        expandedTaskIds.remove(statusTaskId)
+                    } else {
+                        expandedTaskIds.add(statusTaskId)
+                    }
+                    renderChat(chatId)
+                }
             }
             if (role == "user") userBubbles.add(bubble to display)
         }
@@ -600,23 +669,13 @@ class MainActivity : AppCompatActivity() {
                 queuedBubbles.addLast(bubble to display)
             }
         }
-        // CHAT IS THE ENGINE: the thread's own work state is
-        // visible IN the thread — a transient status line
-        // (never stored) for the chat's newest work while it
-        // is live. Finished work already told its story in
-        // her report messages; this line is only the living
-        // state.
-        val workTask = StatusProbe.latestTaskForChat(
-            TaskStore(this).all(), chatId
-        )
-        if (workTask != null &&
-            !TaskStates.isTerminal(workTask.optString("state"))
-        ) {
-            appendLine(
-                "Lille",
-                "— " + StatusProbe.statusLineFor(workTask) + " —"
-            )
-        }
+        // CHAT IS THE ENGINE + TRANSPARENCY (v1.0.2): the
+        // thread's work state is visible IN the thread as
+        // each task's ONE living status message — refreshed
+        // from the record at the top of this render and
+        // rendered above as part of the stored thread. (The
+        // v1.0.1 transient line is gone: it duplicated the
+        // stored probe answers and read as stacking.)
         if (flight != null && flight.queue.inFlight) {
             val liveText = when {
                 flight.partial.isNotEmpty() || flight.carry.isNotEmpty() ->
@@ -721,106 +780,87 @@ class MainActivity : AppCompatActivity() {
         chatId: String, index: Int, role: String,
         display: String, bubble: TextView
     ) {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 16, 24, 8)
-        }
-        val dialog = AlertDialog.Builder(this).setView(root).create()
-        fun reactionRow(emojis: List<String>, withPlus: Boolean) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            for (emoji in emojis) {
-                row.addView(Button(this).apply {
-                    text = emoji
-                    setOnClickListener {
-                        dialog.dismiss()
-                        applyReaction(chatId, index, emoji, bubble, display)
+        // v1.0.2: rendered by the ONE shared menu component
+        // (LilleMenu) — a compact floating card, reactions as
+        // bare glyphs in one row, actions as slim sentence-
+        // case text rows with hairline dividers. Behaviour
+        // (MessageActions plumbing) is unchanged.
+        val card = LilleMenu.card(this)
+        var dialog: AlertDialog? = null
+        card.addView(
+            LilleMenu.reactionRow(
+                this, MessageActions.REACTIONS,
+                onPick = { emoji ->
+                    dialog?.dismiss()
+                    applyReaction(chatId, index, emoji, bubble, display)
+                },
+                onMore = {
+                    dialog?.dismiss()
+                    showMoreReactions(chatId, index, bubble, display)
+                }
+            )
+        )
+        card.addView(LilleMenu.divider(this))
+        MessageActions.ITEMS.forEachIndexed { i, item ->
+            if (i > 0) card.addView(LilleMenu.divider(this))
+            card.addView(LilleMenu.actionRow(this, item.title) {
+                dialog?.dismiss()
+                when (item) {
+                    MessageActions.Item.REPLY ->
+                        setPendingQuote(role, display)
+                    MessageActions.Item.COPY -> {
+                        val cm = getSystemService(
+                            Context.CLIPBOARD_SERVICE
+                        ) as ClipboardManager
+                        cm.setPrimaryClip(
+                            ClipData.newPlainText("Lille message", display)
+                        )
+                        Toast.makeText(
+                            this@MainActivity, "Copied",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
-                })
-            }
-            if (withPlus) {
-                row.addView(Button(this).apply {
-                    text = "+"
-                    setOnClickListener {
-                        dialog.dismiss()
-                        showMoreReactions(chatId, index, bubble, display)
+                    MessageActions.Item.SELECT -> {
+                        bubble.setTextIsSelectable(true)
+                        bubble.requestFocus()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Drag the handles to select text",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
-                })
-            }
-            root.addView(row)
-        }
-        reactionRow(MessageActions.REACTIONS, withPlus = true)
-        for (item in MessageActions.ITEMS) {
-            root.addView(Button(this).apply {
-                text = item.title
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                setOnClickListener {
-                    dialog.dismiss()
-                    when (item) {
-                        MessageActions.Item.REPLY ->
-                            setPendingQuote(role, display)
-                        MessageActions.Item.COPY -> {
-                            val cm = getSystemService(
-                                Context.CLIPBOARD_SERVICE
-                            ) as ClipboardManager
-                            cm.setPrimaryClip(
-                                ClipData.newPlainText("Lille message", display)
-                            )
-                            Toast.makeText(
-                                this@MainActivity, "Copied",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                    MessageActions.Item.SHARE -> {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, display)
                         }
-                        MessageActions.Item.SELECT -> {
-                            bubble.setTextIsSelectable(true)
-                            bubble.requestFocus()
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Drag the handles to select text",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        MessageActions.Item.SHARE -> {
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, display)
-                            }
-                            startActivity(
-                                Intent.createChooser(send, "Share message")
-                            )
-                        }
+                        startActivity(
+                            Intent.createChooser(send, "Share message")
+                        )
                     }
                 }
             })
         }
-        dialog.show()
+        dialog = LilleMenu.show(this, card)
     }
 
     private fun showMoreReactions(
         chatId: String, index: Int, bubble: TextView, display: String
     ) {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 16, 24, 8)
-        }
-        val dialog = AlertDialog.Builder(this).setView(root).create()
+        val card = LilleMenu.card(this)
+        var dialog: AlertDialog? = null
         MessageActions.MORE_REACTIONS.chunked(4).forEach { chunk ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            for (emoji in chunk) {
-                row.addView(Button(this).apply {
-                    text = emoji
-                    setOnClickListener {
-                        dialog.dismiss()
+            card.addView(
+                LilleMenu.reactionRow(
+                    this, chunk,
+                    onPick = { emoji ->
+                        dialog?.dismiss()
                         applyReaction(chatId, index, emoji, bubble, display)
                     }
-                })
-            }
-            root.addView(row)
+                )
+            )
         }
-        dialog.show()
+        dialog = LilleMenu.show(this, card)
     }
 
     private fun applyReaction(
@@ -933,7 +973,7 @@ class MainActivity : AppCompatActivity() {
                 TaskStore(this).all(), chatId
             )
             if (task != null) {
-                appendAssistantMessage(chatId, StatusProbe.answerFor(task))
+                answerStatusProbe(chatId, task)
                 return
             }
         }
@@ -1001,6 +1041,30 @@ class MainActivity : AppCompatActivity() {
         updateComposerState()
     }
 
+    /** v1.0.2 (TRANSPARENCY): a status probe is answered
+     *  from the record by REWRITING the task's ONE living
+     *  status message in place — never by appending another
+     *  near-identical bubble (the stacking in Ethuram's
+     *  1.0.1 screenshots). When the record has not moved
+     *  since that message last reflected it, the rewrite
+     *  carries one short no-change line instead of dressing
+     *  the same block as news. */
+    private fun answerStatusProbe(chatId: String, task: JSONObject) {
+        val taskId = task.optString("id")
+        val updatedAt = task.optLong("updatedAt", 0L)
+        val reflected = chatStore.taskStatusReflectedAt(chatId, taskId)
+        val noChangeSince =
+            if (reflected != null && reflected == updatedAt && updatedAt > 0L) {
+                updatedAt
+            } else null
+        val text = StatusProbe.answerFor(
+            task, System.currentTimeMillis(), noChangeSince
+        )
+        chatStore.upsertTaskStatus(chatId, taskId, text, updatedAt)
+        if (chatId == renderedChatId && uiAlive) renderChat(chatId)
+        BackupManager.requestBackup(this)
+    }
+
     /** A Lille message outside the brain flow (wallet
      *  replies, parser questions): shown in the rendered chat
      *  and stored like any other assistant message. */
@@ -1055,12 +1119,11 @@ class MainActivity : AppCompatActivity() {
         val isOwner = OwnerGate.canCreateXAccountTask(fluidIdentity?.username)
         val lilleVerified = LilleXState.hasVerifiedAccount(TaskStore(this).all())
         val actions = MainChatActions.menuActions(isOwner, lilleVerified)
-        val popup = PopupMenu(this, anchor)
-        actions.forEachIndexed { i, action ->
-            popup.menu.add(0, i, i, action.menuTitle)
-        }
-        popup.setOnMenuItemClickListener { item ->
-            when (actions[item.itemId]) {
+        // v1.0.2: the header menu renders on the ONE shared
+        // menu surface (LilleMenu) like every other popup —
+        // same actions, same order, same handlers.
+        LilleMenu.simpleMenu(this, actions.map { it.menuTitle }) { picked ->
+            when (actions[picked]) {
                 MainChatActions.Action.CREATE_X_ACCOUNT ->
                     startXCreationInChat()
                 MainChatActions.Action.CONNECT_LILLE_X_ACCOUNT ->
@@ -1068,9 +1131,7 @@ class MainActivity : AppCompatActivity() {
                 MainChatActions.Action.CONNECT_X_ACCOUNT ->
                     startXConnectInChat()
             }
-            true
         }
-        popup.show()
     }
 
     /**
@@ -1758,9 +1819,13 @@ class MainActivity : AppCompatActivity() {
      * keyless text routes are live-verified — Pollinations +
      * AI Horde — out of ~45 candidates tested; ROUTES.md
      * carries every verdict. v0.12.1: the user's OWN saved
-     * keys join the chain behind them — BrainFailure.chain
-     * over OwnKeyRoutes. Pacing + fall-through + per-route
-     * health below are the chain's resilience.)
+     * keys join the chain — BrainFailure.chain over
+     * OwnKeyRoutes. v1.0.2 (OWN KEYS LEAD): saved own keys
+     * walk FIRST and the keyless pair is the fallback.
+     * Pacing + fall-through + per-route health below are
+     * the chain's resilience — pacing and health are
+     * per-route, so the keyless pair's values never
+     * throttle an own-key route.)
      */
     private fun askBrain(chatId: String, userText: String, attempt: Int) {
         askBrain(chatId, userText, attempt, reframed = false, carry = "", continuations = 0,

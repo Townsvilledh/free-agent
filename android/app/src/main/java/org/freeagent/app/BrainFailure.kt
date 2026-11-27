@@ -144,21 +144,29 @@ object BrainFailure {
      *  from anybody (the no-keys doctrine's floor). */
     val KEYLESS_CHAIN: List<Route> = listOf(Route.POLLINATIONS, Route.HORDE)
 
-    /** The own-key routes in their walk order, after the
-     *  keyless pair: Groq → Gemini → Cerebras → OpenRouter
-     *  → AgentRouter → custom. */
+    /** The own-key routes in their walk order: Groq →
+     *  Gemini → Cerebras → OpenRouter → AgentRouter →
+     *  custom. */
     val OWN_KEY_ORDER: List<Route> = listOf(
         Route.GROQ, Route.GEMINI, Route.CEREBRAS,
         Route.OPENROUTER, Route.AGENTROUTER, Route.CUSTOM
     )
 
-    /** The chain for one conversation: the keyless pair,
-     *  then whichever own-key routes the user has actually
-     *  saved a key for, in walk order. A route with no key
-     *  saved is simply absent — never a placeholder, never
-     *  an error. */
+    /** The chain for one conversation. OWN KEYS LEAD
+     *  (v1.0.2, Ethuram 2026-11-27): whichever own-key
+     *  routes the user has actually saved a key for walk
+     *  FIRST, in walk order — a user's own key is their
+     *  front door, not a fallback — and the keyless pair
+     *  follows as the fallback that needs nothing from
+     *  anybody. With no keys saved the chain is exactly
+     *  the keyless pair, as it has always been. A route
+     *  with no key saved is simply absent — never a
+     *  placeholder, never an error. The reorder touches
+     *  ONLY the order among routes already eligible for
+     *  the content: privacy routing decides eligibility
+     *  before any chain is walked, unchanged. */
     fun chain(ownKeyPresent: Set<Route>): List<Route> =
-        KEYLESS_CHAIN + OWN_KEY_ORDER.filter { it in ownKeyPresent }
+        OWN_KEY_ORDER.filter { it in ownKeyPresent } + KEYLESS_CHAIN
 
     /** The route to try after [route] failed in [chain],
      *  or null when the chain is exhausted for this

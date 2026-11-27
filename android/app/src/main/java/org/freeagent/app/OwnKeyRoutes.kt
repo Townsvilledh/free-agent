@@ -17,8 +17,11 @@ import org.json.JSONObject
  * crosses only into that provider's Authorization header.
  *
  * Chain order (BrainFailure.OWN_KEY_ORDER): Groq → Gemini →
- * Cerebras → OpenRouter → AgentRouter → custom, walked
- * after the keyless routes (Pollinations, AI Horde).
+ * Cerebras → OpenRouter → AgentRouter → custom. Since
+ * v1.0.2 (OWN KEYS LEAD) the present own-key routes walk
+ * FIRST and the keyless routes (Pollinations, AI Horde)
+ * are the fallback; with no keys saved the chain is the
+ * keyless pair alone, exactly as before.
  *
  * Default models (verified 2026-11-26 where a keyless check
  * exists; ROUTES.md carries the evidence):
