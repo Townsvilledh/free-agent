@@ -376,4 +376,14 @@ object FluidGate {
         "Your name checked out, but Lille couldn't reach the " +
             "WalletConnect relay to print your pairing code. Check your " +
             "connection and tap Connect again — nothing was connected."
+
+    /** The WalletConnect stack itself failed to start (init
+     *  error). The login UI shows THIS — never the SDK's raw
+     *  throwable text, which stays in FluidLogin.initError for
+     *  logs/traces only (audit G1, 2026-11-27). Same family as
+     *  [relayUnreachableMessage]: what happened + what to do. */
+    fun walletConnectStartMessage(): String =
+        "WalletConnect couldn't start, so Lille can't print your " +
+            "pairing code yet. Check your connection and reopen " +
+            "Lille — nothing was connected."
 }

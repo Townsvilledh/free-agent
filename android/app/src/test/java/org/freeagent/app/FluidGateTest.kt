@@ -442,4 +442,23 @@ class FluidGateTest {
             FluidGate.registryUnreachableMessage()
         )
     }
+
+    @Test
+    fun walletConnectStartMessageCarriesNoRawThrowableText() {
+        // Audit G1: the WalletConnect init-error surface shows
+        // a fixed plain-language message — it takes no input,
+        // so no SDK throwable text can reach the screen through
+        // it. What happened + what to do, same family as the
+        // relay message.
+        val message = FluidGate.walletConnectStartMessage()
+        assertEquals(
+            "WalletConnect couldn't start, so Lille can't print your " +
+                "pairing code yet. Check your connection and reopen " +
+                "Lille — nothing was connected.",
+            message
+        )
+        assertFalse(message.contains("Exception"))
+        assertFalse(message.contains("Please check your Internet connection"))
+        assertFalse(message.contains("throwable"))
+    }
 }

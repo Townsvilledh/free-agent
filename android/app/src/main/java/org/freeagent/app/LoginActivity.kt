@@ -201,8 +201,10 @@ class LoginActivity : AppCompatActivity() {
                 Intent(Intent.ACTION_VIEW, Uri.parse("https://fluidwallet.dpdns.org"))
             )
         }
-        FluidLogin.initError?.let {
-            status.text = "WalletConnect couldn't start: $it"
+        if (FluidLogin.initError != null) {
+            // The raw init error is log/trace material only —
+            // the screen gets the plain-language message.
+            status.text = FluidGate.walletConnectStartMessage()
         }
     }
 
