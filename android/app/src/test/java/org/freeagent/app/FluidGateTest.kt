@@ -42,6 +42,40 @@ class FluidGateTest {
               "btconlyname": { "btc": "bc1qsyntheticfixture0000000000000000000" }
             }
         """
+
+        // Registry-source fixtures (2026-11-27): LIVE_REGISTRY
+        // mirrors the live registry's shape — ethuam + tebioba1
+        // carry their real published addresses (recorded
+        // 2026-11-27), the rest are synthetic fillers.
+        // STALE_REGISTRY is the frozen Netlify snapshot's shape:
+        // dripbot + ethuam only.
+        private const val TEBIOBA1_EVM =
+            "0x96c72896B106dF476d72525dB31AD6e598f13a95"
+
+        private fun fillerNames(count: Int): String =
+            (1..count).joinToString(",") { i ->
+                "\"filler$i\": {\"evm\": " +
+                    "\"0x1111111111111111111111111111111111111111\"}"
+            }
+
+        private val LIVE_REGISTRY =
+            "{\"ethuram\": {\"evm\": \"$ETHURAM_EVM\"}, " +
+                "\"tebioba1\": {\"evm\": \"$TEBIOBA1_EVM\"}, " +
+                fillerNames(10) + "}"
+
+        /** Valid, but published before tebioba1 joined. */
+        private val EARLIER_REGISTRY =
+            "{\"ethuram\": {\"evm\": \"$ETHURAM_EVM\"}, " +
+                fillerNames(10) + "}"
+
+        private val NOEVM_REGISTRY =
+            "{\"btconlyname\": {\"btc\": " +
+                "\"bc1qsyntheticfixture0000000000000000000\"}, " +
+                fillerNames(10) + "}"
+
+        private val STALE_REGISTRY =
+            "{\"dripbot\": {\"evm\": \"$DRIPBOT_EVM\"}, " +
+                "\"ethuram\": {\"evm\": \"$ETHURAM_EVM\"}}"
     }
 
     // ---- name normalisation ----
@@ -245,6 +279,167 @@ class FluidGateTest {
         assertEquals("personal_sign", FluidGate.METHOD_PERSONAL_SIGN)
         assertEquals(
             "https://fluidwallet.dpdns.org/names.json", FluidGate.REGISTRY_URL
+        )
+    }
+
+    // ---- registry sources, validation, resolution (2026-11-27) ----
+    //
+    // The defect: on 2026-11-27 a new user (tebioba1) and the
+    // owner (ethuram) both failed login within minutes of each
+    // other. The registry fetch had exactly two sources — the
+    // canonical URL and a Netlify mirror frozen at a 2-name
+    // snapshot (606 bytes; the live registry is 29 names) —
+    // no validation, no retry, no saved copy. Fixtures below:
+    // LIVE_REGISTRY mirrors the live registry's shape (ethuram
+    // + tebioba1 carry their real published addresses, recorded
+    // 2026-11-27; the other entries are synthetic fillers).
+    // STALE_REGISTRY is the frozen Netlify snapshot's shape:
+    // dripbot + ethuam only.
+
+    @Test
+    fun registrySourcesAreCanonicalThenLiveMirrors() {
+        assertEquals(FluidGate.REGISTRY_URL, FluidGate.REGISTRY_SOURCES.first())
+        assertTrue(
+            FluidGate.REGISTRY_SOURCES.any {
+                it.startsWith("https://raw.githubusercontent.com/")
+            }
+        )
+        assertTrue(
+            FluidGate.REGISTRY_SOURCES.any { it.contains("cdn.jsdelivr.net") }
+        )
+        // The frozen Netlify snapshot must never be a source again.
+        assertTrue(
+            FluidGate.REGISTRY_SOURCES.none { it.contains("netlify") }
+        )
+    }
+
+    @Test
+    fun assessAcceptsLiveShapedRegistry() {
+        assertEquals(
+            FluidGate.RegistryAssessment.Valid(12),
+            FluidGate.assessRegistry(LIVE_REGISTRY)
+        )
+    }
+
+    @Test
+    fun assessRejectsFrozenTwoNameSnapshot() {
+        // It parses, and it even contains the owner's name —
+        // it is still not the registry. Trusting it is what
+        // would have answered real users "name not found".
+        assertEquals(
+            FluidGate.RegistryAssessment.Invalid,
+            FluidGate.assessRegistry(STALE_REGISTRY)
+        )
+    }
+
+    @Test
+    fun assessRejectsNonRegistryBodies() {
+        assertEquals(
+            FluidGate.RegistryAssessment.Invalid,
+            FluidGate.assessRegistry("this is not json")
+        )
+        assertEquals(
+            FluidGate.RegistryAssessment.Invalid,
+            FluidGate.assessRegistry("[1,2,3]")
+        )
+        assertEquals(
+            FluidGate.RegistryAssessment.Invalid,
+            FluidGate.assessRegistry("")
+        )
+    }
+
+    @Test
+    fun resolveFindsNameInMirrorWhenPrimaryBodyIsGarbage() {
+        val result = FluidGate.resolveAcrossSources(
+            listOf("<html>502</html>", LIVE_REGISTRY), "tebioba1"
+        )
+        assertEquals(
+            FluidGate.Resolution.Found(TEBIOBA1_EVM, LIVE_REGISTRY), result
+        )
+    }
+
+    @Test
+    fun resolveNeverTrustsTheStaleSnapshot() {
+        // Even for ethuam — a name the snapshot DOES carry —
+        // the stale copy is not evidence. NoValidRegistry lets
+        // the glue fall back to the on-device saved copy or say
+        // "unreachable" honestly, instead of trusting November's
+        // 2-name file.
+        assertEquals(
+            FluidGate.Resolution.NoValidRegistry,
+            FluidGate.resolveAcrossSources(listOf(STALE_REGISTRY), "ethuram")
+        )
+        assertEquals(
+            FluidGate.Resolution.NoValidRegistry,
+            FluidGate.resolveAcrossSources(emptyList(), "ethuram")
+        )
+    }
+
+    @Test
+    fun resolveLaterValidSourceRescuesAJustPublishedName() {
+        // The first valid copy predates tebioba1; a valid copy
+        // that lacks the name must not settle "not found" while
+        // a fresher source remains.
+        val result = FluidGate.resolveAcrossSources(
+            listOf(EARLIER_REGISTRY, LIVE_REGISTRY), "tebioba1"
+        )
+        assertTrue(result is FluidGate.Resolution.Found)
+    }
+
+    @Test
+    fun resolveNameNotFoundOnlyAfterAValidRegistryWasChecked() {
+        assertEquals(
+            FluidGate.Resolution.NameNotFound,
+            FluidGate.resolveAcrossSources(listOf(LIVE_REGISTRY), "ghost")
+        )
+        assertEquals(
+            FluidGate.Resolution.NoEvmAddress,
+            FluidGate.resolveAcrossSources(
+                listOf(NOEVM_REGISTRY), "btconlyname"
+            )
+        )
+    }
+
+    @Test
+    fun resolveSavedCopyFindsTheName() {
+        // The cached-registry login path, at the pure level:
+        // the saved copy is resolved exactly like a fetched
+        // body — the glue's only extra job is labelling it.
+        val result = FluidGate.resolveAcrossSources(
+            listOf(LIVE_REGISTRY), "ethuram"
+        )
+        assertEquals(
+            FluidGate.Resolution.Found(ETHURAM_EVM, LIVE_REGISTRY), result
+        )
+    }
+
+    @Test
+    fun registryFetchRetryPolicyIsPinned() {
+        assertEquals(2, FluidGate.REGISTRY_FETCH_ATTEMPTS)
+        assertEquals(1500L, FluidGate.registryRetryDelayMs(1))
+        assertEquals(3000L, FluidGate.registryRetryDelayMs(2))
+    }
+
+    @Test
+    fun cachedAndRelayMessagesSayWhatActuallyHappened() {
+        assertTrue(FluidGate.cachedRegistryNotice().contains("saved copy"))
+        assertTrue(FluidGate.cachedNotFoundMessage("ghost").contains("saved copy"))
+        assertTrue(
+            FluidGate.relayUnreachableMessage().contains("WalletConnect relay")
+        )
+        // The SDK's raw text is never the UI's text any more.
+        assertFalse(
+            FluidGate.relayUnreachableMessage()
+                .contains("Please check your Internet connection")
+        )
+        // The unreachable message is unchanged: it remains the
+        // exact outcome when no valid registry and no saved
+        // copy exist (Report B's situation, minus the defect).
+        assertEquals(
+            "Lille couldn't reach the Fluid names registry just now, so the " +
+                "name can't be checked. Check your connection and try again — " +
+                "nothing was connected.",
+            FluidGate.registryUnreachableMessage()
         )
     }
 }

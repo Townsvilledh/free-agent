@@ -72,4 +72,29 @@ class FluidIdentityStore(context: Context) {
             .remove("pending_address")
             .apply()
     }
+
+    // ---- last-good registry cache (2026-11-27) ----
+    //
+    // Every registry body that passes FluidGate.assessRegistry
+    // is saved here by the fetch glue (login + wallet name
+    // lookups). When NO live source answers, the login gate
+    // checks the typed name against this saved copy instead of
+    // dead-ending, and says so on screen (FluidGate's cached-
+    // copy messages). The registry is public data — the same
+    // reasoning as the identity above — so it belongs in this
+    // prefs file, and rides the backup snapshot like the rest.
+
+    data class CachedRegistry(val json: String, val fetchedAtMs: Long)
+
+    fun saveRegistryCache(json: String, fetchedAtMs: Long) {
+        prefs.edit()
+            .putString("registry_cache_json", json)
+            .putLong("registry_cache_at", fetchedAtMs)
+            .apply()
+    }
+
+    fun loadRegistryCache(): CachedRegistry? {
+        val json = prefs.getString("registry_cache_json", null) ?: return null
+        return CachedRegistry(json, prefs.getLong("registry_cache_at", 0L))
+    }
 }

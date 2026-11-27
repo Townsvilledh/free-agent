@@ -527,9 +527,26 @@ class WalletEngine(context: Context) {
         }
     }
 
+    /** Registry fetch over FluidGate's source list, with the
+     *  same validation the login gate applies (2026-11-27):
+     *  only a body passing FluidGate.assessRegistry counts —
+     *  the frozen Netlify fallback this used to fall back to
+     *  holds 2 of 29 names and answered "name not found" for
+     *  real users. A valid body also refreshes the login
+     *  gate's on-device last-good copy. Sends still require a
+     *  LIVE registry: no cache read here, an unreachable
+     *  registry fails the prepare honestly. */
     private fun fetchRegistry(): String? {
-        for (url in listOf(FluidGate.REGISTRY_URL, FluidGate.REGISTRY_FALLBACK_URL)) {
-            prices.get(url)?.let { return it }
+        for (url in FluidGate.REGISTRY_SOURCES) {
+            val body = prices.get(url) ?: continue
+            if (FluidGate.assessRegistry(body) is
+                FluidGate.RegistryAssessment.Valid
+            ) {
+                identityStore.saveRegistryCache(
+                    body, System.currentTimeMillis()
+                )
+                return body
+            }
         }
         return null
     }
