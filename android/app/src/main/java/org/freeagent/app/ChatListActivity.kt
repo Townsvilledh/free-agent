@@ -97,16 +97,17 @@ class ChatListActivity : AppCompatActivity() {
             meta.textSize = 12f
             block.addView(meta)
 
-            val delete = Button(this)
-            delete.text = getString(R.string.delete_chat)
-            val deleteParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+            // v1.0.2: the row action renders in the ONE
+            // shared menu style (LilleMenu) — a slim
+            // sentence-case text row under a hairline
+            // divider, not a filled button bar. Same action:
+            // tap → the same delete confirm.
+            block.addView(LilleMenu.divider(this))
+            block.addView(
+                LilleMenu.actionRow(this, getString(R.string.delete_chat)) {
+                    confirmDelete(id, chat.optString("title"))
+                }
             )
-            deleteParams.gravity = Gravity.END
-            delete.layoutParams = deleteParams
-            delete.setOnClickListener { confirmDelete(id, chat.optString("title")) }
-            block.addView(delete)
 
             block.setOnClickListener {
                 chatStore.setActive(id)
