@@ -50,7 +50,13 @@ object StateSheet {
          *  identity stamp older than the browser's last
          *  activity is rendered as BEING RE-CHECKED,
          *  never stated as the current sign-in. */
-        val browserActivityAt: Long = 0L
+        val browserActivityAt: Long = 0L,
+        /** The session SENSE line (v1.0.10): the
+         *  browser session as continuously sensed, with
+         *  its sensed-at time (SessionSense.senseLine) —
+         *  the sheet's freshest identity fact, carried
+         *  WITH its age like every last-read value. */
+        val senseLine: String? = null
     )
 
     /** How many task lines the sheet carries — the
@@ -91,6 +97,9 @@ object StateSheet {
         }
         browserLine(tasks, facts, activity)?.let {
             out.append("\n").append(it)
+        }
+        facts.senseLine?.let {
+            out.append("\n- ").append(it)
         }
         out.append("\n").append(xLine(facts))
         if (facts.accountsLines.isNotEmpty()) {

@@ -193,6 +193,16 @@ object BrowserSession {
         val state = BrowserPerception.parseCollect(json)
         lastState = state
         lastActivityAt = System.currentTimeMillis()
+        // CONTINUOUS SESSION AWARENESS (v1.0.10): every
+        // settled page the lane reads is sensed — the
+        // browser's sign-in state refreshes from the
+        // system's own motion, with no task having to
+        // ask. Sensing never breaks a read.
+        try {
+            sensePageSettled(context, state)
+        } catch (e: Exception) {
+            // best-effort; the read itself stands.
+        }
         try {
             CookieManager.getInstance().flush()
         } catch (e: Exception) {

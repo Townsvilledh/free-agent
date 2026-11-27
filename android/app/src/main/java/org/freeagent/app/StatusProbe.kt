@@ -1124,6 +1124,31 @@ object StatusProbe {
         }
     }
 
+    /** The login answer from the SENSE (v1.0.10): the
+     *  continuously-sensed session — refreshed by the
+     *  browser's own motion (page settles, concluding
+     *  reads, the panel opening) — quoted with its
+     *  sensed-at time. The caller quotes it only when
+     *  the sense is FRESH under the freshness rule
+     *  (SessionSense.freshConclusion), so this line
+     *  never carries a stale fact either. */
+    fun loginAnswerFromSense(
+        handle: String?, sensedAt: Long
+    ): String {
+        val at = TaskTransparency.clockLabel(sensedAt)
+        val atBit = if (at != null) {
+            " (sensed from her browser at $at)"
+        } else {
+            ""
+        }
+        return if (handle != null) {
+            "Yes — the browser is signed in as @$handle" +
+                atBit + "."
+        } else {
+            "No — her browser is signed out" + atBit + "."
+        }
+    }
+
     // ---------- state answers ----------
 
     /** True when the record carries a finish

@@ -127,6 +127,14 @@ object AccountsRegistry {
         if (existing != null) {
             existing.put("lastVerifiedAt", now)
             existing.put("state", STATE_SIGNED_IN)
+            // SESSION AS THE SAVED CREDENTIAL (v1.0.10):
+            // a verified sign-in read means the live
+            // browser session backs this entry — the
+            // persistent profile IS the credential store
+            // (his password was never captured; it never
+            // left the site's page).
+            existing.put("sessionBacked", true)
+            existing.put("sessionExpired", false)
             return existing
         }
         val entry = JSONObject()
@@ -138,6 +146,8 @@ object AccountsRegistry {
             .put("lastVerifiedAt", now)
             .put("lastActiveAt", 0L)
             .put("state", STATE_SIGNED_IN)
+            .put("sessionBacked", true)
+            .put("sessionExpired", false)
             .put("active", false)
         val arr = root.optJSONArray("entries") ?: JSONArray()
         arr.put(entry)
@@ -159,10 +169,21 @@ object AccountsRegistry {
         for (entry in entries(root)) {
             if (entry.optString("platform") != platform) continue
             val isTarget = key(entry.optString("handle")) == key(handle)
+            if (!isTarget && entry.optBoolean("active") &&
+                entry.optString("state") == STATE_SIGNED_IN
+            ) {
+                // The browser holds ONE session: an entry
+                // losing the active mark has lost its live
+                // session with it — expired, available
+                // again only through a fresh sign-in.
+                entry.put("sessionExpired", true)
+                entry.put("sessionExpiredAt", now)
+            }
             entry.put("active", isTarget)
             if (isTarget) {
                 entry.put("lastActiveAt", now)
                 entry.put("state", STATE_SIGNED_IN)
+                entry.put("sessionExpired", false)
             }
         }
         return previous
@@ -170,15 +191,62 @@ object AccountsRegistry {
 
     /** The platform's browser signed out: the active
      *  entry keeps its registration, loses the active
-     *  mark and the signed-in state. */
-    fun markSignedOut(root: JSONObject, platform: String) {
+     *  mark and the signed-in state — and its session
+     *  is expired (v1.0.10): the next task for that
+     *  account parks once for a fresh sign-in. */
+    fun markSignedOut(
+        root: JSONObject, platform: String, now: Long = 0L
+    ) {
         for (entry in entries(root)) {
             if (entry.optString("platform") != platform) continue
             if (entry.optBoolean("active")) {
                 entry.put("state", STATE_SIGNED_OUT)
+                entry.put("sessionExpired", true)
+                if (now > 0L) entry.put("sessionExpiredAt", now)
             }
             entry.put("active", false)
         }
+    }
+
+    /** True when [handle]'s entry is backed by the
+     *  LIVE browser session right now: registered,
+     *  active, signed in, session-backed and not
+     *  expired. A task scoped to this account checks
+     *  this FIRST (with the sense) — a live session
+     *  means no login step and no ask. */
+    fun sessionLive(
+        root: JSONObject, platform: String, handle: String
+    ): Boolean {
+        val entry = find(root, platform, handle) ?: return false
+        return entry.optBoolean("active") &&
+            entry.optString("state") == STATE_SIGNED_IN &&
+            entry.optBoolean("sessionBacked") &&
+            !entry.optBoolean("sessionExpired")
+    }
+
+    /** Stamp that a task has parked for this
+     *  account's fresh sign-in (v1.0.10, park ONCE):
+     *  while one park stands for the current expiry,
+     *  other tasks for the account wait instead of
+     *  parking a second time. */
+    fun noteSessionLoginPark(
+        root: JSONObject, platform: String, handle: String,
+        now: Long
+    ) {
+        find(root, platform, handle)
+            ?.put("loginParkAt", now)
+    }
+
+    /** True when a login park already stands for
+     *  this account's CURRENT expiry (a park stamped
+     *  after the session expired). */
+    fun sessionLoginParked(
+        root: JSONObject, platform: String, handle: String
+    ): Boolean {
+        val entry = find(root, platform, handle) ?: return false
+        val parkAt = entry.optLong("loginParkAt", 0L)
+        return parkAt > 0L &&
+            parkAt >= entry.optLong("sessionExpiredAt", 0L)
     }
 
     enum class Precondition {
@@ -375,7 +443,22 @@ class AccountRegistryStore(context: Context) {
     @Synchronized
     fun recordSignedOut(platform: String) {
         val root = root()
-        AccountsRegistry.markSignedOut(root, platform)
+        AccountsRegistry.markSignedOut(
+            root, platform, System.currentTimeMillis()
+        )
+        writeRoot(root)
+    }
+
+    /** Park-once bookkeeping (v1.0.10): a task parked
+     *  for this account's fresh sign-in. */
+    @Synchronized
+    fun recordSessionLoginPark(
+        platform: String, handle: String, now: Long
+    ) {
+        val root = root()
+        AccountsRegistry.noteSessionLoginPark(
+            root, platform, handle, now
+        )
         writeRoot(root)
     }
 }

@@ -241,6 +241,15 @@ class MainActivity : AppCompatActivity() {
      *  the chat's latest clears it; a park overrides it
      *  (BrowserPanel.panelVisible). */
     private var panelDismissedTaskId: String? = null
+    // COMMANDED CLOSE (v1.0.10, Fix 1): "close the
+    // browser" in chat stamps the record it closed over
+    // + the state the record stood in when the close
+    // landed. The close holds while that task stands in
+    // that state; any move (a resume, a handback, a new
+    // park) or a different task clears it — the same
+    // discipline as a dismissal, one level stronger.
+    private var panelClosedTaskId: String? = null
+    private var panelClosedState: String? = null
     private val panelTick = object : Runnable {
         override fun run() {
             if (!uiAlive) return
@@ -473,6 +482,8 @@ class MainActivity : AppCompatActivity() {
         }
         browserChip.setOnClickListener {
             panelDismissedTaskId = null
+            panelClosedTaskId = null
+            panelClosedState = null
             refreshBrowserPanel()
         }
         // Chat parity (v1.0.6, ComposerAction): the button's
@@ -593,6 +604,12 @@ class MainActivity : AppCompatActivity() {
         // wait state. Cheap record scan; enqueues are
         // REPLACE-idempotent.
         TaskWorker.watchdogPass(this)
+        // A session change sensed with no chat to
+        // belong to (v1.0.10) is announced on this open
+        // — the "while you were away" surface.
+        if (::chatStore.isInitialized) {
+            deliverPendingSenseNotification(this, renderedChatId)
+        }
         if (::walletCardText.isInitialized) refreshWalletCard()
         if (::chatStore.isInitialized && renderedChatId.isNotEmpty()) {
             val current = ChatData.activeId(chatStore.root())
@@ -1252,6 +1269,66 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // CLOSE THE BROWSER (v1.0.10, Fix 1): "close the
+        // browser" is a direct COMMAND, handled here —
+        // the panel closes on his word, the work driving
+        // it pauses with the reason on its record, and
+        // the answer is one deterministic line. On
+        // 1.0.9 the demand fell to the brain, which could
+        // narrate a closing but had no machinery to
+        // perform one (2026-11-27 ~16:26, his words:
+        // "she cannot close the browser automatically
+        // this is annoying"). Zero model calls; works
+        // while a reply is in flight, like every command
+        // in this chain.
+        if (!hadAttachment && BrowserControl.parseCloseBrowser(raw)) {
+            closeBrowserCommand(chatId, raw.trim())
+            return
+        }
+
+        // LOG OUT / SWITCH (v1.0.10, Fix 3.5): "log out
+        // of X", "switch to @handle" — session commands,
+        // resolved here to a session pass (TaskWorker's
+        // account-session mode) over the scripted
+        // routines; the chat never improvises an account
+        // action and the brain never hears them. A bare
+        // "switch to <word>" intercepts only when the
+        // word is a registered account — "switch to
+        // dark" is conversation, not a command.
+        if (!hadAttachment && BrowserControl.parseLogOut(raw)) {
+            sessionCommand(
+                chatId,
+                BrowserControl.planLogOut(
+                    TaskStore(this).all(), chatId
+                )
+            )
+            return
+        }
+        if (!hadAttachment) {
+            val switchCmd = BrowserControl.parseSwitch(raw)
+            if (switchCmd != null) {
+                val registryRoot = AccountRegistryStore(this).root()
+                val registered = AccountsRegistry.entries(registryRoot)
+                    .map { it.optString("handle") }.toSet()
+                if (BrowserControl.shouldIntercept(
+                        switchCmd, registered
+                    )
+                ) {
+                    sessionCommand(
+                        chatId,
+                        BrowserControl.planSwitch(
+                            TaskStore(this).all(), registryRoot,
+                            chatId, switchCmd,
+                            LilleXState.verifiedHandle(
+                                TaskStore(this).all()
+                            )
+                        )
+                    )
+                    return
+                }
+            }
+        }
+
         // REASON FROM THE RECORD (v1.0.5): "why paused" —
         // and its kin — ask for the CAUSE the record
         // carries, and get it deterministically: killed by
@@ -1340,6 +1417,29 @@ class MainActivity : AppCompatActivity() {
                 raw, allForLogin, chatId
             )
             if (loginTask != null) {
+                // THE SENSE ANSWERS FIRST (v1.0.10): the
+                // continuously-sensed session, when fresh,
+                // IS the current sign-in — refreshed by
+                // the browser's own motion, it outranks
+                // any single record's stamp.
+                val senseRoot = SessionSenseStore(this).root()
+                val sensed = SessionSense.freshConclusion(
+                    senseRoot, AccountsRegistry.PLATFORM_X,
+                    allForLogin, BrowserSession.lastActivityAt
+                )
+                if (sensed != null) {
+                    appendAssistantMessage(
+                        chatId,
+                        StatusProbe.loginAnswerFromSense(
+                            sensed.handle,
+                            SessionSense.sensedAt(
+                                senseRoot,
+                                AccountsRegistry.PLATFORM_X
+                            )
+                        )
+                    )
+                    return
+                }
                 val activity = SessionIdentity.lastBrowserActivity(
                     allForLogin, BrowserSession.lastActivityAt
                 )
@@ -1713,6 +1813,88 @@ class MainActivity : AppCompatActivity() {
         BackupManager.requestBackup(this)
     }
 
+    /** CLOSE THE BROWSER, EXECUTED (v1.0.10, Fix 1):
+     *  BrowserControl's plan, applied in order — the
+     *  work driving the panel halts to a PAUSE with the
+     *  reason stamped on its record (never a kill; it
+     *  resumes by word), the commanded close is stamped
+     *  for the panel's refresh (whose hidden branch
+     *  detaches the WebView — he SEES it close), and
+     *  the one deterministic line lands. */
+    private fun closeBrowserCommand(chatId: String, command: String) {
+        val store = TaskStore(this)
+        val now = System.currentTimeMillis()
+        val plan = BrowserControl.planClose(
+            store.all(),
+            panelTaskId,
+            ::browserPanel.isInitialized &&
+                browserPanel.visibility == View.VISIBLE,
+            TaskGate.shared.browserOwnerTask()
+        )
+        plan.haltTaskId?.let { haltId ->
+            TaskWorker.cancel(this, haltId)
+            store.update(haltId, TaskStates.PAUSED) {
+                BrowserControl.stampBrowserClosed(it, command, now)
+            }
+        }
+        plan.dismissTaskId?.let { dismissId ->
+            panelDismissedTaskId = dismissId
+            panelClosedTaskId = dismissId
+            panelClosedState = store.get(dismissId)
+                ?.optString("state")
+        }
+        refreshBrowserPanel()
+        appendAssistantMessage(chatId, plan.reply)
+        BackupManager.requestBackup(this)
+    }
+
+    /** A SPOKEN SESSION COMMAND, DISPATCHED (v1.0.10):
+     *  BrowserControl's plan names the record the
+     *  command rides (or that one must be created for
+     *  it); the record is linked to this chat, the
+     *  session pass is enqueued under the record's own
+     *  name, and the plan's deterministic line lands
+     *  now — the pass lands its own verified outcome
+     *  line when it finishes. */
+    private fun sessionCommand(
+        chatId: String, plan: BrowserControl.SessionPlan
+    ) {
+        val store = TaskStore(this)
+        val recordId = if (plan.createRecord) {
+            val created = store.create(
+                BrowserControl.sessionRecordText(plan.targetHandle)
+            )
+            val newId = created.optString("id")
+            store.update(newId) {
+                it.put("title", BrowserControl.SESSION_RECORD_TITLE)
+                it.put("kind", "browser")
+                it.put("lane", "device")
+                it.put(
+                    "browserDomains",
+                    org.json.JSONArray().put("x.com")
+                )
+                it.put(BrowserControl.SESSION_COMMAND_FIELD, true)
+            }
+            newId
+        } else {
+            plan.recordId ?: return
+        }
+        linkTaskToChat(recordId, chatId)
+        val action = when (plan.action) {
+            BrowserControl.SessionAction.SIGN_OUT ->
+                TaskWorker.ACTION_SIGN_OUT
+            BrowserControl.SessionAction.SWITCH_HER ->
+                TaskWorker.ACTION_SWITCH_HER
+            BrowserControl.SessionAction.SWITCH_HIS ->
+                TaskWorker.ACTION_SWITCH_HIS
+        }
+        TaskWorker.enqueueAccountSession(
+            this, recordId, action, plan.targetHandle
+        )
+        appendAssistantMessage(chatId, plan.reply)
+        BackupManager.requestBackup(this)
+    }
+
     /** The targeted kill (v1.0.6): stop the ONE task the
      *  command resolved to — TaskControl's order: the name
      *  in the message, this chat's on-screen status card,
@@ -1834,6 +2016,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (panelDismissedTaskId == id) {
                     panelDismissedTaskId = null
+                }
+                if (panelClosedTaskId == id) {
+                    panelClosedTaskId = null
+                    panelClosedState = null
                 }
                 refreshBrowserPanel()
                 appendAssistantMessage(
@@ -2299,28 +2485,61 @@ class MainActivity : AppCompatActivity() {
         ) {
             panelDismissedTaskId = null
         }
+        // A commanded close (v1.0.10) belongs to ONE task
+        // in ONE state: a different task — or the same
+        // task having moved (a resume, a handback, a new
+        // park) — clears it.
+        if (panelClosedTaskId != null &&
+            (panelClosedTaskId != taskId ||
+                panelClosedState != task?.optString("state"))
+        ) {
+            panelClosedTaskId = null
+            panelClosedState = null
+        }
         val dismissed = panelDismissedTaskId != null &&
             panelDismissedTaskId == taskId
-        applyPanelState(state, task, dismissed)
+        val closedByCommand = panelClosedTaskId != null &&
+            panelClosedTaskId == taskId
+        // PANEL-OPEN SENSING (v1.0.10): the panel coming
+        // on screen re-senses the last settled page —
+        // the session state refreshes by the act of
+        // looking, no task has to ask.
+        if (state != BrowserPanel.State.HIDDEN) {
+            BrowserSession.lastState?.let {
+                try {
+                    sensePageSettled(this, it)
+                } catch (e: Exception) {
+                    // Sensing never breaks the panel.
+                }
+            }
+        }
+        applyPanelState(state, task, dismissed, closedByCommand)
     }
 
     private fun applyPanelState(
         state: BrowserPanel.State,
         task: JSONObject?,
-        dismissed: Boolean = false
+        dismissed: Boolean = false,
+        closedByCommand: Boolean = false
     ) {
         panelState = state
         panelTaskId = task?.optString("id")?.takeIf { it.isNotEmpty() }
         // The indicator chip (v1.0.3): shown exactly while
         // the panel is dismissed and the work is still
         // browsing — one tap reopens the panel.
-        if (BrowserPanel.indicatorShown(state, dismissed)) {
+        if (BrowserPanel.indicatorShown(
+                state, dismissed, closedByCommand
+            )
+        ) {
             browserChip.text = BrowserPanel.INDICATOR_LINE
             browserChip.visibility = View.VISIBLE
         } else {
             browserChip.visibility = View.GONE
         }
-        if (!BrowserPanel.panelVisible(state, dismissed)) {
+        if (!BrowserPanel.panelVisible(
+                state, dismissed, closedByCommand
+            )
+        ) {
             // Hidden — no work, or dismissed by the user.
             // Either way the session detaches (it lives on
             // in BrowserSession; her steps keep driving it)
@@ -3007,7 +3226,11 @@ class MainActivity : AppCompatActivity() {
                 accountsLines = AccountsRegistry.summaryLines(
                     AccountRegistryStore(this).root()
                 ),
-                browserActivityAt = BrowserSession.lastActivityAt
+                browserActivityAt = BrowserSession.lastActivityAt,
+                senseLine = SessionSense.senseLine(
+                    SessionSenseStore(this).root(),
+                    AccountsRegistry.PLATFORM_X
+                )
             ),
             System.currentTimeMillis()
         )

@@ -81,6 +81,36 @@ object BrowserPanel {
         dismissed && state != State.HIDDEN && state != State.PARKED
 
     /**
+     * COMMANDED CLOSE (v1.0.10, Fix 1): "close the
+     * browser" in chat is a direct order, stronger
+     * than the Close button's dismissal — it hides
+     * the panel in EVERY state, a park included (the
+     * 1.0.3 park-override governs the button and
+     * automatic reopening, not his spoken word). The
+     * close holds until the task's state changes (a
+     * resume, a handback, a new park) — the glue
+     * tracks the state it was commanded in. The work
+     * itself is untouched here: the close command's
+     * halt lives in BrowserControl's plan + the
+     * runner's states.
+     */
+    fun panelVisible(
+        state: State, dismissed: Boolean, closedByCommand: Boolean
+    ): Boolean =
+        if (closedByCommand) false else panelVisible(state, dismissed)
+
+    /** The indicator under a commanded close: the
+     *  chip still offers the one-tap way back for
+     *  live work (never for parked or hidden states,
+     *  the same exclusions as a dismissal). */
+    fun indicatorShown(
+        state: State, dismissed: Boolean, closedByCommand: Boolean
+    ): Boolean =
+        indicatorShown(state, dismissed) ||
+            (closedByCommand && state != State.HIDDEN &&
+                state != State.PARKED)
+
+    /**
      * @param taskState the chat's newest work record's
      *   state, or null when the chat has no work.
      * @param taskIsBrowser the work uses the browser lane.

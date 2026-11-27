@@ -468,7 +468,7 @@ class TaskRunner(private val context: Context) {
                     }
                 }
                 val outcome = try {
-                    readXIdentityHere()
+                    readXIdentityHere(browserDomains(task))
                 } catch (e: Exception) {
                     IdentityOutcome.Unreadable(
                         "the sign-in check itself failed"
@@ -2582,71 +2582,151 @@ class TaskRunner(private val context: Context) {
         }
     }
 
-    /**
-     * THE CONCLUDING IDENTITY READ (v1.0.9). The 1.0.8
-     * read was xHandle() alone: null meant signed OUT —
-     * but null also means "the handle isn't exposed on
-     * this page" (on mobile X it sits behind the
-     * top-left avatar), so a signed-in home feed was
-     * stamped signed out, and the stale stamp was later
-     * quoted as fact. This read judges the page's SHAPE
-     * (BrowserPerception.xIdentityShape, fixture-
-     * pinned): handle in the tree → signed in; sign-in
-     * chrome and no session furniture → signed out;
-     * session furniture but no handle → the scripted
-     * reveal (open the account menu / profile, re-read)
-     * and only then a conclusion; anything else →
-     * Unreadable with the reason, which the caller
-     * stamps as such — never a recycled older stamp.
-     * Runs wherever the browser currently rests; the
-     * caller positions it first.
-     */
-    private fun readXIdentityHere(): IdentityOutcome {
-        var state = BrowserSession.read(context)
-        var handle = try {
-            xHandle()
-        } catch (e: Exception) {
-            null
-        } ?: BrowserPerception.xHandleFromState(state)
-        if (handle != null) return IdentityOutcome.SignedIn(handle)
-        return when (BrowserPerception.xIdentityShape(state, null)) {
-            BrowserPerception.XIdentityShape.SIGNED_OUT ->
-                IdentityOutcome.SignedOut
-            BrowserPerception.XIdentityShape.HANDLE_BEHIND_MENU -> {
-                try {
-                    BrowserSession.evalValue(
-                        context,
-                        BrowserPerception.X_OPEN_ACCOUNT_MENU_JS
-                    )
-                } catch (e: Exception) {
-                    null
-                }
-                Thread.sleep(1_200)
-                state = BrowserSession.read(context)
-                handle = try {
-                    xHandle()
-                } catch (e: Exception) {
-                    null
-                } ?: BrowserPerception.xHandleFromState(state)
-                    ?: BrowserPerception.xHandleFromProfileUrl(state.url)
-                if (handle != null) {
-                    IdentityOutcome.SignedIn(handle)
-                } else {
-                    IdentityOutcome.Unreadable(
-                        "the account menu opened but showed no handle"
-                    )
-                }
+    /** The session driver over the real WebView: the
+     *  surface the navigation read (XIdentityRead) and
+     *  the account routines (AccountSession) compose
+     *  over. Navigation goes through xOpen, so the
+     *  task's own allowlist governs every move. */
+    private inner class SessionDriver(
+        private val domains: List<String>
+    ) : AccountSession.Driver {
+        override fun currentState(): BrowserPerception.PageState =
+            BrowserSession.read(context)
+
+        override fun navigate(
+            url: String
+        ): BrowserPerception.PageState = xOpen(url, domains)
+
+        override fun revealAccountMenu():
+            BrowserPerception.PageState {
+            try {
+                BrowserSession.evalValue(
+                    context,
+                    BrowserPerception.X_OPEN_ACCOUNT_MENU_JS
+                )
+            } catch (e: Exception) {
+                null
             }
-            BrowserPerception.XIdentityShape.HANDLE_IN_TREE ->
-                IdentityOutcome.Unreadable(
-                    "the page showed the account area but no readable handle"
-                )
-            BrowserPerception.XIdentityShape.UNREADABLE ->
-                IdentityOutcome.Unreadable(
-                    "the page shows neither a signed-in account nor a sign-in form"
-                )
+            Thread.sleep(1_200)
+            return BrowserSession.read(context)
+        }
+
+        override fun clickRef(
+            ref: Int
+        ): BrowserPerception.PageState =
+            BrowserSession.clickRef(context, ref)
+
+        override fun clickText(
+            text: String
+        ): BrowserPerception.PageState =
+            BrowserSession.clickText(context, text)
+
+        override fun type(
+            ref: Int, value: String, secret: Boolean
+        ): BrowserPerception.PageState =
+            BrowserSession.type(context, ref, value, secret)
+    }
+
+    /**
+     * THE CONCLUDING IDENTITY READ (v1.0.10 — identity
+     * by navigation, [XIdentityRead]). 1.0.9 judged the
+     * page's shape and on-device the tree never
+     * testified (the assumed testids weren't there), so
+     * reads landed unreadable or stale while the
+     * browser sat signed in. Now the read NAVIGATES to
+     * X's own-profile route and judges the landed URL —
+     * X's own redirect is the witness — with the page
+     * read kept as the corroborating fallback and as
+     * the in-place read where navigation is forbidden
+     * ([mayNavigate] false: a parked page is evidence;
+     * a mid-signup flow page must survive a resume).
+     * Callers position the browser first, as before.
+     */
+    private fun readXIdentityHere(
+        domains: List<String>, mayNavigate: Boolean = true
+    ): IdentityOutcome {
+        val outcome = XIdentityRead.conclude(
+            SessionDriver(domains), mayNavigate
+        )
+        return when (outcome) {
+            is XIdentityRead.Outcome.SignedIn ->
+                IdentityOutcome.SignedIn(outcome.handle)
+            is XIdentityRead.Outcome.SignedOut ->
+                IdentityOutcome.SignedOut
+            is XIdentityRead.Outcome.Unreadable ->
+                IdentityOutcome.Unreadable(outcome.reason)
         }
     }
+
+    /** A concluding read that APPLIES itself: every
+     *  conclusion stamps the record, syncs the
+     *  registry and refreshes the session sense; an
+     *  unreadable read stamps only the unreadable
+     *  mark. The account routines (sign-out, sign-in,
+     *  switch) and the acting-identity path read
+     *  through this — conclusions are the only thing
+     *  that moves the record, the registry or the
+     *  sense, so a switch that fails halfway leaves
+     *  all three reading the last verified truth. */
+    private fun applyingRead(task: JSONObject): IdentityRead {
+        val id = task.optString("id")
+        val domains = browserDomains(task)
+        return { mayNavigate ->
+            val outcome = try {
+                XIdentityRead.conclude(
+                    SessionDriver(domains), mayNavigate
+                )
+            } catch (e: Exception) {
+                XIdentityRead.Outcome.Unreadable(
+                    "the sign-in check itself failed"
+                )
+            }
+            val now = System.currentTimeMillis()
+            when (outcome) {
+                is XIdentityRead.Outcome.SignedIn -> {
+                    store.update(id) {
+                        stampIdentityOn(it, outcome.handle, now)
+                    }
+                    store.get(id)?.let {
+                        syncAccountRegistry(it, outcome.handle)
+                    }
+                }
+                is XIdentityRead.Outcome.SignedOut -> {
+                    store.update(id) {
+                        stampIdentityOn(it, null, now)
+                    }
+                    store.get(id)?.let {
+                        syncAccountRegistry(it, null)
+                    }
+                }
+                is XIdentityRead.Outcome.Unreadable ->
+                    store.update(id) {
+                        SessionIdentity.stampUnreadable(
+                            it, outcome.reason, now
+                        )
+                    }
+            }
+            outcome
+        }
+    }
+
+    /** The scripted sign-out (AccountSession) over
+     *  this task's record, its conclusions applied as
+     *  they land. */
+    private fun runScriptedSignOut(
+        task: JSONObject
+    ): AccountSession.SignOutResult =
+        try {
+            AccountSession.signOut(
+                SessionDriver(browserDomains(task)),
+                applyingRead(task)
+            )
+        } catch (e: Exception) {
+            AccountSession.SignOutResult.Failed(
+                AccountSession.STEP_VERIFY_LOGOUT,
+                "the sign-in check itself failed"
+            )
+        }
 
     /**
      * THE IDENTITY RE-CHECK PASS (v1.0.9): a read-only
@@ -2703,7 +2783,12 @@ class TaskRunner(private val context: Context) {
                 if (!onX) {
                     xOpen("https://x.com/home", browserDomains(task))
                 }
-                readXIdentityHere()
+                // In place when parked (the page is
+                // evidence); the navigation proof
+                // everywhere else (v1.0.10).
+                readXIdentityHere(
+                    browserDomains(task), mayNavigate = !parked
+                )
             } catch (e: Exception) {
                 IdentityOutcome.Unreadable(
                     "the sign-in check itself failed"
@@ -2826,12 +2911,11 @@ class TaskRunner(private val context: Context) {
             return BrowserPerception.challengeObservation(it) +
                 "\n(page: ${state.url})"
         }
-        // The concluding read (v1.0.9): a handle hidden
-        // behind the account menu is revealed, not
-        // misread as signed out; a page that says
-        // neither is reported unreadable, not logged_out.
+        // The concluding read (v1.0.10): the
+        // navigation proof — X's own-profile route
+        // names the session in its landed URL.
         val outcome = try {
-            readXIdentityHere()
+            readXIdentityHere(domains)
         } catch (e: Exception) {
             IdentityOutcome.Unreadable(
                 "the sign-in check itself failed"
@@ -2903,50 +2987,380 @@ class TaskRunner(private val context: Context) {
         return null
     }
 
-    /** THE IDENTITY PRECONDITION (v1.0.8): before an
-     *  account-scoped action (post, read-as, profile
-     *  change), the browser's live handle must equal the
-     *  task's target — and the registry's active entry
-     *  must agree. A mismatch stops the action and names
-     *  it; no action ever runs under the wrong account.
-     *  Returns the refusal text, or null to proceed. */
-    private fun identityPrecondition(
-        task: JSONObject, liveHandle: String?, action: String
+    /**
+     * THE IDENTITY PRECONDITION — NOW IT ACTS
+     * (v1.0.10, Fix 3.3). 1.0.8 stopped and named a
+     * mismatch because no switching machinery existed;
+     * now the machinery exists ([AccountSession]), so
+     * the precondition EXECUTES the switch and only
+     * stops when the switch itself fails, naming the
+     * failed step:
+     *
+     * - The SENSED session first (the extension's
+     *   rule): a fresh sense naming the target means
+     *   the session is already the saved credential —
+     *   the action proceeds with no read, no login
+     *   step, no ask.
+     * - A concluding read naming the target: proceed.
+     * - A mismatch or a signed-out browser: switch.
+     *   Target hers → the full autonomous switch
+     *   (sign-out, then her vault sign-in). Target
+     *   his → sign out, then the HANDOFF observation
+     *   (the existing park machinery takes his login
+     *   in the panel; his password is never
+     *   attempted) — parked ONCE per expiry: if
+     *   another task already waits on that sign-in,
+     *   this action waits too instead of parking
+     *   again.
+     * - A wall mid-switch: the challenge observation
+     *   (the loop parks it). An unreadable read or a
+     *   failed step: the refusal, naming the step.
+     *
+     * Returns null to proceed, or the tool result to
+     * return instead of acting.
+     */
+    private fun ensureActingIdentity(
+        id: String, task: JSONObject, action: String
     ): String? {
         val target = targetHandleFor(task) ?: return null
-        if (liveHandle == null) {
-            return "error: IDENTITY — $action needs the browser " +
-                "signed in as @$target, but no account is " +
-                "signed in. Sign in as @$target first."
-        }
-        if (!liveHandle.equals(target, true)) {
-            return "error: IDENTITY — this task acts as " +
-                "@$target, but the browser is signed in as " +
-                "@$liveHandle. No action runs under the wrong " +
-                "account: switch accounts first (a recorded " +
-                "step), or stop and name it."
-        }
-        val pre = AccountsRegistry.precondition(
-            AccountRegistryStore(context).root(),
-            AccountsRegistry.PLATFORM_X, target
+        val senseStore = SessionSenseStore(context)
+        val fresh = SessionSense.freshConclusion(
+            senseStore.root(), AccountsRegistry.PLATFORM_X,
+            store.all(), BrowserSession.lastActivityAt
         )
-        if (pre == AccountsRegistry.Precondition.NEEDS_SWITCH) {
-            return "error: IDENTITY — the registry's active " +
-                "X account is not @$target. Switch accounts " +
-                "first (a recorded step), then $action."
+        if (fresh != null &&
+            fresh.handle?.equals(target, true) == true
+        ) {
+            return null
         }
-        if (pre == AccountsRegistry.Precondition.NOT_REGISTERED) {
-            // The live read just verified this account —
-            // register it so the registry agrees with the page.
-            syncAccountRegistry(task, liveHandle)
+        val read = applyingRead(task)
+        when (val o = read(true)) {
+            is XIdentityRead.Outcome.SignedIn ->
+                if (o.handle.equals(target, true)) return null
+            is XIdentityRead.Outcome.Unreadable ->
+                return "error: IDENTITY — $action is scoped " +
+                    "to @$target, but the browser's sign-in " +
+                    "could not be read (${o.reason}). No " +
+                    "action runs on an unknown sign-in."
+            is XIdentityRead.Outcome.SignedOut -> Unit
         }
-        return null
+        val registry = AccountRegistryStore(context)
+        val targetIsHers =
+            LilleXState.isCreationTask(task) ||
+                task.optString("title") == XAccountTask.CONNECT_TITLE ||
+                AccountsRegistry.find(
+                    registry.root(),
+                    AccountsRegistry.PLATFORM_X, target
+                )?.optString("owner") ==
+                    AccountsRegistry.OWNER_LILLE
+        val password = if (targetIsHers) {
+            vault.getSecret(LilleXState.X_PASSWORD_VAULT_KEY)
+        } else {
+            null
+        }
+        val result = try {
+            AccountSession.switchTo(
+                SessionDriver(browserDomains(task)),
+                target, targetIsHers, password, read
+            )
+        } catch (e: Exception) {
+            AccountSession.SwitchResult.Failed(
+                AccountSession.STEP_VERIFY_LOGIN,
+                "the sign-in check itself failed"
+            )
+        }
+        return when (result) {
+            is AccountSession.SwitchResult.Switched,
+            is AccountSession.SwitchResult.AlreadyActive -> null
+            is AccountSession.SwitchResult.NeedsUserLogin -> {
+                if (AccountsRegistry.sessionLoginParked(
+                        registry.root(),
+                        AccountsRegistry.PLATFORM_X, target
+                    )
+                ) {
+                    store.update(id) {
+                        it.put(
+                            "note",
+                            "Waiting on the sign-in for " +
+                                "@$target already parked in " +
+                                "another task."
+                        )
+                    }
+                    "error: IDENTITY — the browser is " +
+                        "signed out, and a sign-in for " +
+                        "@$target is already parked waiting " +
+                        "on the user in another task. " +
+                        "$action waits for that sign-in; " +
+                        "do not park a second time."
+                } else {
+                    val step = BrowserControl.switchParkStep(target)
+                    store.update(id) { it.put("handoffStep", step) }
+                    registry.recordSessionLoginPark(
+                        AccountsRegistry.PLATFORM_X, target,
+                        System.currentTimeMillis()
+                    )
+                    UserHandoff.OBSERVATION_PREFIX +
+                        " — $action is scoped to @$target; " +
+                        "the browser has been signed out " +
+                        "and is ready. $step"
+                }
+            }
+            is AccountSession.SwitchResult.Walled ->
+                BrowserPerception.challengeObservation(
+                    BrowserPerception.Challenge(
+                        result.kind, result.detail
+                    )
+                ) + "\n(page: ${BrowserSession.currentUrl()})"
+            is AccountSession.SwitchResult.Failed ->
+                "error: IDENTITY — switching to @$target " +
+                    "failed at ${result.step} (${result.reason}). " +
+                    "$action did not run under the wrong account."
+        }
+    }
+
+    /**
+     * CREATION-LANE UNBLOCK (v1.0.10, Fix 3.4): signup
+     * needs a signed-out browser, and any live session
+     * — his Connect session above all — silently
+     * blocks it. At SIGNUP_FORM entry (the lane start
+     * and the phase machine's step into it), a browser
+     * signed in as ANYONE is signed out by the
+     * scripted routine as a recorded step BEFORE the
+     * signup script posts. Returns null when the way
+     * is clear, or the stop-and-name instruction when
+     * the sign-out itself failed — the lane never
+     * starts a signup under someone else's session.
+     */
+    private fun ensureSignedOutForSignup(id: String): String? {
+        val task = store.get(id) ?: return null
+        if (!LilleXState.isCreationTask(task)) return null
+        if (XCreationPhases.currentPhase(task) !=
+            XCreationPhases.Phase.SIGNUP_FORM
+        ) {
+            return null
+        }
+        val read = applyingRead(task)
+        val outcome = read(true)
+        if (outcome !is XIdentityRead.Outcome.SignedIn) {
+            return null
+        }
+        val who = outcome.handle
+        val result = try {
+            AccountSession.signOut(
+                SessionDriver(browserDomains(task)), read
+            )
+        } catch (e: Exception) {
+            AccountSession.SignOutResult.Failed(
+                AccountSession.STEP_VERIFY_LOGOUT,
+                "the sign-in check itself failed"
+            )
+        }
+        val now = System.currentTimeMillis()
+        return when (result) {
+            is AccountSession.SignOutResult.Failed -> {
+                store.update(id) {
+                    it.put(
+                        "note",
+                        "The pre-signup sign-out failed at " +
+                            "${result.step} (${result.reason}) — " +
+                            "signup can't start under " +
+                            "@$who's session."
+                    )
+                    EventLog.append(
+                        it, "sign_out_failed", now,
+                        JSONObject()
+                            .put("step", result.step)
+                            .put("reason", result.reason)
+                    )
+                }
+                "SIGN-OUT BEFORE SIGNUP FAILED: the browser " +
+                    "was signed in as @$who and the scripted " +
+                    "sign-out failed at ${result.step} " +
+                    "(${result.reason}). Do NOT start the " +
+                    "signup under that session — it is not " +
+                    "yours to use. Finish now, naming this " +
+                    "failure exactly."
+            }
+            else -> {
+                store.update(id) {
+                    EventLog.append(
+                        it, "sign_out", now,
+                        JSONObject()
+                            .put("from", who)
+                            .put("reason", "pre_signup")
+                    )
+                }
+                null
+            }
+        }
+    }
+
+    /**
+     * THE SESSION PASS (v1.0.10): the spoken session
+     * commands' execution — "log out of X", "switch to
+     * @…" — run by TaskWorker's account-session mode
+     * under the browser gate. The routines are
+     * scripted (AccountSession); every outcome lands
+     * as ONE deterministic line in the record's origin
+     * chat, composed from the verified result
+     * (BrowserControl's line composers), never from
+     * the taps. A switch to HIS account parks the
+     * record on the hand-back step; a wall parks it as
+     * a wall. The record ends COMPLETED when it exists
+     * for the command, PAUSED (with the outcome as its
+     * note) when the command borrowed a lane's record.
+     * A record mid-run is never raced: the pass lands
+     * the busy line and stops.
+     */
+    fun runAccountSession(
+        id: String, action: String, target: String?
+    ) {
+        val task = store.get(id) ?: return
+        if (TaskControl.isArchived(task) ||
+            TaskControl.wasKilled(task)
+        ) {
+            return
+        }
+        val chatId = task.optString(ChatTaskLink.ORIGIN_FIELD)
+        fun land(text: String) {
+            if (chatId.isNotEmpty()) {
+                ChatStore(context).appendMessage(chatId, "lille", text)
+            }
+        }
+        val state = task.optString("state")
+        if (state == TaskStates.RUNNING ||
+            TaskStates.isTerminal(state)
+        ) {
+            land(BrowserControl.SESSION_BUSY_LINE)
+            return
+        }
+        if (state == TaskStates.QUEUED ||
+            state == TaskStates.PAUSED ||
+            state == TaskStates.WAITING_NETWORK ||
+            state == TaskStates.WAITING_ROUTE
+        ) {
+            store.update(id, TaskStates.RUNNING) { }
+        }
+        val fresh = store.get(id) ?: task
+        val sessionCommand =
+            fresh.optBoolean(BrowserControl.SESSION_COMMAND_FIELD)
+        var parked = false
+        var outcomeLine: String? = null
+        when (action) {
+            TaskWorker.ACTION_SIGN_OUT -> {
+                val result = runScriptedSignOut(fresh)
+                outcomeLine = BrowserControl.signOutLine(result)
+            }
+            TaskWorker.ACTION_SWITCH_HER -> {
+                val handle = target ?: ""
+                val result = try {
+                    AccountSession.switchTo(
+                        SessionDriver(browserDomains(fresh)),
+                        handle, true,
+                        vault.getSecret(
+                            LilleXState.X_PASSWORD_VAULT_KEY
+                        ),
+                        applyingRead(fresh)
+                    )
+                } catch (e: Exception) {
+                    AccountSession.SwitchResult.Failed(
+                        AccountSession.STEP_VERIFY_LOGIN,
+                        "the sign-in check itself failed"
+                    )
+                }
+                if (result is AccountSession.SwitchResult.Walled) {
+                    park(
+                        id,
+                        BrowserPerception.Challenge(
+                            result.kind, result.detail
+                        ),
+                        JSONArray(), steps = 1
+                    )
+                    parked = true
+                }
+                outcomeLine = BrowserControl.switchLine(result, handle)
+            }
+            TaskWorker.ACTION_SWITCH_HIS -> {
+                val handle = target ?: ""
+                val result = try {
+                    AccountSession.switchTo(
+                        SessionDriver(browserDomains(fresh)),
+                        handle, false, null,
+                        applyingRead(fresh)
+                    )
+                } catch (e: Exception) {
+                    AccountSession.SwitchResult.Failed(
+                        AccountSession.STEP_VERIFY_LOGIN,
+                        "the sign-in check itself failed"
+                    )
+                }
+                if (result is AccountSession.SwitchResult
+                        .NeedsUserLogin
+                ) {
+                    val step =
+                        BrowserControl.switchParkStep(handle)
+                    val now = System.currentTimeMillis()
+                    val wall = JSONObject()
+                        .put("domain", "x.com")
+                        .put("kind", UserHandoff.WALL_KIND)
+                        .put("detail", step)
+                        .put("step", 1)
+                        .put("at", now)
+                    store.update(
+                        id, TaskStates.PARKED_AT_WALL
+                    ) {
+                        it.put("wall", wall)
+                        it.put("wallStep", step)
+                        it.put("userHandoffDone", true)
+                        it.put(
+                            "note",
+                            "Waiting on your X sign-in " +
+                                "as @$handle."
+                        )
+                    }
+                    AccountRegistryStore(context)
+                        .recordSessionLoginPark(
+                            AccountsRegistry.PLATFORM_X,
+                            handle, now
+                        )
+                    WallNotify.notifyParked(context, id, step)
+                    parked = true
+                }
+                outcomeLine = BrowserControl.switchLine(result, handle)
+            }
+            else -> outcomeLine =
+                "That session command isn't one she can run."
+        }
+        outcomeLine?.let { land(it) }
+        if (parked) return
+        val endNote = outcomeLine
+        if (sessionCommand) {
+            store.update(id, TaskStates.COMPLETED) {
+                if (endNote != null) it.put("note", endNote)
+            }
+        } else {
+            store.update(id, TaskStates.PAUSED) {
+                if (endNote != null) it.put("note", endNote)
+            }
+        }
     }
 
     private fun xReadFeed(
         id: String, domains: List<String>, args: JSONObject
     ): String {
         val n = (args.optInt("count", 10)).coerceIn(1, 20)
+        // Identity FIRST (v1.0.10): a read-as is an
+        // account-scoped action. When this task has a
+        // target account, the acting precondition makes
+        // the session be it before the feed opens under
+        // anyone's name — switching when it can, parking
+        // or refusing (naming why) when it can't.
+        store.get(id)?.let { t ->
+            if (targetHandleFor(t) != null) {
+                ensureActingIdentity(id, t, "x_read_feed")
+                    ?.let { return it }
+            }
+        }
         val state = xOpen("https://x.com/home", domains)
         state.challenge?.let {
             return BrowserPerception.challengeObservation(it) +
@@ -2956,13 +3370,6 @@ class TaskRunner(private val context: Context) {
         if (feedHandle == null) {
             return "error: X_FEED unavailable — not logged in. " +
                 "x_session_status explains the session state."
-        }
-        // Identity precondition (v1.0.8): a read-as is an
-        // account-scoped action — the feed she reads must
-        // be the target account's own.
-        store.get(id)?.let { t ->
-            identityPrecondition(t, feedHandle, "x_read_feed")
-                ?.let { return it }
         }
         var posts = xArticles(n)
         if (posts.size < n) {
@@ -2988,19 +3395,21 @@ class TaskRunner(private val context: Context) {
         val n = (args.optInt("count", 10)).coerceIn(1, 20)
         val url = "https://x.com/search?q=" +
             URLEncoder.encode(q, "UTF-8") + "&src=typed_query"
+        // Identity FIRST (v1.0.10): search results are
+        // read as the signed-in account — when this
+        // task has a target, the acting precondition
+        // makes the session be it before the search
+        // opens under anyone's name.
+        store.get(id)?.let { t ->
+            if (targetHandleFor(t) != null) {
+                ensureActingIdentity(id, t, "x_search")
+                    ?.let { return it }
+            }
+        }
         val state = xOpen(url, domains)
         state.challenge?.let {
             return BrowserPerception.challengeObservation(it) +
                 "\n(page: ${state.url})"
-        }
-        // Identity precondition (v1.0.8): search results
-        // are read as the signed-in account — when this
-        // task has a target, the session must be it.
-        store.get(id)?.let { t ->
-            if (targetHandleFor(t) != null) {
-                identityPrecondition(t, xHandle(), "x_search")
-                    ?.let { return it }
-            }
         }
         val posts = xArticles(n)
         store.update(id) {
@@ -3050,6 +3459,12 @@ class TaskRunner(private val context: Context) {
             (System.currentTimeMillis() - lastPostTs)
         if (waitMs > 0) Thread.sleep(waitMs)
 
+        // Identity FIRST (v1.0.10): a post runs ONLY
+        // under the task's own account — the acting
+        // precondition makes the session be it before
+        // the composer opens under anyone's name.
+        ensureActingIdentity(id, task, "x_post")
+            ?.let { return it }
         val state = xOpen("https://x.com/home", domains)
         state.challenge?.let {
             return BrowserPerception.challengeObservation(it) +
@@ -3057,12 +3472,6 @@ class TaskRunner(private val context: Context) {
         }
         val handle = xHandle()
             ?: return "error: X_POST unavailable — not logged in."
-        // Identity precondition (v1.0.8): the post must
-        // run under the task's own account — the live
-        // handle and the registry's active entry must
-        // both be the target, or the post does not run.
-        identityPrecondition(task, handle, "x_post")
-            ?.let { return it }
         val composer = BrowserSession.lastState?.elements
             ?.firstOrNull { it.testid == "tweetTextarea_0" }
             ?: return "error: X_POST — composer box not found on the page"
@@ -3134,6 +3543,14 @@ class TaskRunner(private val context: Context) {
      *  active entry's lastActiveAt has already moved in
      *  the registry itself. */
     private fun syncAccountRegistry(task: JSONObject, handle: String?) {
+        // CONTINUOUS SESSION AWARENESS (v1.0.10): a
+        // concluding read is a sense update too — the
+        // sense, the contradiction pass over the other
+        // records and the unprompted announcement all
+        // ride this sync.
+        recordSensedRead(
+            context, handle, BrowserSession.currentUrl()
+        )
         val registry = AccountRegistryStore(context)
         if (handle == null) {
             registry.recordSignedOut(AccountsRegistry.PLATFORM_X)
@@ -3189,16 +3606,32 @@ class TaskRunner(private val context: Context) {
         // account menu. An unconcluded read now stamps
         // unreadable and instructs accordingly — the
         // lane never separates accounts on a guess.
+        // CREATION-LANE UNBLOCK (v1.0.10): at
+        // SIGNUP_FORM entry, a browser signed in as
+        // anyone (his Connect session above all) is
+        // signed out by the scripted routine BEFORE
+        // the phase script posts; a failed sign-out
+        // replaces the script with the stop-and-name
+        // instruction below.
+        val signupBlock = ensureSignedOutForSignup(id)
         val outcome = try {
+            val currentUrl = BrowserSession.currentUrl()
             val currentDomain = BrowserPerception.domainOf(
-                BrowserSession.currentUrl()
+                currentUrl
             )
             if (currentDomain != "x.com" &&
                 !currentDomain.endsWith(".x.com")
             ) {
                 xOpen("https://x.com/home", domains)
             }
-            readXIdentityHere()
+            // A flow page (signup, login) is a lane in
+            // motion: read it in place so the flow
+            // survives; every other position takes the
+            // navigation proof (v1.0.10).
+            readXIdentityHere(
+                domains,
+                mayNavigate = !currentUrl.contains("/i/flow/")
+            )
         } catch (e: Exception) {
             IdentityOutcome.Unreadable(
                 "the sign-in check itself failed"
@@ -3302,6 +3735,7 @@ class TaskRunner(private val context: Context) {
         if (outcome !is IdentityOutcome.Unreadable) {
             syncAccountRegistry(store.get(id) ?: task, handle)
         }
+        if (signupBlock != null) instruction = signupBlock
         instruction?.let {
             messages.put(
                 JSONObject().put("role", "user").put("content", it)
@@ -3500,12 +3934,32 @@ class TaskRunner(private val context: Context) {
             if (fresh.optString(XCreationPhases.NOTE_FIELD) !=
                 phase.name
             ) {
-                val script = XCreationPhases.scriptFor(fresh, phase)
-                store.update(id) {
-                    it.put(XCreationPhases.NOTE_FIELD, phase.name)
+                // CREATION-LANE UNBLOCK (v1.0.10): the
+                // step INTO signup signs out any live
+                // session first, as a recorded step; a
+                // failed sign-out replaces the script
+                // with the stop-and-name instruction and
+                // the phase note stays unstamped, so the
+                // check re-runs on the next step.
+                val signupBlock = if (
+                    phase == XCreationPhases.Phase.SIGNUP_FORM
+                ) {
+                    ensureSignedOutForSignup(id)
+                } else {
+                    null
                 }
-                inject = listOfNotNull(inject, script)
-                    .joinToString("\n")
+                if (signupBlock != null) {
+                    inject = listOfNotNull(inject, signupBlock)
+                        .joinToString("\n")
+                } else {
+                    val script =
+                        XCreationPhases.scriptFor(fresh, phase)
+                    store.update(id) {
+                        it.put(XCreationPhases.NOTE_FIELD, phase.name)
+                    }
+                    inject = listOfNotNull(inject, script)
+                        .joinToString("\n")
+                }
             }
         }
         // The gate's profile evidence: her profile page

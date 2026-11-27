@@ -67,6 +67,31 @@ class TaskWorker(context: Context, params: WorkerParameters) :
             }
             return Result.success()
         }
+        // ACCOUNT-SESSION mode (v1.0.10): the spoken
+        // session commands' execution ("log out of X",
+        // "switch to @…") — the scripted routines run
+        // under the browser gate like any browser work,
+        // and the pass lands its own deterministic line
+        // in the record's origin chat.
+        if (inputData.getString(KEY_MODE) == MODE_ACCOUNT_SESSION) {
+            TaskStore(applicationContext).get(taskId)
+                ?: return Result.failure()
+            watchdogPass(applicationContext, excluding = taskId)
+            if (!TaskGate.shared.tryAcquire(taskId, true)) {
+                return Result.retry()
+            }
+            try {
+                TaskRunner(applicationContext).runAccountSession(
+                    taskId,
+                    inputData.getString(KEY_ACTION)
+                        ?: ACTION_SIGN_OUT,
+                    inputData.getString(KEY_TARGET)
+                )
+            } finally {
+                TaskGate.shared.release(taskId)
+            }
+            return Result.success()
+        }
         // Bounded concurrency (v1.0.1, TaskGate): at most
         // two task runs progress at once, and the exclusive
         // browser lane admits one browser run at a time. A
@@ -175,8 +200,53 @@ class TaskWorker(context: Context, params: WorkerParameters) :
         const val KEY_TASK_ID = "task_id"
         const val KEY_MODE = "mode"
         const val MODE_IDENTITY_RECHECK = "identity_recheck"
+        const val MODE_ACCOUNT_SESSION = "account_session"
+        const val KEY_ACTION = "session_action"
+        const val KEY_TARGET = "session_target"
+
+        /** The session pass's actions (v1.0.10) — the
+         *  string forms of BrowserControl.SessionAction
+         *  the spoken commands resolve to. */
+        const val ACTION_SIGN_OUT = "sign_out"
+        const val ACTION_SWITCH_HER = "switch_her"
+        const val ACTION_SWITCH_HIS = "switch_his"
 
         fun uniqueName(taskId: String) = "lille-task-$taskId"
+
+        /** Enqueue a session pass (v1.0.10) under the
+         *  record's OWN unique name: the pass IS the
+         *  record's next run, so it replaces any pending
+         *  one — a spoken command outranks a queued
+         *  continuation, and the record the command
+         *  names is never mid-run when the pass lands
+         *  (the gate + the pass's own busy guard). */
+        fun enqueueAccountSession(
+            context: Context, taskId: String,
+            action: String, target: String?
+        ) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+            val request = OneTimeWorkRequestBuilder<TaskWorker>()
+                .setConstraints(constraints)
+                .setInputData(
+                    workDataOf(
+                        KEY_TASK_ID to taskId,
+                        KEY_MODE to MODE_ACCOUNT_SESSION,
+                        KEY_ACTION to action,
+                        KEY_TARGET to (target ?: "")
+                    )
+                )
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    60, TimeUnit.SECONDS
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                uniqueName(taskId),
+                ExistingWorkPolicy.REPLACE, request
+            )
+        }
 
         /** Enqueue an identity re-check (v1.0.9) under its
          *  OWN unique name — it must never REPLACE (or be
@@ -311,6 +381,18 @@ class TaskWorker(context: Context, params: WorkerParameters) :
             for (id in TaskWatchdog.identityRecheckIds(tasks, now)) {
                 if (id == excluding) continue
                 enqueueIdentityRecheck(context, id)
+            }
+            // SESSION RECONCILIATION (v1.0.10): the
+            // watchdog's passes are the heartbeat's
+            // on-device form — records reconcile against
+            // sensed reality (the last settled page is
+            // re-sensed; every stale X stamp is owed its
+            // live re-read). Reality wins; the sweep
+            // leaves its events on the records it moves.
+            try {
+                senseAppOpenSweep(context)
+            } catch (e: Exception) {
+                // The sweep never breaks a pass.
             }
         }
 
