@@ -50,7 +50,7 @@ the wait, and a plain all-routes-down message after its retries.
 |---|---|---|---|---|
 | 1 | Pollinations (keyless) | none | ~1 concurrent, ~45s between requests per IP; **hard cap 100 replies/day per IP** (402 FREE_LIMIT, resets 00:00 UTC — live re-confirmed 2026-11-26); on shared/carrier IPs the cap is shared with strangers; best-effort | **live** |
 | 2 | AI Horde (keyless) | none (public anonymous key) | Queue-based community compute: tens of seconds to minutes per answer; community models, quality varies; raw completions only — no chat format, **no native tool calls** (since the 2026-11-26 loop-path fix it also serves complete() via the loop's fenced-JSON text protocol, catalogue rendered as text) | **live (v0.12)** — fallback of last resort: chat, and the tool-call path via the text protocol |
-| 3 | Groq | own key (optional) | Per-model: Llama 3.3 70B ~1,000 req/day + 100k tokens/day; Llama 3.1 8B ~14,400 req/day + 500k tokens/day | **live (v0.12.1)** — own key only; default model `llama-3.3-70b-versatile` |
+| 3 | Groq | own key (optional) | Per-model: GPT-OSS 120B ~200k tokens/day (provider docs) | **live (v0.12.1)** — own key only; default model `openai/gpt-oss-120b` (the earlier `llama-3.3-70b-versatile` default 404s model_not_found on the owner's account — verified live 2026-11-26; fixed in v1.0.2) |
 | 4 | Gemini free tier | own key (optional) | Per-model caps shown in AI Studio; change frequently | **live (v0.12.1)** — own key only; default model `gemini-flash-latest` |
 | 5 | Cerebras | own key (optional) | Free tier ~1M tokens/day, ~30 req/min (provider docs) | **live (v0.12.1)** — own key only; default model `llama-3.3-70b` |
 | 6 | OpenRouter `:free` | own key (optional) | ~50 requests/day on free models without credit purchase | **live (v0.12.1)** — own key only; default model `openrouter/free` |
@@ -98,9 +98,13 @@ no longer fallbacks behind the keyless pair:
   provider, reporting only success/failure + the model
   count when listed — the key is never echoed anywhere.
 - **Default models, and how each was chosen (2026-11-26):**
-  Groq `llama-3.3-70b-versatile` and Cerebras
-  `llama-3.3-70b` are the providers' documented free-tier
-  production models (provider docs; their /models lists are
+  Groq `openai/gpt-oss-120b` — proven live on the owner's
+  account through the core engine on 2026-11-26 (the
+  originally chosen `llama-3.3-70b-versatile` answers 404
+  model_not_found there; v1.0.2 aligned the Android
+  default with the core's fix). Cerebras
+  `llama-3.3-70b` is the provider's documented free-tier
+  production model (provider docs; its /models list is
   key-gated, so no keyless check exists). Gemini
   `gemini-flash-latest` is Google's documented alias for the
   current Flash model (the core's long-standing default).

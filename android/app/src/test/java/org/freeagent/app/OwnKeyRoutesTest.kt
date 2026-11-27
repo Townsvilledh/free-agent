@@ -218,6 +218,32 @@ class OwnKeyRoutesTest {
         )
     }
 
+    // ---- Groq default model (regression pin, 2026-11-27) ----
+    // Mirrors the core's tests/test_groq_provider_config.py:
+    // llama-3.3-70b-versatile returns 404 model_not_found on
+    // the owner's Groq account (verified live 2026-11-26),
+    // while openai/gpt-oss-120b was proven live through the
+    // core engine the same day (PROOF_OK provider=groq,
+    // trace 20261126-191027-4d9146). Every own-key Groq call
+    // sends exactly this default — the dead model made the
+    // route fail every call and fall back to keyless.
+
+    @Test
+    fun groqDefaultModelIsTheProvenOne() {
+        val groq = OwnKeyRoutes.spec(BrainFailure.Route.GROQ)!!
+        assertEquals("openai/gpt-oss-120b", groq.defaultModel)
+        assertEquals(
+            "openai/gpt-oss-120b",
+            OwnKeyRoutes.chatModel(groq, null)
+        )
+    }
+
+    @Test
+    fun groqDeadModelNeverLeads() {
+        val groq = OwnKeyRoutes.spec(BrainFailure.Route.GROQ)!!
+        assertFalse(groq.defaultModel == "llama-3.3-70b-versatile")
+    }
+
     // ---- URL / model shaping ----
 
     @Test
@@ -245,7 +271,7 @@ class OwnKeyRoutesTest {
             OwnKeyRoutes.chatModel(custom, "  ")
         )
         assertEquals(
-            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-120b",
             OwnKeyRoutes.chatModel(groq, "ignored-for-fixed-providers")
         )
     }

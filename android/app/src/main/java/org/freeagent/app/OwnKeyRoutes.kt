@@ -25,9 +25,16 @@ import org.json.JSONObject
  *
  * Default models (verified 2026-11-26 where a keyless check
  * exists; ROUTES.md carries the evidence):
- * - Groq `llama-3.3-70b-versatile` — Groq's documented
- *   production model; free tier ~1,000 req/day + 100k
- *   tokens/day (provider docs).
+ * - Groq `openai/gpt-oss-120b` — the model PROVEN LIVE on
+ *   the owner's Groq account through the core engine on
+ *   2026-11-26 (hostkeys proof, trace
+ *   20261126-191027-4d9146). The previous default,
+ *   `llama-3.3-70b-versatile`, returns 404
+ *   model_not_found on that account — verified live the
+ *   same day; the core fixed it identically in
+ *   free_agent/config.py (pinned by
+ *   tests/test_groq_provider_config.py). Never lead with
+ *   the dead model again; OwnKeyRoutesTest pins this.
  * - Gemini `gemini-flash-latest` — Google's documented
  *   alias for the current Flash model on the Gemini API's
  *   OpenAI-compatible endpoint (the core's long-standing
@@ -67,7 +74,7 @@ object OwnKeyRoutes {
     val SPECS: List<Spec> = listOf(
         Spec(
             BrainFailure.Route.GROQ, "Groq", "apikey.groq",
-            "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile",
+            "https://api.groq.com/openai/v1", "openai/gpt-oss-120b",
             "Free key: console.groq.com"
         ),
         Spec(
