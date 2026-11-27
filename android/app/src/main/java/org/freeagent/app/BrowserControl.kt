@@ -29,8 +29,19 @@ import org.json.JSONObject
  * discipline. Content ABOUT browsers is not a
  * command: "close the browser tab in the article"
  * carries extra referent tokens and parses as
- * nothing; "please close the browser" does not lead
- * with its verb and parses as nothing.
+ * nothing. A leading/trailing "please" is stripped
+ * before matching (v1.0.11, audit G4 — the strip
+ * touches only the message's edges, so "please tell
+ * me why the browser closed" still leads with
+ * "tell" and parses as nothing).
+ *
+ * v1.0.11 (the pre-delivery audit's fix round):
+ * the mirror OPEN command joins the close (G3 —
+ * 1.0.10 closed by word but could only be reopened
+ * by tapping the chip; "open the browser" fell to
+ * the brain, which could narrate an opening but not
+ * perform one), and log out learns its first-person
+ * shapes — "log me out" / "sign me out" (G7).
  *
  * Pure + org.json; pinned by Lille110Test.
  */
@@ -150,6 +161,94 @@ object BrowserControl {
         )
     }
 
+    // ---------- open the browser (v1.0.11, G3) ----------
+
+    private val OPEN_VERBS = setOf("open", "show", "reopen")
+
+    /**
+     * True when the whole message is an open-the-
+     * browser command — the close grammar's mirror:
+     * a leading open verb, an optional determiner,
+     * and a browser/panel referent ("open the
+     * browser", "show the browser", "reopen the
+     * panel", "open the browser panel"), an optional
+     * trailing "now". Anything after the referent is
+     * a sentence about a browser, not the command:
+     * "open the browser and read my feed" is a job.
+     */
+    fun parseOpenBrowser(text: String): Boolean {
+        var tokens = commandTokens(text) ?: return false
+        if (tokens.lastOrNull() == "now") {
+            tokens = tokens.dropLast(1)
+        }
+        if (tokens.size < 2) return false
+        if (tokens[0] !in OPEN_VERBS) return false
+        var rest = tokens.drop(1)
+        if (rest.firstOrNull() in DETERMINERS) {
+            rest = rest.drop(1)
+        }
+        if (rest.isEmpty()) return false
+        if (rest.size == 1) return rest[0] in REFERENT_NOUNS
+        return rest.size == 2 && rest[0] == "browser" &&
+            rest[1] == "panel"
+    }
+
+    const val OPEN_LINE = "Browser open."
+    const val ALREADY_OPEN_LINE = "The browser is already open."
+    const val NOT_IN_USE_LINE =
+        "The browser isn't in use — there's nothing to open."
+
+    /** The honest line when the panel's work was
+     *  halted by his close command: the open reopens
+     *  the VIEW only — work he stopped by word stays
+     *  halted until he resumes it, and the line says
+     *  so in work terms (the panel has no live view
+     *  of a paused task to show; the view returns
+     *  with the work). */
+    const val OPEN_PAUSED_LINE =
+        "That work is still paused from when you closed " +
+            "its browser — say “resume” and it picks back " +
+            "up, browser and all."
+
+    /** What an open command DOES, decided purely from
+     *  the panel facts: [clearViewStamps] — the glue
+     *  clears the button dismissal and the commanded
+     *  close for the panel's task — and [reply], the
+     *  one deterministic line. The view is all it ever
+     *  touches: no work is resumed, halted or started
+     *  here. */
+    data class OpenPlan(
+        val clearViewStamps: Boolean,
+        val reply: String
+    )
+
+    fun planOpen(
+        panelState: BrowserPanel.State,
+        dismissed: Boolean,
+        closedByCommand: Boolean,
+        haltedByClose: Boolean
+    ): OpenPlan {
+        // Work he halted with the close command: its
+        // panel state is HIDDEN (a paused task shows
+        // no live view), so the honest answer names
+        // the pause and the word that lifts it. The
+        // stamps still clear — a later resume must
+        // not fight a stale close.
+        if (haltedByClose) {
+            return OpenPlan(true, OPEN_PAUSED_LINE)
+        }
+        if (panelState == BrowserPanel.State.HIDDEN) {
+            return OpenPlan(false, NOT_IN_USE_LINE)
+        }
+        if (BrowserPanel.panelVisible(
+                panelState, dismissed, closedByCommand
+            )
+        ) {
+            return OpenPlan(false, ALREADY_OPEN_LINE)
+        }
+        return OpenPlan(true, OPEN_LINE)
+    }
+
     // ---------- log out / switch (Fix 3.5) ----------
 
     private val PLATFORM_TOKENS = setOf("x", "twitter")
@@ -159,7 +258,12 @@ object BrowserControl {
      *  "logout" / "signout", then an optional platform
      *  referent (["of"|"from"] ["the"] "x"|"twitter",
      *  or the platform bare). "Log out of the app" is
-     *  not it — its referent is not the platform. */
+     *  not it — its referent is not the platform.
+     *  FIRST PERSON (v1.0.11, audit G7): "log me out"
+     *  / "sign me out" — verb + "me" + "out" — parse
+     *  identically, with the same referent rules after
+     *  ("log me out of the article comments" names a
+     *  foreign referent and stays content). */
     fun parseLogOut(text: String): Boolean {
         var tokens = commandTokens(text) ?: return false
         if (tokens.lastOrNull() == "now") {
@@ -170,6 +274,10 @@ object BrowserControl {
                 tokens[1] == "out" -> tokens.drop(2)
             tokens.size >= 2 && tokens[0] == "sign" &&
                 tokens[1] == "out" -> tokens.drop(2)
+            tokens.size >= 3 &&
+                (tokens[0] == "log" || tokens[0] == "sign") &&
+                tokens[1] == "me" && tokens[2] == "out" ->
+                tokens.drop(3)
             tokens.firstOrNull() == "logout" -> tokens.drop(1)
             tokens.firstOrNull() == "signout" -> tokens.drop(1)
             else -> return false
@@ -431,13 +539,18 @@ object BrowserControl {
     /** The command grammars' tokeniser: the probe
      *  normalisation (lowercase, collapsed spaces,
      *  trailing sentence punctuation trimmed), commas
-     *  as separators, a whole-message length cap. */
+     *  as separators, a whole-message length cap — and
+     *  the politeness strip (v1.0.11, G4): a leading
+     *  and/or trailing "please" is removed here, once,
+     *  for every grammar in this object. A message of
+     *  nothing but politeness is not a command. */
     private fun commandTokens(text: String): List<String>? {
         val norm = StatusProbe.normalise(text)
             .replace(",", " ")
             .replace(Regex("\\s+"), " ")
             .trim()
         if (norm.isEmpty() || norm.length > 64) return null
-        return norm.split(" ")
+        val tokens = StatusProbe.stripPoliteness(norm.split(" "))
+        return tokens.ifEmpty { null }
     }
 }

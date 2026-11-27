@@ -174,7 +174,11 @@ class Lille106Test {
         // No task noun: names no work, stays conversation.
         assertNull(TaskControl.parseKill("kill the lights"))
         // Not whole-message shapes: discussion, not command.
-        assertNull(TaskControl.parseKill("please kill this task now"))
+        // (v1.0.11, G4: "please kill this task now" IS a
+        // command now — edge politeness is stripped; the
+        // discussion shape that stays rejected is the one
+        // whose verb still does not lead after the strip.)
+        assertNull(TaskControl.parseKill("tell me please kill this task"))
         assertNull(TaskControl.parseKill("kill this idea, it is not working"))
         assertNull(TaskControl.parseKill("why did you stop"))
         assertNull(TaskControl.parseKill("kill time"))
@@ -662,8 +666,12 @@ class Lille106Test {
         assertNull(
             TaskControl.parseResume("continue reading this article to me")
         )
-        // The verb must lead, like every chat command.
-        assertNull(TaskControl.parseResume("please resume the task"))
+        // The verb must lead, like every chat command —
+        // edge politeness aside (v1.0.11, G4: "please
+        // resume the task" parses now, pinned in
+        // Lille111Test; a verb buried mid-sentence does
+        // not).
+        assertNull(TaskControl.parseResume("tell me to resume the task"))
         assertNull(TaskControl.parseResume("why did you stop"))
     }
 

@@ -1286,6 +1286,21 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // OPEN THE BROWSER (v1.0.11, audit G3): the
+        // close command's mirror. In 1.0.10 the browser
+        // closed by word but reopened only by tapping
+        // the chip — "open the browser" fell to the
+        // brain, which could narrate an opening but not
+        // perform one (the original close complaint,
+        // one command over). Intercepted here, zero
+        // model calls: the VIEW opens; work halted by
+        // his close stays halted until "resume", and
+        // the line says so.
+        if (!hadAttachment && BrowserControl.parseOpenBrowser(raw)) {
+            openBrowserCommand(chatId)
+            return
+        }
+
         // LOG OUT / SWITCH (v1.0.10, Fix 3.5): "log out
         // of X", "switch to @handle" — session commands,
         // resolved here to a session pass (TaskWorker's
@@ -1835,6 +1850,12 @@ class MainActivity : AppCompatActivity() {
             TaskWorker.cancel(this, haltId)
             store.update(haltId, TaskStates.PAUSED) {
                 BrowserControl.stampBrowserClosed(it, command, now)
+                // The halted task rests on this page
+                // (v1.0.11, G6) — a re-check must not
+                // navigate it away either.
+                SessionIdentity.stampRestingPage(
+                    it, BrowserSession.currentUrl()
+                )
             }
         }
         plan.dismissTaskId?.let { dismissId ->
@@ -1846,6 +1867,52 @@ class MainActivity : AppCompatActivity() {
         refreshBrowserPanel()
         appendAssistantMessage(chatId, plan.reply)
         BackupManager.requestBackup(this)
+    }
+
+    /** OPEN THE BROWSER, EXECUTED (v1.0.11, G3):
+     *  BrowserControl's plan over the panel's own
+     *  facts — the same computation refreshBrowserPanel
+     *  performs (this chat's newest work, the lane
+     *  owner, the dismissal and commanded-close stamps
+     *  with their state validity). Clearing the stamps
+     *  reopens the view on the next refresh; the work
+     *  itself is never touched — a task halted by his
+     *  close stays paused, and the plan's line names
+     *  the "resume" that lifts it. */
+    private fun openBrowserCommand(chatId: String) {
+        val store = TaskStore(this)
+        val task = StatusProbe.latestTaskForChat(store.all(), chatId)
+        val ownerId = TaskGate.shared.browserOwnerTask()
+        val taskId = task?.optString("id") ?: ""
+        val state = BrowserPanel.stateFor(
+            task?.optString("state"),
+            task != null && TaskRunner.isBrowserTask(task),
+            ownerId != null && ownerId == taskId,
+            ownerId != null && ownerId != taskId,
+            task?.optBoolean("browserTakeover", false) == true
+        )
+        val dismissed = taskId.isNotEmpty() &&
+            panelDismissedTaskId == taskId
+        val closedByCommand = taskId.isNotEmpty() &&
+            panelClosedTaskId == taskId &&
+            panelClosedState == task?.optString("state")
+        val haltedByClose = task != null &&
+            task.optBoolean(BrowserControl.CLOSED_FIELD, false) &&
+            task.optString("state") == TaskStates.PAUSED
+        val plan = BrowserControl.planOpen(
+            state, dismissed, closedByCommand, haltedByClose
+        )
+        if (plan.clearViewStamps && taskId.isNotEmpty()) {
+            if (panelDismissedTaskId == taskId) {
+                panelDismissedTaskId = null
+            }
+            if (panelClosedTaskId == taskId) {
+                panelClosedTaskId = null
+                panelClosedState = null
+            }
+        }
+        refreshBrowserPanel()
+        appendAssistantMessage(chatId, plan.reply)
     }
 
     /** A SPOKEN SESSION COMMAND, DISPATCHED (v1.0.10):

@@ -85,6 +85,31 @@ object StatusProbe {
         .trimEnd('.', '!', '?', ' ')
         .replace(Regex("\\s+"), " ")
 
+    /**
+     * POLITENESS TOLERANCE (v1.0.11, audit G4): the
+     * deterministic command grammars (kill, resume,
+     * close/open browser, log out, switch) strip a
+     * leading and/or trailing "please" before matching
+     * — Ethuram speaks that way and kept hitting the
+     * class ("please kill all tasks now" fell to the
+     * brain in 1.0.5 and was pinned as a non-command;
+     * the pin was the bug). The strip touches ONLY the
+     * message's edges: a "please" mid-sentence is
+     * content, and the grammars' own verb-position
+     * rules still govern what follows — "please tell
+     * me why the browser closed" strips to a sentence
+     * whose first word is "tell", and parses as no
+     * command at all. The probe grammars above never
+     * needed this: "please" has always been a probe
+     * function word, so probes tolerated it anywhere.
+     */
+    fun stripPoliteness(tokens: List<String>): List<String> {
+        var out = tokens
+        while (out.firstOrNull() == "please") out = out.drop(1)
+        while (out.lastOrNull() == "please") out = out.dropLast(1)
+        return out
+    }
+
     /** The message's tokens when it parses under the
      *  probe grammar (length caps + closed vocabulary),
      *  else null. */

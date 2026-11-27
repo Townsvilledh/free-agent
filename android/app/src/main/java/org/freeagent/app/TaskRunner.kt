@@ -1437,6 +1437,17 @@ class TaskRunner(private val context: Context) {
         store.update(id, state) {
             it.put("note", note)
             it.put("nextRetryAt", System.currentTimeMillis() + waitMs)
+            // THE RESTING PAGE (v1.0.11, G6): a browser
+            // task settling into a wait leaves the
+            // shared WebView resting on its page — the
+            // stamp is what lets a later identity
+            // re-check know the page is spoken for and
+            // must not be navigated away.
+            if (isBrowserTask(it)) {
+                SessionIdentity.stampRestingPage(
+                    it, BrowserSession.currentUrl()
+                )
+            }
         }
         return state
     }
@@ -2768,10 +2779,22 @@ class TaskRunner(private val context: Context) {
         val wasHandbackPending = SessionIdentity.handbackPending(task)
         val parked = task.optString("state") ==
             TaskStates.PARKED_AT_WALL
-        val domain = BrowserPerception.domainOf(
-            BrowserSession.currentUrl()
-        )
+        val currentUrl = BrowserSession.currentUrl()
+        val domain = BrowserPerception.domainOf(currentUrl)
         val onX = domain == "x.com" || domain.endsWith(".x.com")
+        // THE RESTING PAGE (v1.0.11, G6): the parked/
+        // flow in-place protection extends to resting
+        // pages — when the shared WebView is resting on
+        // ANOTHER live task's page (a filled form, a
+        // reading position), this read-only pass may
+        // not navigate it away: it reads in place, and
+        // where the resting page can't testify it lands
+        // Unreadable — the deferred outcome the
+        // watchdog retries — with the page untouched.
+        val mayNavigate = !parked &&
+            SessionIdentity.mayNavigateForRecheck(
+                store.all(), id, currentUrl
+            )
         val outcome: IdentityOutcome = if (!onX && parked) {
             // A parked page is evidence for a step that's
             // his — the re-check never navigates it away.
@@ -2780,14 +2803,15 @@ class TaskRunner(private val context: Context) {
             )
         } else {
             try {
-                if (!onX) {
+                if (!onX && mayNavigate) {
                     xOpen("https://x.com/home", browserDomains(task))
                 }
                 // In place when parked (the page is
-                // evidence); the navigation proof
-                // everywhere else (v1.0.10).
+                // evidence) or when another task rests on
+                // it; the navigation proof everywhere
+                // else (v1.0.10).
                 readXIdentityHere(
-                    browserDomains(task), mayNavigate = !parked
+                    browserDomains(task), mayNavigate = mayNavigate
                 )
             } catch (e: Exception) {
                 IdentityOutcome.Unreadable(

@@ -145,8 +145,12 @@ object TaskControl {
      *  adverbs may appear anywhere after the verb. Any
      *  wording with that structure is the command —
      *  "kill the lights" is not, because its referent
-     *  carries no work noun; "please kill this task now"
-     *  is not, because the verb does not lead. */
+     *  carries no work noun. A leading/trailing
+     *  "please" is stripped before matching (v1.0.11,
+     *  audit G4 — he speaks that way; "please kill
+     *  this task now" IS the command), but nothing
+     *  else may precede the verb clause except the
+     *  "not …" exception below. */
     private val KILL_VERBS = setOf("kill", "stop", "cancel")
     private val KILL_NOUNS =
         setOf("task", "tasks", "job", "jobs", "work", "one")
@@ -179,7 +183,8 @@ object TaskControl {
             .replace(Regex("\\s+"), " ")
             .trim()
         if (norm.isEmpty() || norm.length > 64) return null
-        var tokens = norm.split(" ")
+        var tokens = StatusProbe.stripPoliteness(norm.split(" "))
+        if (tokens.isEmpty()) return null
         val verbIdx = tokens.indexOfFirst { it in KILL_VERBS }
         if (verbIdx < 0) return null
         if (verbIdx > 0) {
@@ -390,7 +395,8 @@ object TaskControl {
             .replace(Regex("\\s+"), " ")
             .trim()
         if (norm.isEmpty() || norm.length > 64) return null
-        var tokens = norm.split(" ")
+        var tokens = StatusProbe.stripPoliteness(norm.split(" "))
+        if (tokens.isEmpty()) return null
         if (tokens.last() == "now") {
             tokens = tokens.dropLast(1)
             if (tokens.isEmpty()) return null

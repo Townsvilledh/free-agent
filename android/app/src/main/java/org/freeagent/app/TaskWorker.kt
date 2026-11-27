@@ -148,6 +148,31 @@ class TaskWorker(context: Context, params: WorkerParameters) :
                 }
             }
         }
+        // THE RESTING PAGE (v1.0.11, G6): a browser
+        // task whose run settled into a resting state
+        // (waiting, paused, parked) leaves the shared
+        // WebView on its page — stamp it, so an identity
+        // re-check can tell the page is spoken for and
+        // must not be navigated away. A terminal record
+        // rests nowhere: the stamp clears.
+        TaskStore(applicationContext).get(taskId)?.let { settled ->
+            if (TaskRunner.isBrowserTask(settled)) {
+                val state = settled.optString("state")
+                TaskStore(applicationContext).update(taskId) {
+                    if (TaskStates.isTerminal(state)) {
+                        SessionIdentity.stampRestingPage(it, "")
+                    } else if (state == TaskStates.WAITING_ROUTE ||
+                        state == TaskStates.WAITING_NETWORK ||
+                        state == TaskStates.PAUSED ||
+                        state == TaskStates.PARKED_AT_WALL
+                    ) {
+                        SessionIdentity.stampRestingPage(
+                            it, BrowserSession.currentUrl()
+                        )
+                    }
+                }
+            }
+        }
         // v0.13: a task born in a chat reports its settled
         // state back INTO that chat (graded, deduplicated by
         // ChatTaskLink). Waiting states compose nothing — the

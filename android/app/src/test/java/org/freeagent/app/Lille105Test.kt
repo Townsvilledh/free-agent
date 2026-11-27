@@ -118,7 +118,13 @@ class Lille105Test {
         for (notCommand in listOf(
             "kill the lights", "kill time", "killing it",
             "stop the task for a moment and think it over",
-            "please kill all tasks now", "kill all task lists",
+            // v1.0.11 (G4): edge politeness is stripped,
+            // so the lookalike that stays rejected is the
+            // one whose verb does not lead even after the
+            // strip. ("please kill all tasks now" itself
+            // is a command now — pinned in Lille111Test.)
+            "tell me, please kill all tasks",
+            "kill all task lists",
             "stop", "cancel", ""
         )) {
             assertFalse("not a command: $notCommand", TaskControl.isKillAll(notCommand))

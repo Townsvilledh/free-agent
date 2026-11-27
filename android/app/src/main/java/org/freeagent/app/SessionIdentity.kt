@@ -209,6 +209,110 @@ object SessionIdentity {
         return if (at > 0L) TaskTransparency.clockLabel(at) else null
     }
 
+    // ---------- the resting page (v1.0.11, G6) ----------
+
+    /**
+     * THE RESTING PAGE (v1.0.11, pre-delivery audit
+     * G6): the browser lane is ONE shared WebView, and
+     * a task that settles into a wait leaves the
+     * browser resting on its page — a filled form, a
+     * reading position. The identity re-check is a
+     * read-only background pass, but in 1.0.10 it
+     * navigated that WebView to X's own-profile route
+     * whenever the current page wasn't a flow page —
+     * destroying the resting page of a task that had
+     * nothing to do with the check. The parked/flow
+     * in-place protection now extends to resting
+     * pages: a browser task settling into a resting
+     * state stamps the page it leaves the browser on
+     * ([RESTING_PAGE_FIELD], stamped by the runner's
+     * wait funnel, the worker's settle stamp and the
+     * close command's halt), and a re-check that finds
+     * the browser resting on ANOTHER live task's page
+     * reads in place (no navigation) or lands
+     * Unreadable — the deferred outcome the watchdog
+     * retries — never a navigation.
+     */
+
+    /** The page a browser task left the shared
+     *  WebView resting on when it settled into a
+     *  waiting/paused/parked state. */
+    const val RESTING_PAGE_FIELD = "restingPageUrl"
+
+    /** The states whose page is a resting page: work
+     *  that will come back to exactly this page. */
+    private val RESTING_STATES = setOf(
+        TaskStates.WAITING_ROUTE, TaskStates.WAITING_NETWORK,
+        TaskStates.PAUSED, TaskStates.PARKED_AT_WALL
+    )
+
+    /** Stamp the resting page (an empty [url] clears
+     *  the stamp — the task no longer rests anywhere). */
+    fun stampRestingPage(task: JSONObject, url: String) {
+        if (url.isEmpty()) {
+            task.remove(RESTING_PAGE_FIELD)
+        } else {
+            task.put(RESTING_PAGE_FIELD, url)
+        }
+    }
+
+    /** The resting page a record carries, or "". */
+    fun restingPage(task: JSONObject): String =
+        task.optString(RESTING_PAGE_FIELD).trim()
+
+    /** The pure browser-task test, mirroring
+     *  TaskRunner.isBrowserTask (kept local so this
+     *  object stays free of the runner). */
+    private fun isBrowserRecord(task: JSONObject): Boolean =
+        task.optString("kind") == "browser" ||
+            task.optBoolean(TaskTools.BROWSER_TOOLS_FIELD) ||
+            task.optJSONArray("browserDomains")?.let {
+                it.length() > 0
+            } == true
+
+    private fun normaliseUrl(url: String): String =
+        url.trim().trimEnd('/')
+
+    /**
+     * The live task whose resting page the shared
+     * browser is currently sitting on — or null when
+     * the page is nobody's resting page. A holder is
+     * a browser record in a resting state, not
+     * terminal, not archived, not killed by hand,
+     * whose stamped resting page IS [currentUrl].
+     * [exceptId] (the re-check's own record) never
+     * holds the page against itself: a task's own
+     * re-check may still not navigate its parked/flow
+     * page — that protection is the caller's existing
+     * rule, not this one.
+     */
+    fun restingPageOwner(
+        tasks: List<JSONObject>,
+        exceptId: String,
+        currentUrl: String
+    ): JSONObject? {
+        val here = normaliseUrl(currentUrl)
+        if (here.isEmpty()) return null
+        return tasks.firstOrNull { t ->
+            t.optString("id") != exceptId &&
+                !TaskStates.isTerminal(t.optString("state")) &&
+                t.optString("state") in RESTING_STATES &&
+                !TaskControl.isArchived(t) &&
+                !TaskControl.wasKilled(t) &&
+                isBrowserRecord(t) &&
+                normaliseUrl(restingPage(t)) == here
+        }
+    }
+
+    /** True when an identity re-check over [selfId]
+     *  may navigate the shared WebView: only when no
+     *  other live task is resting on its current page. */
+    fun mayNavigateForRecheck(
+        tasks: List<JSONObject>,
+        selfId: String,
+        currentUrl: String
+    ): Boolean = restingPageOwner(tasks, selfId, currentUrl) == null
+
     // ---------- account separation ----------
 
     /**

@@ -135,12 +135,13 @@ class Lille110Test {
             "close the browser tab in the article",
             "close the browser and tell me a joke",
             "the browser is slow, close it",
-            // No leading verb / no referent / politeness
-            // prefix — the kill grammar's discipline.
-            "please close the browser",
+            // No leading verb / no referent — the kill
+            // grammar's discipline. (v1.0.11, G4: edge
+            // politeness is stripped, so "please close
+            // the browser" and "close the browser please"
+            // are commands now — pinned in Lille111Test.)
             "close it", "close", "close the tab",
-            "stop the task", "stop it",
-            "close the browser please"
+            "stop the task", "stop it"
         )) {
             assertFalse(s, BrowserControl.parseCloseBrowser(s))
         }
@@ -911,7 +912,10 @@ class Lille110Test {
         for (s in listOf(
             "log out of the app", "log output settings",
             "logout of my email account",
-            "please log out", "log out of x and check mail",
+            // (v1.0.11, G4: "please log out" is a command
+            // now — edge politeness is stripped; pinned in
+            // Lille111Test.)
+            "log out of x and check mail",
             "sign out of everything"
         )) {
             assertFalse(s, BrowserControl.parseLogOut(s))
