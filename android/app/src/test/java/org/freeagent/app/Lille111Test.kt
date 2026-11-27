@@ -223,8 +223,13 @@ class Lille111Test {
     fun killToleratesPoliteness() {
         assertTrue(TaskControl.isKillAll("please kill all tasks"))
         assertTrue(TaskControl.isKillAll("kill all tasks please"))
-        assertTrue(TaskControl.isKillAll("please kill all tasks now"))
         assertTrue(TaskControl.isKillAll("please kill all tasks please"))
+        // NOT loosened: a trailing "now" after the noun
+        // was never part of the all-referent grammar
+        // (the 1.0.5 pin — "kill all tasks now" is not a
+        // kill-all), and edge politeness must not change
+        // that verdict, only strip itself.
+        assertFalse(TaskControl.isKillAll("please kill all tasks now"))
         assertEquals(
             TaskControl.KillCommand.Targeted(null, false),
             TaskControl.parseKill("please kill this task")
