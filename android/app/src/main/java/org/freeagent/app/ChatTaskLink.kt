@@ -124,7 +124,16 @@ object ChatTaskLink {
         // The runner's note is echoed only when clean: a
         // legacy note carrying route narration is withheld
         // (seamless law) — the report stands on the state.
-        val note = NarrationGuard.cleanOrNull(task.optString("note"))
+        // STATE COHERENCE (v1.0.8): the note must also
+        // belong to THIS state — the false finish of
+        // 2026-11-27 printed the record's stale WAITING
+        // note under its Finished headline ("Done… Waiting
+        // — continues automatically" in one message)
+        // because the note was picked up in an earlier
+        // state and never re-judged. A waiting note on a
+        // terminal report (or any report whose state is
+        // not a waiting one) is withheld here.
+        val note = StateCoherence.coherentNote(task, newState)
             ?.takeIf { ChatOutputGuard.isCleanForReport(it) }
         // v1.0.2: the named step list, graded from the
         // recorded tool history — above the outcome, so the

@@ -223,6 +223,9 @@ object ChatOutputGuard {
         if (ENV_DENIAL_RES.any { it.containsMatchIn(prose) }) {
             return Verdict.Rejected("capability-denial")
         }
+        if (statusDenial(prose)) {
+            return Verdict.Rejected("status-denial")
+        }
         if (selfDenial(prose)) {
             return Verdict.Rejected("identity-denial")
         }
@@ -233,6 +236,79 @@ object ChatOutputGuard {
             return Verdict.Rejected("confirmation-question")
         }
         return Verdict.Clean
+    }
+
+    /**
+     * STATUS-DENIAL (v1.0.8, born of the 2026-11-27
+     * screenshots): the claim that she cannot see or
+     * verify HER OWN work. The brain, asked about the
+     * false finish and the connect handback, answered
+     * "I can't confirm that an X profile was created",
+     * "I can't verify an active task's current status
+     * from this chat", "I can't tell from here whether
+     * you're logged in", "I still can't verify whether
+     * the profile was created or the task continued
+     * afterward" — while the records sat readable in the
+     * same app and the deterministic probe answered the
+     * same questions from them. She always CAN see her
+     * own work: the state sheet rides every chat turn
+     * and the state-question family routes to the
+     * record; a denial is a false claim about herself,
+     * blocked like capability-denial, and the glue's
+     * fallback is the record's own answer.
+     *
+     * The shape, sentence-local like the frames around
+     * it: a first-person inability (can't / cannot /
+     * unable to / no way to) + an epistemic verb
+     * (verify, confirm, check, tell, see, know…) bound
+     * to an OWN-STATE object (her task, status, profile,
+     * account, login, browser, session, work) later in
+     * the same sentence. The object requirement is the
+     * precision: "I can't verify the price from here"
+     * names the world's state, not hers, and passes.
+     */
+    private val STATUS_CANT_RES = listOf(
+        Regex(
+            "\\bi\\s+(?:can'?t|cannot|can\\s+not)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex("\\bi(?:'?m|\\s+am)\\s+unable\\s+to\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bno\\s+way\\s+(?:for\\s+me\\s+)?to\\b", RegexOption.IGNORE_CASE),
+        Regex("\\bi\\s+have\\s+no\\s+way\\s+to\\b", RegexOption.IGNORE_CASE)
+    )
+
+    private val STATUS_EPISTEMIC_RE = Regex(
+        "\\b(verify|confirm|check|tell|see|know|determine|access)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val STATUS_OBJECT_WORDS = setOf(
+        "task", "tasks", "status", "profile", "profiles",
+        "account", "accounts", "login", "logged", "browser",
+        "sign-in", "signin", "session", "created",
+        "creation", "continued", "progress", "step",
+        "steps", "page", "work", "record", "records"
+    )
+
+    private fun statusDenial(prose: String): Boolean {
+        for (sentence in prose.split(Regex("(?<=[.!?])\\s+|\\n+"))) {
+            val cant = STATUS_CANT_RES.firstOrNull {
+                it.containsMatchIn(sentence)
+            } ?: continue
+            val after = sentence.substring(
+                cant.find(sentence)!!.range.last + 1
+            )
+            if (!STATUS_EPISTEMIC_RE.containsMatchIn(after)) {
+                continue
+            }
+            val words = after.lowercase()
+                .split(Regex("[^a-z0-9'\\-]+"))
+                .map { it.trim('\'') }
+            if (words.any { it in STATUS_OBJECT_WORDS }) {
+                return true
+            }
+        }
+        return false
     }
 
     /**

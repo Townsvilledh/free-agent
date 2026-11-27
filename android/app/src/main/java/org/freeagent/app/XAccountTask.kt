@@ -168,7 +168,30 @@ object XAccountTask {
         "Edit profile), then verify with x_session_status, read your feed with " +
         "x_read_feed, search with x_search for \"Fluid wallet\", post your first " +
         "post with x_post, and finish with a summary naming your handle and the " +
-        "first post's URL."
+        "first post's URL.\n\n" +
+        "PHASE MACHINE (v1.0.8 — this section governs the whole run and " +
+        "overrides any shopping instinct in the rules above)\n" +
+        "This creation runs as phases, in order: MAILBOX → SIGNUP_FORM → " +
+        "EMAIL_VERIFY → PASSWORD_PROFILE → VERIFY_ACCOUNT. At each phase " +
+        "the runner posts the phase's script into this conversation — work " +
+        "only within the current phase. A completed phase is stamped on " +
+        "your record and is NEVER re-entered: a resume starts at the first " +
+        "incomplete phase, so never restart the mailbox hunt on a resume.\n" +
+        "- MAILBOX COMMITMENT: take ONE address from the FIRST provider " +
+        "that gives you one, call mailbox_claim with it, and use that " +
+        "address for the entire run. The ladder order in EMAIL above is " +
+        "for the first acquisition only. After the claim, the address " +
+        "changes ONLY through mailbox_switch, which demands recorded " +
+        "evidence (X refused the address, or the code never arrived " +
+        "within the poll budget) and works at most once per run.\n" +
+        "- LOOP BREAKER: if you circle the same ground without a phase " +
+        "advancing, the lane stops you — take the alternate branch it " +
+        "names, or the run parks with the reason recorded. Circling is " +
+        "the failure this machine exists to prevent.\n" +
+        "- finish is gated: it is accepted only in VERIFY_ACCOUNT, when " +
+        "a live session as your handle and your profile page loading as " +
+        "yours are both verified from state. A mailbox, a filled form, " +
+        "or an entered code is a STEP, never a finish."
 
     /** True when [task] is a hollow-build record — created by
      *  [create] in a build without the identity kit. */
@@ -273,6 +296,11 @@ object XAccountTask {
             it.put("lane", "device")
             it.put("browserDomains", domains)
             it.put("criteria", criteria)
+            // v1.0.8: the handle this connect lane serves —
+            // the identity precondition's target (the lane
+            // acts only while the browser's active account
+            // is this one).
+            it.put("connectHandle", handle)
         }
         return store.get(id) ?: task
     }

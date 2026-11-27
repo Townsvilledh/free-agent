@@ -48,7 +48,13 @@ object TaskStates {
         WAITING_ROUTE to setOf(RUNNING, PAUSED, CANCELLED),
         PAUSED to setOf(QUEUED, RUNNING, CANCELLED),
         FAILED to setOf(QUEUED),               // honest retry is allowed
-        COMPLETED to emptySet(),
+        // v1.0.8: COMPLETED is terminal for the WORK, but
+        // the finish-gate AUDIT may reopen a packaged
+        // record whose finish criteria prove false to
+        // WAITING_ROUTE (FinishGate.stampReopen). This is
+        // the one deliberate exit from COMPLETED, audit-
+        // only — nothing else may move a completed record.
+        COMPLETED to setOf(WAITING_ROUTE),
         CANCELLED to emptySet(),
         NEEDS_RUNNER to setOf(CANCELLED, QUEUED), // queued = dispatched to a runner
         // The human took the step (handback -> RUNNING, then the

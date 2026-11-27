@@ -53,6 +53,7 @@ object BackupManager {
             proactiveText = ProactiveStore(app).rawText(),
             referralsText = ReferralStore(app).rawText(),
             agentStateText = AgentStateStore(app).rawText(),
+            accountsRegistryText = AccountRegistryStore(app).rawText(),
             prefs = prefsSnapshot,
             vaultSecrets = vault.exportSecrets(),
             vaultAccounts = vault.exportAccountsJson(),
@@ -282,6 +283,13 @@ object BackupManager {
             // checklist, recipes and schedules are one
             // document with one owner — this device, now.
             parsed.agentStateText?.let { AgentStateStore(app).replaceRaw(it) }
+            // The accounts registry merges rather than
+            // replaces (v1.0.8): accounts verified since the
+            // backup was taken must survive a restore, and
+            // the local active-account truth stands.
+            parsed.accountsRegistryText?.let {
+                AccountRegistryStore(app).mergeFrom(it)
+            }
             for ((file, entries) in parsed.prefs) {
                 if (file == "lille_backup") {
                     BackupPrefs.applyPayloadSnapshot(BackupPrefs(app), entries)

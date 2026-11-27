@@ -137,6 +137,7 @@ class SettingsActivity : AppCompatActivity() {
         kit.addView(buildGmailBlock())
         kit.addView(buildLanBlock())
         kit.addView(buildHeartbeatBlock())
+        kit.addView(buildAccountsBlock())
 
         val container = findViewById<LinearLayout>(R.id.settingsKeysContainer)
         for (spec in OwnKeyRoutes.SPECS) {
@@ -226,6 +227,46 @@ class SettingsActivity : AppCompatActivity() {
             row.addView(b, p)
         }
         return row
+    }
+
+    /** Accounts (v1.0.8): the registry made visible —
+     *  every account Lille holds a session or
+     *  relationship with: the handle, whose it is, which
+     *  is active in her browser, and the scope in plain
+     *  words. Read-only here: accounts land on the list
+     *  when a sign-in is verified from the page (hers at
+     *  creation, the user's through Connect), and the
+     *  browser's one active account is switched by the
+     *  lanes, as a recorded step. Metadata only — no
+     *  passwords are ever shown or stored here. */
+    private fun buildAccountsBlock(): LinearLayout {
+        val block = newBlock()
+        block.addView(blockTitle("Accounts"), wrapParams())
+        block.addView(
+            blockHint(
+                "The accounts Lille can act for, kept " +
+                    "separate. Hers she runs herself, within " +
+                    "policy; yours she only ever uses with " +
+                    "your approval. Her browser holds one " +
+                    "active account at a time, and she " +
+                    "checks the active one matches before " +
+                    "she acts."
+            ),
+            wrapParams(2)
+        )
+        val status = blockStatus()
+        val lines = AccountsRegistry.summaryLines(
+            AccountRegistryStore(this).root()
+        )
+        status.text = if (lines.isEmpty()) {
+            "No accounts yet — hers appears when her own " +
+                "account is created; yours when you connect " +
+                "one from the chat."
+        } else {
+            lines.joinToString("\n")
+        }
+        block.addView(status, wrapParams(4))
+        return block
     }
 
     /** Gmail (v1.0.4): a separate consent on the app's own

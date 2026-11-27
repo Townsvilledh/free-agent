@@ -58,7 +58,15 @@ object BackupPayload {
          *  scheduled jobs — one raw store document, riding
          *  the backup exactly like chats and tasks. Absent
          *  in older payloads (null = nothing to restore). */
-        val agentStateText: String? = null
+        val agentStateText: String? = null,
+        /** The accounts registry (v1.0.8): METADATA only
+         *  — platform, handle, owner, scope, timestamps.
+         *  No cookies, no credentials (her password stays
+         *  in the vault; his are never stored). Merged,
+         *  never overwritten, on restore — the local
+         *  active-account truth stands. Absent in older
+         *  payloads. */
+        val accountsRegistryText: String? = null
     )
 
     fun build(
@@ -73,7 +81,8 @@ object BackupPayload {
         vaultAccounts: String?,
         sessions: Map<String, String>?,
         referralsText: String? = null,
-        agentStateText: String? = null
+        agentStateText: String? = null,
+        accountsRegistryText: String? = null
     ): String {
         val root = JSONObject()
             .put("version", PAYLOAD_VERSION)
@@ -85,6 +94,9 @@ object BackupPayload {
         if (proactiveText != null) root.put("proactive", proactiveText)
         if (referralsText != null) root.put("referrals", referralsText)
         if (agentStateText != null) root.put("agentState", agentStateText)
+        if (accountsRegistryText != null) {
+            root.put("accountRegistry", accountsRegistryText)
+        }
         root.put("prefs", encodePrefs(prefs))
         val vault = JSONObject()
         val secrets = JSONObject()
@@ -138,7 +150,8 @@ object BackupPayload {
                 vaultAccounts = vault?.optString("accounts", "")?.takeIf { it.isNotEmpty() },
                 sessions = sessions,
                 referralsText = root.optString("referrals", "").takeIf { it.isNotEmpty() },
-                agentStateText = root.optString("agentState", "").takeIf { it.isNotEmpty() }
+                agentStateText = root.optString("agentState", "").takeIf { it.isNotEmpty() },
+                accountsRegistryText = root.optString("accountRegistry", "").takeIf { it.isNotEmpty() }
             )
         } catch (e: Exception) {
             null

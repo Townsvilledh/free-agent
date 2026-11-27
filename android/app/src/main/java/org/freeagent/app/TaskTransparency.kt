@@ -326,6 +326,28 @@ object TaskTransparency {
         detailFor(task, state, now)?.let {
             out.append("\n").append(it)
         }
+        // STATE COHERENCE (v1.0.8): a gated record whose
+        // finish doesn't hold tells that ON the status
+        // itself — the headline may still read Finished
+        // in the pre-audit window, but the cross-check
+        // line rides with it, so the card never presents
+        // the false finish as the whole story. A record
+        // the audit already reopened carries the reopened
+        // line under its live headline instead.
+        if (FinishGate.shouldReopen(task)) {
+            out.append(
+                "\nThat finish doesn't stand: " +
+                    FinishGate.discrepancyFor(task) + "."
+            )
+        } else if (
+            task.optString(FinishGate.DISCREPANCY_FIELD).isNotEmpty()
+        ) {
+            out.append(
+                "\nReopened: this was marked finished, but " +
+                    task.optString(FinishGate.DISCREPANCY_FIELD) +
+                    " — the work is open again."
+            )
+        }
         declarationFor(task)?.let {
             out.append("\n").append(it)
         }
@@ -384,16 +406,16 @@ object TaskTransparency {
                 val step = task.optString("wallStep").trim()
                 when {
                     step.isNotEmpty() -> "Your step: $step"
-                    NarrationGuard.cleanOrNull(task.optString("note")) != null ->
+                    StateCoherence.coherentNote(task, state) != null ->
                         "Your step: " +
-                            NarrationGuard.cleanOrNull(task.optString("note"))
+                            StateCoherence.coherentNote(task, state)
                     else ->
                         "Your step: take the step waiting in the " +
                             "browser panel above."
                 }
             }
             TaskStates.PAUSED ->
-                NarrationGuard.cleanOrNull(task.optString("note"))
+                StateCoherence.coherentNote(task, state)
                     ?: "Say the word here and she picks it back up."
             TaskStates.NEEDS_RUNNER ->
                 "This job needs code execution, which can't run " +
@@ -402,7 +424,7 @@ object TaskTransparency {
             TaskStates.COMPLETED ->
                 task.optString("summary").trim().ifEmpty { null }
             TaskStates.FAILED ->
-                NarrationGuard.cleanOrNull(task.optString("note"))
+                StateCoherence.coherentNote(task, state)
                     ?.let { "Why: $it" }
             else -> null
         }

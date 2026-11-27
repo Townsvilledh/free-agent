@@ -553,9 +553,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** FINISH-GATE AUDIT (v1.0.8): a packaged record
+     *  found in Finished with its gate criteria false is
+     *  reopened to WAITING — the false finish heals
+     *  itself on open instead of sitting there as fact.
+     *  The audit runs before the watchdog (a reopened
+     *  record is waiting work the watchdog should see)
+     *  and at render (a run can finish while he sits in
+     *  the app — the 12:44 false finish happened in
+     *  session). The reopen stamps the discrepancy and
+     *  the audit event on the record, retires the false
+     *  summary into that event, and force-enqueues the
+     *  work to continue from its steps. */
+    private fun auditFinishGate() {
+        val store = TaskStore(this)
+        var changed = false
+        for (task in store.all()) {
+            if (!FinishGate.shouldReopen(task)) continue
+            val id = task.optString("id")
+            store.update(id, TaskStates.WAITING_ROUTE) {
+                FinishGate.stampReopen(
+                    it, System.currentTimeMillis()
+                )
+            }
+            TaskWorker.enqueueForced(this, id)
+            changed = true
+        }
+        if (changed) BackupManager.requestBackup(this)
+    }
+
     override fun onResume() {
         super.onResume()
         uiAlive = true
+        auditFinishGate()
         // Watchdog app-open kick (v1.0.2): opening the app
         // never leaves an expired wait sitting — expired
         // waits get an immediate pass, stale waits (>10 min
@@ -642,6 +672,11 @@ class MainActivity : AppCompatActivity() {
      * seamlessly on screen.
      */
     private fun renderChat(chatId: String) {
+        // The finish-gate audit runs at render too: a run
+        // can finish (falsely) while he sits in the app,
+        // and the status refresh below must read the
+        // corrected record, not the false finish.
+        auditFinishGate()
         activeChatId = chatId
         renderedChatId = chatId
         transcript.removeAllViews()
@@ -1268,6 +1303,103 @@ class MainActivity : AppCompatActivity() {
                     chatId,
                     StatusProbe.needsAnswerFor(
                         task, System.currentTimeMillis()
+                    )
+                )
+                return
+            }
+        }
+
+        // LOGIN STATE FROM THE STAMP (v1.0.8): "already
+        // logged in", "am I logged in", "is she signed
+        // in" — answered from the record's identity
+        // stamp (the handle the lane read off the page,
+        // and when), never from the messages and never
+        // from the brain. On 2026-11-27 he signed in
+        // himself in her panel, handed back, said
+        // "already logged in" — and the brain answered
+        // "I can't tell from here whether you're logged
+        // in." The stamp is the page's own testimony;
+        // this family reads it. Checked before the
+        // state-question family: the login assertion is
+        // the more specific shape.
+        if (!hadAttachment) {
+            val loginTask = StatusProbe.loginTaskFor(
+                raw, TaskStore(this).all(), chatId
+            )
+            if (loginTask != null) {
+                appendAssistantMessage(
+                    chatId,
+                    StatusProbe.loginAnswerFor(
+                        loginTask, System.currentTimeMillis()
+                    )
+                )
+                return
+            }
+        }
+
+        // ACCOUNTS FROM THE REGISTRY (v1.0.8): "which
+        // accounts do you have", "what accounts are
+        // connected" — answered from the accounts
+        // registry (every verified sign-in, whose it is,
+        // which is active), never from the brain.
+        if (!hadAttachment && StatusProbe.isAccountsQuestion(raw)) {
+            appendAssistantMessage(
+                chatId,
+                AccountsRegistry.answerFor(
+                    AccountRegistryStore(this).root()
+                )
+            )
+            return
+        }
+
+        // STATE QUESTIONS FROM THE RECORD (v1.0.8): the
+        // whole family of questions about her work — a
+        // task's state, outcome, or completion (incl.
+        // yes/no forms: "so the x profile is created?",
+        // "did it finish?"), the browser's current page,
+        // and accountability for a claim she made ("why
+        // did you claim its complete") — answered
+        // deterministically from the record, zero brain
+        // call, whenever this chat has a relevant record.
+        // A finished packaged record is CROSS-CHECKED
+        // against its finish gate in the answer itself:
+        // a finish whose criteria fail is reported as
+        // not standing. On 1.0.7 every one of these fell
+        // to the brain, which disowned the record
+        // ("I can't verify an active task's current
+        // status from this chat") and invented a
+        // confession — while the probe above answered
+        // the same record correctly. Job-shaped
+        // lookalikes keep their non-interception: the
+        // grammar binds only to referents of records in
+        // THIS chat.
+        if (!hadAttachment) {
+            val allTasks = TaskStore(this).all()
+            val stateQ = StatusProbe.stateQuestionFor(
+                raw, allTasks, chatId
+            )
+            if (stateQ != null) {
+                appendAssistantMessage(
+                    chatId,
+                    StatusProbe.stateAnswerFor(
+                        stateQ.first,
+                        System.currentTimeMillis(),
+                        stateQ.second,
+                        BrowserSession.lastState?.url ?: "",
+                        BrowserSession.lastState?.title ?: ""
+                    )
+                )
+                return
+            }
+            // A browser question in a chat with no record:
+            // the session's resting page still answers it.
+            if (StatusProbe.isBrowserQuestion(raw)) {
+                appendAssistantMessage(
+                    chatId,
+                    StatusProbe.browserAnswer(
+                        null,
+                        BrowserSession.lastState?.url ?: "",
+                        BrowserSession.lastState?.title ?: ""
                     )
                 )
                 return
@@ -2792,7 +2924,30 @@ class MainActivity : AppCompatActivity() {
             lanConfigured = LanRoute.isEnabled(this) &&
                 vault.hasSecret(OwnKeyRoutes.LAN_URL_VAULT_KEY)
         )
-        val base = SYSTEM_PROMPT + "\n\n" + CapabilitySheet.render(facts)
+        // THE STATE SHEET (v1.0.8): what she IS doing —
+        // every task's standing, the browser's resting
+        // page, the identity stamps, the accounts
+        // registry — composed fresh for THIS turn from
+        // the live stores. Whatever the brain is asked
+        // about her work, the facts are in its context;
+        // the deterministic probe family answers the
+        // shaped questions before the brain is reached,
+        // and this sheet grounds everything else.
+        val stateSheet = StateSheet.render(
+            tasks,
+            StateSheet.Facts(
+                browserUrl = BrowserSession.lastState?.url ?: "",
+                browserTitle = BrowserSession.lastState?.title ?: "",
+                xVerifiedHandle = LilleXState.verifiedHandle(tasks),
+                walletFamilies = facts.walletFamilies,
+                accountsLines = AccountsRegistry.summaryLines(
+                    AccountRegistryStore(this).root()
+                )
+            ),
+            System.currentTimeMillis()
+        )
+        val base = SYSTEM_PROMPT + "\n\n" +
+            CapabilitySheet.render(facts) + "\n\n" + stateSheet
         return if (flightFor(chatId).guardReassert) {
             base + "\n\n" + CapabilitySheet.REASSERT_LINE
         } else {
@@ -2844,6 +2999,11 @@ class MainActivity : AppCompatActivity() {
             "capability-denial" -> CapabilitySheet.GROUNDED_LINE
             "identity-ask" -> ChatOutputGuard.IDENTITY_LINE
             "identity-denial" -> ChatOutputGuard.DENIAL_LINE
+            // Status-denial (v1.0.8): the fallback is not a
+            // shrug — it is the record's own answer to the
+            // question about her work, discrepancy and
+            // identity stamp included.
+            "status-denial" -> statusDenialFallback(chatId)
             else -> ChatOutputGuard.PLAIN_LINE
         }
         if (!flight.guardRetried) {
@@ -2854,7 +3014,8 @@ class MainActivity : AppCompatActivity() {
             if (next != null) {
                 flight.guardRetried = true
                 if (reason == "capability-denial" ||
-                    reason == "identity-denial"
+                    reason == "identity-denial" ||
+                    reason == "status-denial"
                 ) {
                     flight.guardReassert = true
                 }
@@ -2863,6 +3024,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
         deliverChatAnswer(chatId, historyText, fallback)
+    }
+
+    /** The status-denial fallback (v1.0.8): this chat's
+     *  newest record answers for itself — the standing,
+     *  the discrepancy when a finish doesn't hold, the
+     *  identity stamp. No record in the chat → the plain
+     *  line (the denial is still never shown). */
+    private fun statusDenialFallback(chatId: String): String {
+        val task = StatusProbe.latestTaskForChat(
+            TaskStore(this).all(), chatId
+        ) ?: return ChatOutputGuard.PLAIN_LINE
+        return StatusProbe.recordAnswerFor(
+            task, System.currentTimeMillis()
+        )
     }
 
     /** Rejected reply text goes to a bounded trace file —

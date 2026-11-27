@@ -127,7 +127,8 @@ class TaskRunner(private val context: Context) {
             "Tools: browser_open{url}, browser_read{}, browser_click{ref or text}, browser_type{ref,text}, " +
             "browser_type_secret{ref,vault_key}, browser_upload{ref,path}, browser_screenshot{name}, " +
             "browser_wait{seconds or text,timeout}, browser_handoff{step}, vault_gen_secret{key}, " +
-            "vault_record_account{site,username,vault_key}, x_session_status{}, x_read_feed{count}, " +
+            "vault_record_account{site,username,vault_key}, mailbox_claim{address}, " +
+            "mailbox_switch{reason}, x_session_status{}, x_read_feed{count}, " +
             "x_search{query,count}, x_post{text}, write_note{path,content}, read_note{path}, " +
             "finish{summary}. Work from browser_read's element refs — refs are reassigned on every read, " +
             "so re-read after each navigation. Passwords are NEVER typed by you and NEVER written into any " +
@@ -424,25 +425,133 @@ class TaskRunner(private val context: Context) {
         if (browserToolsActive && wall != null && handedBackAt > task.optLong("wallAt", 0L) &&
             task.optLong("wallResumeNoted", 0L) < handedBackAt
         ) {
+            // HANDBACK VERIFICATION (v1.0.8): the lane's FIRST
+            // act on a handback is verify-by-state — what
+            // actually changed while the browser was his:
+            // signed in? as whom? check passed? The read is
+            // the page's own account UI (no navigation — the
+            // parked page is the evidence), stamped on the
+            // record, announced in the origin chat from the
+            // record, and carried into her resume note. On
+            // 2026-11-27 he signed in himself, handed back,
+            // said "already logged in" — and she answered
+            // from the brain that she couldn't tell. Never
+            // again: the handback IS the verification.
+            var verifiedHandle: String? = null
+            var identityRead = false
+            if (packaged && isXDomainTask(task)) {
+                val currentDomain = BrowserPerception.domainOf(
+                    BrowserSession.currentUrl()
+                )
+                if (currentDomain == "x.com" ||
+                    currentDomain.endsWith(".x.com")
+                ) {
+                    verifiedHandle = try {
+                        xHandle()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    identityRead = true
+                }
+            }
+            val verifiedBit = if (identityRead) {
+                if (verifiedHandle != null) {
+                    " Verified from the page itself: the browser " +
+                        "is signed in as @$verifiedHandle."
+                } else {
+                    " Verified from the page itself: the browser " +
+                        "is still signed out."
+                }
+            } else {
+                ""
+            }
             // A planned user handoff (v0.10.1) resumes with its
             // own note: the user acted themselves in her session
             // — she verifies from the page, never from assumption.
             val resumeContent =
                 if (wall.optString("kind") == UserHandoff.WALL_KIND) {
-                    UserHandoff.resumeNote(wall.optString("domain"))
+                    UserHandoff.resumeNote(wall.optString("domain")) +
+                        verifiedBit
                 } else {
                     "Ethuram has completed the human check in your browser session " +
                         "(wall was: ${wall.optString("kind")} on " +
                         "${wall.optString("domain")}). Continue the task now: " +
-                        "browser_read the page and carry on from where you stopped."
+                        "browser_read the page and carry on from where you stopped." +
+                        verifiedBit
                 }
             messages.put(JSONObject().put("role", "user").put("content", resumeContent))
+            val handbackNow = System.currentTimeMillis()
             store.update(id) {
                 it.put("wallResumeNoted", handedBackAt)
                 it.remove("wall")
                 it.remove("handoffStep")
+                if (identityRead) {
+                    SessionIdentity.stamp(it, verifiedHandle, handbackNow)
+                    it.put(
+                        SessionIdentity.HANDBACK_VERIFIED_FIELD,
+                        handedBackAt
+                    )
+                    // Attribution: a verified handle on a
+                    // creation record is hers only when it
+                    // doesn't contradict the recorded one.
+                    if (verifiedHandle != null) {
+                        val her = it.optString(FinishGate.HER_HANDLE_FIELD)
+                        if (!LilleXState.isCreationTask(it) ||
+                            her.isEmpty() ||
+                            her.equals(verifiedHandle, true)
+                        ) {
+                            it.put("xHandle", verifiedHandle)
+                            it.put(
+                                FinishGate.X_HANDLE_AT_FIELD, handbackNow
+                            )
+                        }
+                    }
+                }
+            }
+            if (identityRead) {
+                val fresh = store.get(id) ?: task
+                syncAccountRegistry(fresh, verifiedHandle)
+                // The announcement: deterministic, from the
+                // record, in the originating chat, without
+                // being asked — once per handback.
+                if (ChatTaskLink.isChatTask(fresh) &&
+                    fresh.optLong(
+                        SessionIdentity.HANDBACK_ANNOUNCED_FIELD, 0L
+                    ) < handedBackAt
+                ) {
+                    val origin = fresh.optString(ChatTaskLink.ORIGIN_FIELD)
+                    if (origin.isNotEmpty()) {
+                        ChatStore(context).appendMessage(
+                            origin, "lille",
+                            SessionIdentity.handbackAnnouncement(
+                                fresh, verifiedHandle,
+                                // The check reads as still
+                                // standing only when the wall
+                                // was a challenge AND the page
+                                // came back signed out — a
+                                // verified sign-in outranks it.
+                                challengePresent =
+                                    wall.optString("kind") !=
+                                        UserHandoff.WALL_KIND &&
+                                        verifiedHandle == null
+                            )
+                        )
+                        store.update(id) {
+                            it.put(
+                                SessionIdentity.HANDBACK_ANNOUNCED_FIELD,
+                                handedBackAt
+                            )
+                        }
+                    }
+                }
             }
             checkpoint(id, messages, stepsDone, windowSteps)
+        }
+        // PACKAGED X LANES (v1.0.8): the run-start identity
+        // stamp + account separation + the creation lane's
+        // phase script — before her first step, every run.
+        if (packaged && browserToolsActive && isXDomainTask(task)) {
+            startPackagedLane(id, messages)
         }
         // TOOL AVAILABILITY, model-facing (v1.0.3): a
         // general task hears its real toolset — and the
@@ -752,6 +861,50 @@ class TaskRunner(private val context: Context) {
                         stepOverride = pendingHandoffStep
                     )
                 }
+                // FINISH GATE (v1.0.8): a packaged lane with
+                // state-verifiable criteria may finish ONLY
+                // when they hold. On 2026-11-27 the X
+                // creation lane finished from the mailbox
+                // phase — three steps, no account — because
+                // the generic browser probe below accepts
+                // "resting on an allowed page" as proof.
+                // The gate judges the LANE's criteria from
+                // the record: a live session as her handle
+                // and her profile page seen as hers. Unmet →
+                // the finish is refused, the record goes to
+                // WAITING with the unmet criterion named in
+                // work terms, and the work continues.
+                val gateRecord = store.get(id) ?: task
+                if (FinishGate.isGated(gateRecord) &&
+                    !FinishGate.holds(gateRecord)
+                ) {
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content", FinishGate.refusalNote(gateRecord)
+                    ))
+                    store.update(id, TaskStates.WAITING_ROUTE) {
+                        it.put("note", FinishGate.waitNote(gateRecord))
+                        it.put(
+                            "nextRetryAt",
+                            System.currentTimeMillis() + 60_000L
+                        )
+                        it.put("messages", messages)
+                        it.put("steps", stepsDone)
+                        it.put(
+                            FinishGate.DISCREPANCY_FIELD,
+                            FinishGate.discrepancyFor(gateRecord)
+                        )
+                        EventLog.append(
+                            it, "finish_gate",
+                            System.currentTimeMillis(),
+                            JSONObject().put(
+                                "unmet",
+                                FinishGate.unmet(gateRecord)
+                                    .joinToString(",") { c -> c.name }
+                            )
+                        )
+                    }
+                    return TaskStates.WAITING_ROUTE
+                }
                 // VERIFY-STATE + FINAL-ANSWER CHECKS
                 // (v1.0.4, steals #2 + #8): a finish is a
                 // CLAIM until the claimed end state is
@@ -854,6 +1007,11 @@ class TaskRunner(private val context: Context) {
                     it.put("summary", summaryText)
                     it.put("steps", stepsDone)
                     it.put("messages", messages)
+                    // A finish that HOLDS clears any earlier
+                    // gate discrepancy (v1.0.8): the record
+                    // must not carry a stale "doesn't stand"
+                    // against a finish that now checks out.
+                    it.remove(FinishGate.DISCREPANCY_FIELD)
                     // Never silently downgrade (v1.0.3): a
                     // finish with computer-lane classes
                     // outstanding is labelled partial on the
@@ -1069,6 +1227,18 @@ class TaskRunner(private val context: Context) {
                         .put("content", TaskPlanning.PLAN_REQUEST))
                     store.update(id) { it.put("messages", messages) }
                 }
+            }
+            // PACKAGED LANES (v1.0.8): the phase machine's
+            // checkpoints, the finish gate's profile
+            // evidence, and the loop breaker judge every
+            // browser step on the record — a lane that is
+            // circling parks here with the loop named
+            // instead of burning the day.
+            if (packaged && browserToolsActive) {
+                postPackagedStep(
+                    id, name, args, observation,
+                    stepsDone, messages, windowSteps
+                )?.let { return it }
             }
             task = store.get(id) ?: return TaskStates.FAILED
         }
@@ -2040,12 +2210,15 @@ class TaskRunner(private val context: Context) {
                 "read_note" -> readNote(taskDir(id), args)
                 "browser_open" -> {
                     val url = args.optString("url")
+                    val phaseRefusal = completedPhaseRefusal(id, url)
                     if (!url.startsWith("http://") && !url.startsWith("https://")) {
                         "error: browser_open needs an http(s) URL: ${url.take(80)}"
                     } else if (!BrowserPerception.domainAllowed(url, domains)) {
                         "error: domain ${BrowserPerception.domainOf(url)} is not " +
                             "in this task's browser allowlist " +
                             "(${domains.joinToString(", ").ifEmpty { "none authorised" }})"
+                    } else if (phaseRefusal != null) {
+                        phaseRefusal
                     } else {
                         val state = BrowserSession.open(
                             context, url,
@@ -2236,6 +2409,23 @@ class TaskRunner(private val context: Context) {
                             args.optString("username"), key
                         )
                     ) {
+                        // HER HANDLE (v1.0.8): recording her X
+                        // account settles the handle the
+                        // finish gate attributes sessions to —
+                        // a later session read naming anyone
+                        // else is a foreign session, never hers.
+                        val site = args.optString("site")
+                        val username = args.optString("username")
+                        if (site.contains("x.com") &&
+                            LilleXState.isCreationTask(task) &&
+                            username.isNotEmpty()
+                        ) {
+                            store.update(id) {
+                                it.put(
+                                    FinishGate.HER_HANDLE_FIELD, username
+                                )
+                            }
+                        }
                         "ACCOUNT_RECORDED site=${args.optString("site")} " +
                             "username=${args.optString("username")} " +
                             "vault_key=$key (metadata only — no secret " +
@@ -2244,6 +2434,8 @@ class TaskRunner(private val context: Context) {
                         "error: could not record the account metadata"
                     }
                 }
+                "mailbox_claim" -> mailboxClaim(id, task, args)
+                "mailbox_switch" -> mailboxSwitch(id, task, args)
                 "x_session_status" -> xSessionStatus(id, domains)
                 "x_read_feed" -> xReadFeed(id, domains, args)
                 "x_search" -> xSearch(id, domains, args)
@@ -2323,13 +2515,93 @@ class TaskRunner(private val context: Context) {
             } catch (e: Exception) {
                 // The observation is the evidence; the file is a copy.
             }
-            store.update(id) { it.put("xHandle", handle) }
+            // IDENTITY (v1.0.8): the read stamps the
+            // session identity on the record AND the
+            // accounts registry. Attribution guard: on a
+            // creation record whose handle is settled, a
+            // session naming anyone else is a FOREIGN
+            // session — it stamps signedInAs only, never
+            // xHandle, so her gate can't be satisfied by
+            // someone else's account.
+            val nowMs = System.currentTimeMillis()
+            store.update(id) { t ->
+                SessionIdentity.stamp(t, handle, nowMs)
+                val her = t.optString(FinishGate.HER_HANDLE_FIELD)
+                if (!LilleXState.isCreationTask(t) ||
+                    her.isEmpty() || her.equals(handle, true)
+                ) {
+                    t.put("xHandle", handle)
+                    t.put(FinishGate.X_HANDLE_AT_FIELD, nowMs)
+                }
+            }
+            store.get(id)?.let { syncAccountRegistry(it, handle) }
             "X_SESSION logged_in as @$handle — session is live in " +
                 "Lille's persistent browser profile"
         } else {
+            val nowMs = System.currentTimeMillis()
+            store.update(id) { t ->
+                SessionIdentity.stamp(t, null, nowMs)
+            }
+            AccountRegistryStore(context)
+                .recordSignedOut(AccountsRegistry.PLATFORM_X)
             "X_SESSION logged_out — no account is signed in in Lille's " +
                 "browser profile (page: ${state.url.take(80)})"
         }
+    }
+
+    /** The handle a task acts AS, when one is settled:
+     *  the verified session handle, else her recorded
+     *  handle (creation), else the connect lane's target.
+     *  Null when the lane has no target yet — nothing to
+     *  precondition against. */
+    private fun targetHandleFor(task: JSONObject): String? {
+        val live = task.optString("xHandle").trim()
+        if (live.isNotEmpty()) return live
+        val her = task.optString(FinishGate.HER_HANDLE_FIELD).trim()
+        if (her.isNotEmpty()) return her
+        val connect = task.optString("connectHandle").trim()
+        if (connect.isNotEmpty()) return connect
+        return null
+    }
+
+    /** THE IDENTITY PRECONDITION (v1.0.8): before an
+     *  account-scoped action (post, read-as, profile
+     *  change), the browser's live handle must equal the
+     *  task's target — and the registry's active entry
+     *  must agree. A mismatch stops the action and names
+     *  it; no action ever runs under the wrong account.
+     *  Returns the refusal text, or null to proceed. */
+    private fun identityPrecondition(
+        task: JSONObject, liveHandle: String?, action: String
+    ): String? {
+        val target = targetHandleFor(task) ?: return null
+        if (liveHandle == null) {
+            return "error: IDENTITY — $action needs the browser " +
+                "signed in as @$target, but no account is " +
+                "signed in. Sign in as @$target first."
+        }
+        if (!liveHandle.equals(target, true)) {
+            return "error: IDENTITY — this task acts as " +
+                "@$target, but the browser is signed in as " +
+                "@$liveHandle. No action runs under the wrong " +
+                "account: switch accounts first (a recorded " +
+                "step), or stop and name it."
+        }
+        val pre = AccountsRegistry.precondition(
+            AccountRegistryStore(context).root(),
+            AccountsRegistry.PLATFORM_X, target
+        )
+        if (pre == AccountsRegistry.Precondition.NEEDS_SWITCH) {
+            return "error: IDENTITY — the registry's active " +
+                "X account is not @$target. Switch accounts " +
+                "first (a recorded step), then $action."
+        }
+        if (pre == AccountsRegistry.Precondition.NOT_REGISTERED) {
+            // The live read just verified this account —
+            // register it so the registry agrees with the page.
+            syncAccountRegistry(task, liveHandle)
+        }
+        return null
     }
 
     private fun xReadFeed(
@@ -2341,9 +2613,17 @@ class TaskRunner(private val context: Context) {
             return BrowserPerception.challengeObservation(it) +
                 "\n(page: ${state.url})"
         }
-        if (xHandle() == null) {
+        val feedHandle = xHandle()
+        if (feedHandle == null) {
             return "error: X_FEED unavailable — not logged in. " +
                 "x_session_status explains the session state."
+        }
+        // Identity precondition (v1.0.8): a read-as is an
+        // account-scoped action — the feed she reads must
+        // be the target account's own.
+        store.get(id)?.let { t ->
+            identityPrecondition(t, feedHandle, "x_read_feed")
+                ?.let { return it }
         }
         var posts = xArticles(n)
         if (posts.size < n) {
@@ -2373,6 +2653,15 @@ class TaskRunner(private val context: Context) {
         state.challenge?.let {
             return BrowserPerception.challengeObservation(it) +
                 "\n(page: ${state.url})"
+        }
+        // Identity precondition (v1.0.8): search results
+        // are read as the signed-in account — when this
+        // task has a target, the session must be it.
+        store.get(id)?.let { t ->
+            if (targetHandleFor(t) != null) {
+                identityPrecondition(t, xHandle(), "x_search")
+                    ?.let { return it }
+            }
         }
         val posts = xArticles(n)
         store.update(id) {
@@ -2429,6 +2718,12 @@ class TaskRunner(private val context: Context) {
         }
         val handle = xHandle()
             ?: return "error: X_POST unavailable — not logged in."
+        // Identity precondition (v1.0.8): the post must
+        // run under the task's own account — the live
+        // handle and the registry's active entry must
+        // both be the target, or the post does not run.
+        identityPrecondition(task, handle, "x_post")
+            ?.let { return it }
         val composer = BrowserSession.lastState?.elements
             ?.firstOrNull { it.testid == "tweetTextarea_0" }
             ?: return "error: X_POST — composer box not found on the page"
@@ -2459,5 +2754,570 @@ class TaskRunner(private val context: Context) {
             "post could not be found on the profile timeline; treating " +
             "as not posted (honesty rule). Check with x_read_feed " +
             "before retrying."
+    }
+
+    // ---------- v1.0.8 lane machinery ----------
+    // Identity stamps, the accounts registry, account
+    // separation, the creation phase machine, and the
+    // loop breaker. Everything here judges the RECORD
+    // and the PAGE — never the model's narration.
+
+    private val BROWSER_STEP_TOOLS = setOf(
+        "browser_open", "browser_read", "browser_click",
+        "browser_click_mark", "browser_type",
+        "browser_type_secret", "browser_upload",
+        "browser_wait", "browser_screenshot"
+    )
+
+    /** True when the task's browser allowlist carries
+     *  x.com — the X lanes (hers to create/connect, the
+     *  user's to connect, and general tasks the job
+     *  itself authorised X for). */
+    private fun isXDomainTask(task: JSONObject): Boolean =
+        browserDomains(task).any {
+            it == "x.com" || it.endsWith(".x.com")
+        }
+
+    /** The user's own handle as a connect lane verified
+     *  it — the creation lane's separation check needs
+     *  to know which handle is HIS. */
+    private fun newestConnectHandle(): String? =
+        store.all()
+            .filter { it.optString("title") == XConnectTask.TITLE }
+            .maxByOrNull { it.optLong("updatedAt", 0L) }
+            ?.optString("xHandle")?.trim()?.ifEmpty { null }
+
+    /** Sync a verified page read into the accounts
+     *  registry: register + mark active, or mark the
+     *  platform signed out. When the active account
+     *  CHANGED, the switch is stamped on this task as a
+     *  recorded step (the event log), and the newly
+     *  active entry's lastActiveAt has already moved in
+     *  the registry itself. */
+    private fun syncAccountRegistry(task: JSONObject, handle: String?) {
+        val registry = AccountRegistryStore(context)
+        if (handle == null) {
+            registry.recordSignedOut(AccountsRegistry.PLATFORM_X)
+            return
+        }
+        val owner = if (LilleXState.isCreationTask(task)) {
+            AccountsRegistry.OWNER_LILLE
+        } else {
+            AccountsRegistry.OWNER_USER
+        }
+        val previous = registry.recordVerifiedSignIn(
+            AccountsRegistry.PLATFORM_X, handle, owner,
+            System.currentTimeMillis()
+        )
+        if (previous != null) {
+            val id = task.optString("id")
+            if (id.isNotEmpty()) {
+                store.update(id) {
+                    EventLog.append(
+                        it, "account_switch",
+                        System.currentTimeMillis(),
+                        JSONObject().put("from", previous)
+                            .put("to", handle)
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * RUN START for a packaged X lane: (1) the identity
+     * stamp — the lane reads the signed-in handle off
+     * x.com/home and stamps it (or explicit signed-out)
+     * before her first step; (2) ACCOUNT SEPARATION on
+     * the creation lane — a foreign session is named on
+     * the record and the sign-out branch is instructed,
+     * once per run; an unattributed session gets the
+     * settle-it instruction; (3) the creation lane's
+     * PHASE SCRIPT for its current phase, posted once
+     * per phase entry. The registry syncs from the same
+     * read.
+     */
+    private fun startPackagedLane(id: String, messages: JSONArray) {
+        val task = store.get(id) ?: return
+        val domains = browserDomains(task)
+        // The identity read: in place when the browser
+        // already rests on x.com (a mid-signup flow page
+        // must survive a resume untouched), else via
+        // x.com/home.
+        val handle = try {
+            val currentDomain = BrowserPerception.domainOf(
+                BrowserSession.currentUrl()
+            )
+            if (currentDomain != "x.com" &&
+                !currentDomain.endsWith(".x.com")
+            ) {
+                xOpen("https://x.com/home", domains)
+            }
+            xHandle()
+        } catch (e: Exception) {
+            null
+        }
+        val now = System.currentTimeMillis()
+        var instruction: String? = null
+        store.update(id) { t ->
+            SessionIdentity.stamp(t, handle, now)
+            if (handle != null) {
+                val her = t.optString(FinishGate.HER_HANDLE_FIELD)
+                if (!LilleXState.isCreationTask(t) ||
+                    her.isEmpty() || her.equals(handle, true)
+                ) {
+                    t.put("xHandle", handle)
+                    t.put(FinishGate.X_HANDLE_AT_FIELD, now)
+                }
+            }
+            if (LilleXState.isCreationTask(t)) {
+                val owner = SessionIdentity.ownerFor(
+                    t, newestConnectHandle()
+                )
+                val signed = SessionIdentity.signedInAs(t)
+                if (signed != null &&
+                    t.optLong("identityNoteAt", 0L) < now
+                ) {
+                    when (owner) {
+                        SessionIdentity.Owner.OTHER -> {
+                            t.put("identityNoteAt", now)
+                            t.put(
+                                "note",
+                                SessionIdentity.foreignSessionLine(signed)
+                            )
+                            EventLog.append(
+                                t, "identity_mismatch", now,
+                                JSONObject().put("signedInAs", signed)
+                            )
+                            instruction =
+                                SessionIdentity.foreignSessionInstruction(
+                                    signed
+                                )
+                        }
+                        SessionIdentity.Owner.UNKNOWN -> {
+                            t.put("identityNoteAt", now)
+                            instruction =
+                                SessionIdentity.unknownSessionInstruction(
+                                    signed
+                                )
+                        }
+                        else -> Unit
+                    }
+                }
+                val phase = XCreationPhases.currentPhase(t)
+                if (t.optString(XCreationPhases.NOTE_FIELD) !=
+                    phase.name
+                ) {
+                    t.put(XCreationPhases.NOTE_FIELD, phase.name)
+                    val script = XCreationPhases.scriptFor(t, phase)
+                    instruction = listOfNotNull(instruction, script)
+                        .joinToString("\n")
+                }
+            }
+        }
+        syncAccountRegistry(store.get(id) ?: task, handle)
+        instruction?.let {
+            messages.put(
+                JSONObject().put("role", "user").put("content", it)
+            )
+        }
+    }
+
+    private data class PhaseAdvance(
+        val advanced: Boolean, val inject: String?
+    )
+
+    /**
+     * The phase machine's ears: after each browser step
+     * on the creation lane, judge the step's evidence
+     * and stamp any checkpoint it earned. Exits are
+     * earned by evidence the RUNNER can see — the
+     * committed address typed into the form, X's own
+     * answer asking for the code, the code typed on X,
+     * the live session — and a later proof cascades the
+     * earlier checkpoints it implies (a live session
+     * proves the form and the code happened). Also the
+     * EMAIL_VERIFY poll counter: mailbox visits are
+     * polls, and exhausting the budget stamps the
+     * evidence a mailbox switch stands on.
+     */
+    private fun advanceCreationPhases(
+        id: String, name: String, args: JSONObject,
+        observation: String, now: Long
+    ): PhaseAdvance {
+        var advanced = false
+        var inject: String? = null
+        val domain = BrowserPerception.domainOf(
+            BrowserSession.lastState?.url ?: ""
+        )
+        store.update(id) { t ->
+            if (!LilleXState.isCreationTask(t)) return@update
+            val phase = XCreationPhases.currentPhase(t)
+            if (domain == "x.com") {
+                if (name == "browser_type") {
+                    val typed = args.optString("text").trim()
+                    if (typed.isNotEmpty() &&
+                        typed == XCreationPhases.committedAddress(t)
+                    ) {
+                        t.put("signupEmailTyped", true)
+                    }
+                    // Auto-commit: the address first seen
+                    // typed into the signup form IS the
+                    // commitment, claim call or not.
+                    if (XCreationPhases.committedAddress(t).isEmpty() &&
+                        XCreationPhases.isEmailShaped(typed) &&
+                        XCreationPhases.commitAddress(t, typed, now)
+                    ) {
+                        advanced = true
+                        if (t.optString("mailboxPageDomain").isEmpty()) {
+                            t.put(
+                                "mailboxPageDomain",
+                                typed.substringAfter("@").lowercase()
+                            )
+                        }
+                    }
+                    // EMAIL_VERIFY exit: the code, typed on X.
+                    val codeShaped = typed.length in 4..8 &&
+                        typed.all { it.isLetterOrDigit() }
+                    if (codeShaped &&
+                        phase == XCreationPhases.Phase.EMAIL_VERIFY
+                    ) {
+                        XCreationPhases.stamp(
+                            t, XCreationPhases.Phase.EMAIL_VERIFY,
+                            "verification code entered on X (the " +
+                                "code itself is never recorded)",
+                            now
+                        )
+                        advanced = true
+                    }
+                }
+                if (name == "browser_type_secret") {
+                    t.put("signupSecretTyped", true)
+                }
+                // SIGNUP_FORM exit, from the page's own
+                // answer: X asks for the code — the form
+                // was submitted and accepted.
+                if (phase == XCreationPhases.Phase.SIGNUP_FORM) {
+                    val obs = observation.lowercase()
+                    if (obs.contains("verification code") ||
+                        obs.contains("enter the code") ||
+                        obs.contains("sent a code") ||
+                        obs.contains("check your email")
+                    ) {
+                        XCreationPhases.stamp(
+                            t, XCreationPhases.Phase.SIGNUP_FORM,
+                            "X answered the submit by asking " +
+                                "for the verification code",
+                            now
+                        )
+                        advanced = true
+                    }
+                }
+            }
+            // PASSWORD_PROFILE exit: a live session as her
+            // handle exists on the record (stamped by the
+            // session reads) — the account itself is
+            // proven, and the earlier phases it implies
+            // cascade with it.
+            val handleNow = t.optString("xHandle").trim()
+            if (handleNow.isNotEmpty() &&
+                !XCreationPhases.isComplete(
+                    t, XCreationPhases.Phase.PASSWORD_PROFILE
+                )
+            ) {
+                if (!XCreationPhases.isComplete(
+                        t, XCreationPhases.Phase.SIGNUP_FORM
+                    )
+                ) {
+                    XCreationPhases.stamp(
+                        t, XCreationPhases.Phase.SIGNUP_FORM,
+                        "proven by the live session as @$handleNow",
+                        now
+                    )
+                }
+                if (!XCreationPhases.isComplete(
+                        t, XCreationPhases.Phase.EMAIL_VERIFY
+                    )
+                ) {
+                    XCreationPhases.stamp(
+                        t, XCreationPhases.Phase.EMAIL_VERIFY,
+                        "proven by the live session as @$handleNow",
+                        now
+                    )
+                }
+                XCreationPhases.stamp(
+                    t, XCreationPhases.Phase.PASSWORD_PROFILE,
+                    "session verified as @$handleNow", now
+                )
+                advanced = true
+            }
+            // EMAIL_VERIFY polls: a visit to a mailbox
+            // domain is a poll of the committed inbox.
+            if (phase == XCreationPhases.Phase.EMAIL_VERIFY &&
+                (name == "browser_open" || name == "browser_read") &&
+                domain.isNotEmpty() && domain != "x.com" &&
+                !domain.endsWith(".x.com")
+            ) {
+                val polls =
+                    t.optInt(XCreationPhases.POLLS_FIELD, 0) + 1
+                t.put(XCreationPhases.POLLS_FIELD, polls)
+                if (polls >= XCreationPhases.POLL_BUDGET &&
+                    !t.optBoolean(XCreationPhases.POLLS_EXHAUSTED_FIELD)
+                ) {
+                    t.put(XCreationPhases.POLLS_EXHAUSTED_FIELD, true)
+                    LoopGuard.reset(t)
+                    EventLog.append(
+                        t, "code_poll_exhausted", now,
+                        JSONObject().put("polls", polls)
+                    )
+                    inject = "The verification code has not " +
+                        "arrived after $polls polls of the " +
+                        "committed inbox — that evidence is " +
+                        "now on the record. You may call " +
+                        "mailbox_switch{reason: " +
+                        "\"${XCreationPhases.REASON_CODE_NEVER_ARRIVED}\"} " +
+                        "ONCE to change the mailbox, or keep " +
+                        "waiting for the code here. Do not " +
+                        "start shopping providers on your own."
+                }
+            }
+        }
+        return PhaseAdvance(advanced, inject)
+    }
+
+    /**
+     * After every packaged browser step: the phase
+     * machine's checkpoints and next-phase script, the
+     * finish gate's profile evidence, and the loop
+     * breaker. Returns a terminal state when the lane
+     * parks (loop trip with no alternate branch), else
+     * null to continue.
+     */
+    private fun postPackagedStep(
+        id: String, name: String, args: JSONObject,
+        observation: String, stepsDone: Int,
+        messages: JSONArray, windowSteps: Int
+    ): String? {
+        val now = System.currentTimeMillis()
+        var fresh = store.get(id) ?: return null
+        val isCreation = LilleXState.isCreationTask(fresh)
+        var advanced = false
+        var inject: String? = null
+        if (isCreation) {
+            val result = advanceCreationPhases(
+                id, name, args, observation, now
+            )
+            advanced = result.advanced
+            inject = result.inject
+            fresh = store.get(id) ?: return null
+            val phase = XCreationPhases.currentPhase(fresh)
+            if (fresh.optString(XCreationPhases.NOTE_FIELD) !=
+                phase.name
+            ) {
+                val script = XCreationPhases.scriptFor(fresh, phase)
+                store.update(id) {
+                    it.put(XCreationPhases.NOTE_FIELD, phase.name)
+                }
+                inject = listOfNotNull(inject, script)
+                    .joinToString("\n")
+            }
+        }
+        // The gate's profile evidence: her profile page
+        // observed loading as hers (the session's resting
+        // page IS the profile URL for her handle).
+        if (FinishGate.isGated(fresh)) {
+            val handle = fresh.optString("xHandle")
+            val url = BrowserSession.lastState?.url ?: ""
+            if (handle.isNotEmpty() &&
+                fresh.optString(FinishGate.PROFILE_EVIDENCE_FIELD)
+                    .isEmpty() &&
+                FinishGate.isProfileUrl(url, handle)
+            ) {
+                store.update(id) {
+                    it.put(FinishGate.PROFILE_EVIDENCE_FIELD, url)
+                }
+                fresh = store.get(id) ?: fresh
+            }
+        }
+        if (name in BROWSER_STEP_TOOLS) {
+            val key = if (isCreation) {
+                "phase:" + XCreationPhases.currentPhase(fresh).name
+            } else {
+                LoopGuard.clusterFor(
+                    BrowserSession.lastState?.url
+                        ?: args.optString("url")
+                )
+            }
+            var verdict: LoopGuard.Verdict? = null
+            store.update(id) {
+                verdict = LoopGuard.noteStep(it, key, advanced)
+            }
+            val v = verdict
+            if (v != null && v.tripped) {
+                fresh = store.get(id) ?: fresh
+                val alternate = isCreation &&
+                    XCreationPhases.currentPhase(fresh) ==
+                    XCreationPhases.Phase.MAILBOX &&
+                    XCreationPhases.committedAddress(fresh).isEmpty()
+                if (alternate) {
+                    // The phase script's alternate branch:
+                    // the next provider in the ladder, with
+                    // the loop evidence stamped.
+                    store.update(id) {
+                        LoopGuard.stampTrip(it, v, now)
+                        LoopGuard.reset(it)
+                    }
+                    inject = listOfNotNull(
+                        inject,
+                        "LOOP BREAKER: you have circled the " +
+                            "mailbox providers for ${v.total} " +
+                            "steps without the MAILBOX phase " +
+                            "advancing. Take the alternate " +
+                            "branch NOW: move to the NEXT " +
+                            "provider in the ladder, take its " +
+                            "address, and claim it with " +
+                            "mailbox_claim. Do not revisit the " +
+                            "providers you have already circled."
+                    ).joinToString("\n")
+                } else {
+                    store.update(id, TaskStates.PAUSED) {
+                        LoopGuard.stampTrip(it, v, now)
+                        it.put("note", LoopGuard.parkNote(v))
+                        it.put("steps", stepsDone)
+                        it.put("messages", messages)
+                        it.put(StepBudget.WINDOW_FIELD, windowSteps)
+                    }
+                    return TaskStates.PAUSED
+                }
+            }
+        }
+        if (inject != null) {
+            messages.put(
+                JSONObject().put("role", "user").put("content", inject)
+            )
+            store.update(id) { it.put("messages", messages) }
+        }
+        return null
+    }
+
+    /** The completed-phase refusal: on the creation
+     *  lane, mailbox ground belongs to the MAILBOX phase
+     *  (and to EMAIL_VERIFY's polls). Once the run has
+     *  moved past both, opening a mailbox restarts a
+     *  finished phase — refused, with the committed
+     *  address named. */
+    private fun completedPhaseRefusal(id: String, url: String): String? {
+        val task = store.get(id) ?: return null
+        if (!LilleXState.isCreationTask(task)) return null
+        val domain = BrowserPerception.domainOf(url)
+        if (domain == "x.com" || domain.endsWith(".x.com")) {
+            return null
+        }
+        return when (XCreationPhases.currentPhase(task)) {
+            XCreationPhases.Phase.MAILBOX,
+            XCreationPhases.Phase.EMAIL_VERIFY -> null
+            else -> "error: PHASE — the mailbox phase is " +
+                "complete and this run's address is " +
+                XCreationPhases.committedAddress(task) +
+                " (now in phase " +
+                XCreationPhases.currentPhase(task).name +
+                "). Opening $domain restarts a finished " +
+                "phase. Work within the current phase; the " +
+                "address changes only through mailbox_switch " +
+                "with recorded evidence."
+        }
+    }
+
+    /** mailbox_claim: commit the run's ONE address —
+     *  the phase machine's MAILBOX exit. The address
+     *  must be email-shaped and at one of the task's
+     *  allowlisted mailbox providers (it was read off
+     *  that provider's page); a second claim against a
+     *  different address is refused — changes travel
+     *  through mailbox_switch, on evidence, once. */
+    private fun mailboxClaim(
+        id: String, task: JSONObject, args: JSONObject
+    ): String {
+        if (!LilleXState.isCreationTask(task)) {
+            return "error: mailbox_claim exists only on her " +
+                "X creation lane."
+        }
+        val address = args.optString("address").trim()
+        if (!XCreationPhases.isEmailShaped(address)) {
+            return "error: mailbox_claim needs the email " +
+                "address you read off the mailbox page."
+        }
+        val domain = address.substringAfter("@").lowercase()
+        val domains = browserDomains(task)
+        if (!domains.any { it.equals(domain, true) }) {
+            return "error: the address's domain ($domain) is " +
+                "not one of this task's mailbox providers " +
+                "(${domains.joinToString(", ")}). Claim the " +
+                "address the provider's page gave you."
+        }
+        val fresh = store.get(id) ?: task
+        val committed = XCreationPhases.committedAddress(fresh)
+        if (committed.isNotEmpty()) {
+            return if (committed.equals(address, true)) {
+                "MAILBOX_ALREADY_COMMITTED address=$committed " +
+                    "— that is the run's address; carry on to " +
+                    "the signup form."
+            } else {
+                "error: an address is already committed for " +
+                    "this run ($committed). It changes only " +
+                    "through mailbox_switch with recorded " +
+                    "evidence — not by claiming another."
+            }
+        }
+        val pageDomain = BrowserPerception.domainOf(
+            BrowserSession.lastState?.url ?: ""
+        )
+        var ok = false
+        store.update(id) { t ->
+            ok = XCreationPhases.commitAddress(
+                t, address, System.currentTimeMillis()
+            )
+            if (ok && pageDomain.isNotEmpty()) {
+                t.put("mailboxPageDomain", pageDomain)
+            }
+        }
+        return if (ok) {
+            "MAILBOX_CLAIMED address=$address — committed " +
+                "for the whole run; phase MAILBOX is " +
+                "complete. The address changes only through " +
+                "mailbox_switch, once, on recorded evidence."
+        } else {
+            "error: the claim did not stamp — try again " +
+                "from the provider's page."
+        }
+    }
+
+    /** mailbox_switch: the ONE sanctioned change of the
+     *  committed address, standing on recorded evidence
+     *  (XCreationPhases.switchVerdict judges it). */
+    private fun mailboxSwitch(
+        id: String, task: JSONObject, args: JSONObject
+    ): String {
+        if (!LilleXState.isCreationTask(task)) {
+            return "error: mailbox_switch exists only on " +
+                "her X creation lane."
+        }
+        val reason = args.optString("reason").trim()
+        val fresh = store.get(id) ?: task
+        val verdict = XCreationPhases.switchVerdict(fresh, reason)
+        if (verdict != null) {
+            return "error: mailbox switch refused — $verdict."
+        }
+        store.update(id) { t ->
+            XCreationPhases.applySwitch(
+                t, reason, System.currentTimeMillis()
+            )
+            LoopGuard.reset(t)
+        }
+        return "MAILBOX_SWITCHED reason=$reason — the " +
+            "previous address and the reason are on the " +
+            "record. Claim the next provider's address " +
+            "with mailbox_claim; that was this run's one " +
+            "switch."
     }
 }
