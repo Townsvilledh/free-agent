@@ -104,11 +104,28 @@ object ChatTaskLink {
         if (!isChatTask(task)) return null
         if (newState !in MATERIAL) return null
         if (task.optString(REPORTED_FIELD) == newState) return null
+        // REPORTS SCREENED LIKE CHAT (v1.0.6): every
+        // model-written field the report would echo — the
+        // finish summary, the runner's note, the wall step
+        // — passes the guard's report verdict (all chat
+        // verdicts plus HOMEWORK) before it can reach the
+        // thread. A rejected field is WITHHELD and the
+        // report recomposes from the record alone under
+        // the state contract below (DONE / PARTIAL /
+        // ROUTED / PARKED / the honest state lines): the
+        // Agentware report of 2026-11-27 carried its whole
+        // offence in the summary — a deliverables menu for
+        // the user to execute — while its state line was
+        // blameless. Screening the composition without
+        // screening the fields screened nothing.
         val summary = task.optString("summary").trim()
+            .takeIf { ChatOutputGuard.isCleanForReport(it) }
+            ?: ""
         // The runner's note is echoed only when clean: a
         // legacy note carrying route narration is withheld
         // (seamless law) — the report stands on the state.
         val note = NarrationGuard.cleanOrNull(task.optString("note"))
+            ?.takeIf { ChatOutputGuard.isCleanForReport(it) }
         // v1.0.2: the named step list, graded from the
         // recorded tool history — above the outcome, so the
         // report shows the work, not just the verdict.
@@ -236,6 +253,8 @@ object ChatTaskLink {
                     append("\n\n").append(stepsBlock)
                 }
                 val step = task.optString("wallStep").trim()
+                    .takeIf { ChatOutputGuard.isCleanForReport(it) }
+                    ?: ""
                 if (step.isNotEmpty()) {
                     append("\n\n").append(step)
                 } else if (note != null) {

@@ -212,6 +212,10 @@ object Heartbeat {
         val needs = mutableListOf<Need>()
 
         for (task in tasks) {
+            // A record the user closed away ("kill this
+            // completely", v1.0.6) never resurfaces — not
+            // even as a heartbeat need.
+            if (TaskControl.isArchived(task)) continue
             if (task.optString("state") == TaskStates.PARKED_AT_WALL) {
                 needs.add(
                     Need(
@@ -222,6 +226,7 @@ object Heartbeat {
             }
         }
         for (task in tasks) {
+            if (TaskControl.isArchived(task)) continue
             if (isUnreported(task)) {
                 needs.add(
                     Need(

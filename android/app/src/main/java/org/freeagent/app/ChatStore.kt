@@ -137,6 +137,19 @@ class ChatStore(context: Context) {
     fun taskStatusReflectedAt(chatId: String, taskId: String): Long? =
         ChatData.taskStatusReflectedAt(root(), chatId, taskId)
 
+    /** v1.0.6: the task id on the chat's last living
+     *  status message — the targeted kill's on-screen
+     *  referent. */
+    @Synchronized
+    fun lastStatusTaskId(chatId: String): String? =
+        ChatData.lastStatusTaskId(root(), chatId)
+
+    /** v1.0.6: whether the chat carries a living status
+     *  message for [taskId] at all. */
+    @Synchronized
+    fun hasTaskStatus(chatId: String, taskId: String): Boolean =
+        ChatData.taskStatusMessage(root(), chatId, taskId) != null
+
     /** v1.0.1: set/clear a message reaction (long-press menu). */
     @Synchronized
     fun setReaction(chatId: String, index: Int, emoji: String?): Boolean {

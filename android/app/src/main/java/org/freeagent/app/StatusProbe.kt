@@ -27,94 +27,134 @@ import org.json.JSONObject
  */
 object StatusProbe {
 
-    /** Whole-message probe shapes (after normalisation:
-     *  lowercase, trimmed, trailing . ! ? stripped). */
-    private val EXACT_PROBES = setOf(
-        "update", "status", "progress",
-        "any update", "any updates", "any progress",
-        "update me", "status update", "progress update",
-        "update please", "status please",
-        "how far", "how far along", "how far are you",
-        "how far is it", "how is it going", "how's it going",
-        "how is the work going", "how is the task going",
-        "what's happening", "what is happening",
-        "what happened", "is it done", "is it finished",
-        "are you done", "are you finished", "done yet",
-        "finished yet", "still working", "are you still working",
-        "task status", "update on the task", "update on it",
-        "how long", "what's the status", "what is the status",
-        "give me an update", "give me a status update"
+    /**
+     * PROBE GRAMMAR (v1.0.6 — structure, not a phrase
+     * table; Ethuram: "No hardcoding"). A bare probe is a
+     * whole message composed ONLY of closed-class words:
+     * function words (determiners, auxiliaries, pronouns —
+     * the grammar of a question about the work) plus at
+     * least one status content word (update, paused,
+     * done…). Any open-class word — an object — breaks
+     * the parse: "update my bio" carries "bio", "why is
+     * the sky blue" carries "sky"/"blue", and both flow
+     * to the brain untouched. Every phrasing the old
+     * exact sets accepted parses under this grammar, and
+     * new phrasings of the same shape ("why is the task
+     * stopped", "is the work finished yet") resolve
+     * identically — the sets are gone.
+     */
+    private val PROBE_CONTENT = setOf(
+        "update", "updates", "status", "progress", "why",
+        "paused", "pause", "stopped", "stop", "stuck",
+        "waiting", "done", "finished", "finish",
+        "happened", "happening", "happen",
+        "working", "running", "going", "work", "task", "job",
+        "far", "long"
     )
+
+    /** The cause words: a probe carrying one of these
+     *  asks WHY the work is in its state, not just where
+     *  it stands. */
+    private val REASON_CONTENT = setOf(
+        "why", "paused", "pause", "stopped", "stop",
+        "stuck", "waiting", "happened", "happening", "happen"
+    )
+
+    private val PROBE_FUNCTION = setOf(
+        "how", "how's", "what", "what's", "is", "isn't",
+        "aren't", "it", "the", "a", "an", "are", "you",
+        "me", "my", "your", "on", "of", "to", "be", "been",
+        "has", "have", "was", "were", "do", "does", "did",
+        "will", "would", "can", "could", "should", "any",
+        "please", "yet", "still", "now", "along", "give",
+        "that", "this", "there", "here", "not", "no",
+        "and", "or", "in", "at", "for", "from", "with",
+        "about", "i"
+    )
+
+    private val PROBE_VOCAB = PROBE_CONTENT + PROBE_FUNCTION
+
+    private val PROBE_NEGATIONS = setOf("isn't", "aren't", "not")
 
     /** The shared whole-message normalisation: lowercase,
      *  trimmed, trailing . ! ? stripped, whitespace
      *  collapsed. Every deterministic chat command (probes,
-     *  reason probes, kill — TaskControl) reads the message
-     *  through this one lens. */
+     *  reason probes, kill/resume — TaskControl) reads the
+     *  message through this one lens. */
     fun normalise(text: String): String = text.trim().lowercase()
         .trimEnd('.', '!', '?', ' ')
         .replace(Regex("\\s+"), " ")
+
+    /** The message's tokens when it parses under the
+     *  probe grammar (length caps + closed vocabulary),
+     *  else null. */
+    private fun probeTokens(text: String): List<String>? {
+        val norm = normalise(text)
+        if (norm.isEmpty() || norm.length > 40) return null
+        val tokens = norm.split(" ")
+        if (tokens.size > 6) return null
+        if (tokens.any { it !in PROBE_VOCAB }) return null
+        return tokens
+    }
 
     /** True when the whole message is a bare status probe.
      *  Attachments and multi-sentence messages are never
      *  probes (the caller also gates on no-attachment). */
     fun isProbe(text: String): Boolean {
-        val norm = normalise(text)
-        if (norm.isEmpty() || norm.length > 40) return false
-        if (norm.split(" ").size > 6) return false
-        return norm in EXACT_PROBES
+        val tokens = probeTokens(text) ?: return false
+        return tokens.any { it in PROBE_CONTENT }
     }
 
     /**
      * REASON PROBES (v1.0.5, born of the 2026-11-27
      * screenshot): "why paused" is a status question too —
      * it asks for the CAUSE the record carries. Before
-     * this set existed it fell through to the brain, which
-     * invented a cause (a recycled "tools aren't available
-     * in this environment" narrative) for a pause the user
-     * himself had caused and then restarted. The shapes
-     * are whole-message and exact, under the same
-     * lookalike discipline as [isProbe]: a message
-     * carrying an object ("explain why paused trading is
-     * risky", "why is the sky blue") is a question for the
-     * brain and is NOT intercepted. "what happened" was
-     * already a probe; it is a reason shape too and is
-     * answered by [reasonAnswerFor].
+     * this detection existed it fell through to the brain,
+     * which invented a cause (a recycled "tools aren't
+     * available in this environment" narrative) for a
+     * pause the user himself had caused and then
+     * restarted. Under the v1.0.6 grammar a reason probe
+     * is a probe-grammar message carrying a cause word —
+     * with two structural refinements: a lone "why"
+     * padded with other words ("why is it") names no
+     * cause and is a plain probe, while bare "why" alone
+     * stays a reason probe (the pinned shape); and
+     * why + negation + a state word ("why isn't it
+     * running") is the cause question about a state.
+     * Answered by [reasonAnswerFor]. The caller gates on
+     * the chat having work of its own, exactly as for
+     * [isProbe] — in a chat with no work, "why" is
+     * ordinary conversation.
      */
-    private val REASON_PROBES = setOf(
-        "why",
-        "why paused", "why is it paused", "why are you paused",
-        "why did it pause", "why did you pause",
-        "why stopped", "why is it stopped", "why has it stopped",
-        "why did it stop", "why did you stop", "why did you stop it",
-        "why isn't it running", "why is it not running",
-        "why isn't it working", "why is it not working",
-        "why aren't you working",
-        "why is it stuck", "why is it waiting",
-        "what happened"
-    )
-
-    /** True when the whole message asks WHY the chat's
-     *  work is in the state it is in. The caller gates on
-     *  the chat having work of its own, exactly as for
-     *  [isProbe] — in a chat with no work, "why" is
-     *  ordinary conversation. */
     fun isReasonProbe(text: String): Boolean {
-        val norm = normalise(text)
-        if (norm.isEmpty() || norm.length > 40) return false
-        if (norm.split(" ").size > 6) return false
-        return norm in REASON_PROBES
+        val tokens = probeTokens(text) ?: return false
+        val reasonHits = tokens.filter { it in REASON_CONTENT }.toSet()
+        if (reasonHits.isNotEmpty() &&
+            !(reasonHits == setOf("why") && tokens.size > 1)
+        ) {
+            return true
+        }
+        return "why" in tokens &&
+            tokens.any { it in PROBE_NEGATIONS } &&
+            tokens.any { it in PROBE_CONTENT && it != "why" }
     }
 
     /** The newest work record belonging to [chatId] — the
      *  thread's own job. Active work wins over finished
      *  work of the same age by createdAt order alone: the
      *  newest record IS the thread's current story. Null
-     *  when the chat has no work of its own. */
+     *  when the chat has no work of its own. Records the
+     *  user closed away ("kill this completely", v1.0.6)
+     *  are skipped: an archived record never resurfaces,
+     *  on this surface or any other that reads through
+     *  here (probe answers, the chats-list work mark). */
     fun latestTaskForChat(
         tasks: List<JSONObject>, chatId: String
     ): JSONObject? =
-        tasks.filter { it.optString(ChatTaskLink.ORIGIN_FIELD) == chatId }
+        tasks.filter {
+            it.optString(ChatTaskLink.ORIGIN_FIELD) == chatId &&
+                !TaskControl.isArchived(it)
+        }
             .maxByOrNull {
                 maxOf(it.optLong("createdAt"), it.optLong("updatedAt"))
             }

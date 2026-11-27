@@ -186,6 +186,13 @@ class MainActivity : AppCompatActivity() {
          *  capability sheet's re-assert line. Reset per
          *  fresh ask and on delivery, like [guardRetried]. */
         var guardReassert = false
+        /** Live-bubble menu (v1.0.6): a reaction picked on
+         *  the LIVE reply bubble — the message has no
+         *  record yet, so the toggled result waits here
+         *  and lands on the record the moment the reply
+         *  settles. Cleared in finishFlight as a leak
+         *  guard: a reaction never jumps to a later reply. */
+        var pendingLiveReaction: String? = null
     }
 
     private lateinit var transcript: LinearLayout
@@ -467,13 +474,38 @@ class MainActivity : AppCompatActivity() {
             panelDismissedTaskId = null
             refreshBrowserPanel()
         }
-        // Chat parity: while a reply is in flight the send
-        // button IS the stop button (same slot); the composer
-        // stays live and the keyboard's send key queues the
-        // next message (see submitMessage).
+        // Chat parity (v1.0.6, ComposerAction): the button's
+        // face is a function of the composer's content AND
+        // the flight — while a reply is in flight it is the
+        // stop button ONLY when the composer is empty; with
+        // text typed it is SEND, and the message queues in
+        // order (see submitMessage). The shipped 1.0.5 face
+        // was busy-only, so a typed message sat over a stop
+        // square, unsendable (2026-11-27 screenshot: "I
+        // can't send when she's thinking").
         sendButton.setOnClickListener {
-            if (renderedBusy()) stopReply() else submitMessage()
+            val action = ComposerAction.actionFor(
+                composerHasContent(), renderedBusy()
+            )
+            if (action == ComposerAction.Action.STOP) {
+                stopReply()
+            } else {
+                submitMessage()
+            }
         }
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) {
+                updateComposerState()
+            }
+
+            override fun beforeTextChanged(
+                s: CharSequence?, start: Int, count: Int, after: Int
+            ) = Unit
+
+            override fun onTextChanged(
+                s: CharSequence?, start: Int, before: Int, count: Int
+            ) = Unit
+        })
         input.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 submitMessage()
@@ -744,7 +776,13 @@ class MainActivity : AppCompatActivity() {
                 flight.replyOpen -> "…thinking"
                 else -> null
             }
-            if (liveText != null) liveBubble = appendLine("Lille", liveText)
+            if (liveText != null) {
+                val bubble = appendLine("Lille", liveText)
+                liveBubble = bubble
+                // v1.0.6: the live bubble carries the same
+                // long-press menu as every stored bubble.
+                attachLiveMenu(chatId, bubble)
+            }
         }
         if (messages.isEmpty() && (flight == null || !flight.queue.inFlight)) {
             appendGreeting()
@@ -797,6 +835,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
         attachmentBar.visibility = View.VISIBLE
+        // An attachment is composer content (v1.0.6): the
+        // button face must know the composer can send.
+        updateComposerState()
     }
 
     private fun queryDisplayName(uri: Uri): String? {
@@ -812,6 +853,7 @@ class MainActivity : AppCompatActivity() {
         pendingAttachment = null
         attachmentBar.visibility = View.GONE
         attachmentThumb.setImageBitmap(null)
+        if (::sendButton.isInitialized) updateComposerState()
     }
 
     // ---------- message menu: reactions + reply (v1.0.1) ----
@@ -830,21 +872,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * The long-press message menu, patterned on the Muse
-     * chat: a reactions row (with "+" for more) over Reply /
-     * Copy / Select / Share. Applies to any stored bubble.
-     * Reactions toggle on the record (MessageActions' rule)
-     * and persist via the store — restart- and backup-safe.
+     * The ONE long-press message menu card (v1.0.2's shared
+     * LilleMenu component; v1.0.6: shared by stored AND
+     * live bubbles, so the two can never drift): a
+     * reactions row (with "+" for more) over Reply / Copy /
+     * Select / Share — the items and reactions come from
+     * MessageActions alone, for both roles and both bubble
+     * kinds. Only the reaction SINK differs: a stored
+     * bubble toggles on its record at once; the live
+     * bubble queues onto the record it settles into.
+     * Select enables text selection on that one bubble —
+     * bubbles are not selectable by default (v1.0.6), so
+     * the long-press reaches this menu instead of the
+     * system selection bar.
      */
-    private fun showMessageMenu(
-        chatId: String, index: Int, role: String,
-        display: String, bubble: TextView
+    private fun showMessageMenuCard(
+        role: String, display: String, bubble: TextView,
+        onReaction: (String) -> Unit,
+        onMoreReactions: () -> Unit
     ) {
-        // v1.0.2: rendered by the ONE shared menu component
-        // (LilleMenu) — a compact floating card, reactions as
-        // bare glyphs in one row, actions as slim sentence-
-        // case text rows with hairline dividers. Behaviour
-        // (MessageActions plumbing) is unchanged.
         val card = LilleMenu.card(this)
         var dialog: AlertDialog? = null
         card.addView(
@@ -852,11 +898,11 @@ class MainActivity : AppCompatActivity() {
                 this, MessageActions.REACTIONS,
                 onPick = { emoji ->
                     dialog?.dismiss()
-                    applyReaction(chatId, index, emoji, bubble, display)
+                    onReaction(emoji)
                 },
                 onMore = {
                     dialog?.dismiss()
-                    showMoreReactions(chatId, index, bubble, display)
+                    onMoreReactions()
                 }
             )
         )
@@ -904,9 +950,25 @@ class MainActivity : AppCompatActivity() {
         dialog = LilleMenu.show(this, card)
     }
 
-    private fun showMoreReactions(
-        chatId: String, index: Int, bubble: TextView, display: String
+    /** The stored bubble's menu: reactions toggle on the
+     *  record (MessageActions' rule) and persist via the
+     *  store — restart- and backup-safe. */
+    private fun showMessageMenu(
+        chatId: String, index: Int, role: String,
+        display: String, bubble: TextView
     ) {
+        showMessageMenuCard(
+            role, display, bubble,
+            onReaction = { emoji ->
+                applyReaction(chatId, index, emoji, bubble, display)
+            },
+            onMoreReactions = {
+                showMoreReactions(chatId, index, bubble, display)
+            }
+        )
+    }
+
+    private fun showMoreReactionsMenu(onPick: (String) -> Unit) {
         val card = LilleMenu.card(this)
         var dialog: AlertDialog? = null
         MessageActions.MORE_REACTIONS.chunked(4).forEach { chunk ->
@@ -915,12 +977,103 @@ class MainActivity : AppCompatActivity() {
                     this, chunk,
                     onPick = { emoji ->
                         dialog?.dismiss()
-                        applyReaction(chatId, index, emoji, bubble, display)
+                        onPick(emoji)
                     }
                 )
             )
         }
         dialog = LilleMenu.show(this, card)
+    }
+
+    private fun showMoreReactions(
+        chatId: String, index: Int, bubble: TextView, display: String
+    ) {
+        showMoreReactionsMenu { emoji ->
+            applyReaction(chatId, index, emoji, bubble, display)
+        }
+    }
+
+    // ---------- the live bubble's menu (v1.0.6) ----------
+
+    /** The live reply's current text, composed exactly as
+     *  renderChat composes it — the menu acts on what the
+     *  user sees. */
+    private fun liveReplyText(chatId: String): String {
+        val flight = flights[chatId] ?: return ""
+        return when {
+            flight.partial.isNotEmpty() || flight.carry.isNotEmpty() ->
+                stitch(flight.carry, flight.partial)
+            flight.statusText != null -> flight.statusText!!
+            flight.replyOpen -> "…thinking"
+            else -> ""
+        }
+    }
+
+    /** Hang the long-press menu off a live reply bubble.
+     *  Called at both creation sites (renderChat's tail
+     *  and replaceCurrentReply's re-creation), so the
+     *  streaming bubble is never a dead surface. */
+    private fun attachLiveMenu(chatId: String, bubble: TextView) {
+        bubble.setOnLongClickListener {
+            showLiveMessageMenu(chatId, bubble)
+            true
+        }
+    }
+
+    /** The live bubble's menu: Copy / Select / Share /
+     *  Reply act on the text as it stands; a reaction
+     *  queues onto the record the reply settles into
+     *  ([queueLiveReaction] + [applyPendingLiveReaction]). */
+    private fun showLiveMessageMenu(chatId: String, bubble: TextView) {
+        val display = liveReplyText(chatId)
+        if (display.isEmpty()) return
+        showMessageMenuCard(
+            "assistant", display, bubble,
+            onReaction = { emoji -> queueLiveReaction(chatId, emoji) },
+            onMoreReactions = {
+                showMoreReactionsMenu { emoji ->
+                    queueLiveReaction(chatId, emoji)
+                }
+            }
+        )
+    }
+
+    /** Toggle a reaction against the live flight's pending
+     *  one (MessageActions' rule) and show it on the
+     *  bubble for now — the durable copy lands on the
+     *  record at settle. */
+    private fun queueLiveReaction(chatId: String, emoji: String) {
+        val flight = flights[chatId] ?: return
+        val next = MessageActions.toggleReaction(
+            flight.pendingLiveReaction, emoji
+        )
+        flight.pendingLiveReaction = next
+        val bubble = liveBubble ?: return
+        if (chatId != renderedChatId) return
+        val display = liveReplyText(chatId)
+        bubble.text = styledText(
+            if (next != null) display + "\n" + next else display
+        )
+    }
+
+    /** Land a queued live reaction on the settled record:
+     *  called right after each settle path appends the
+     *  reply. Applies only when the chat's LAST message is
+     *  that reply (an assistant message at the tail) —
+     *  anything else and the reaction is dropped rather
+     *  than guessed onto the wrong message. */
+    private fun applyPendingLiveReaction(chatId: String) {
+        val flight = flights[chatId] ?: return
+        val emoji = flight.pendingLiveReaction ?: return
+        flight.pendingLiveReaction = null
+        val messages = ChatData.messages(chatStore.root(), chatId)
+        val lastIndex = messages.indexOfLast {
+            it.optString("role") == "assistant"
+        }
+        if (lastIndex < 0 || lastIndex != messages.lastIndex) return
+        if (chatStore.setReaction(chatId, lastIndex, emoji)) {
+            renderedMtime = chatStore.lastModified()
+        }
     }
 
     private fun applyReaction(
@@ -1033,6 +1186,43 @@ class MainActivity : AppCompatActivity() {
         if (!hadAttachment && TaskControl.isKillAll(raw)) {
             killAllTasks(chatId, raw.trim())
             return
+        }
+
+        // TARGETED KILL (v1.0.6): "kill this completely" —
+        // one task, named or on screen — is a command too.
+        // In 1.0.5 only the all-shapes were deterministic,
+        // so Ethuram's "not this task, kill this
+        // completely" fell to the brain and sat at
+        // "…thinking" (2026-11-27 screenshot). Resolution
+        // is TaskControl's fixed order — the name in the
+        // message, the status card on screen, the newest
+        // work here — and an unidentifiable referent gets
+        // one deterministic line, never a brain call.
+        if (!hadAttachment) {
+            val cmd = TaskControl.parseKill(raw)
+            if (cmd is TaskControl.KillCommand.Targeted) {
+                killTargetedTask(chatId, raw.trim(), cmd)
+                return
+            }
+        }
+
+        // RESUME BY WORD (v1.0.6): "resume" in a chat with
+        // paused or resting work is a COMMAND, handled
+        // deterministically like the kill — never a brain
+        // call. In 1.0.5 his "resume" fell to the brain,
+        // which answered the X task's budget pause with an
+        // intake list asking for HER handle, email,
+        // password and phone number — items that are
+        // already hers (2026-11-27 screenshot). The resume
+        // restarts the record's own lane directly; a task
+        // parked at his step reopens the browser panel at
+        // that step instead of asking anything.
+        if (!hadAttachment) {
+            val resumeCmd = TaskControl.parseResume(raw)
+            if (resumeCmd != null) {
+                resumeTaskDeterministic(chatId, raw.trim(), resumeCmd)
+                return
+            }
         }
 
         // REASON FROM THE RECORD (v1.0.5): "why paused" —
@@ -1260,6 +1450,162 @@ class MainActivity : AppCompatActivity() {
             if (chatId == renderedChatId && uiAlive) renderChat(chatId)
         }
         appendAssistantMessage(chatId, TaskControl.replyFor(stoppedTitles))
+        BackupManager.requestBackup(this)
+    }
+
+    /** The targeted kill (v1.0.6): stop the ONE task the
+     *  command resolved to — TaskControl's order: the name
+     *  in the message, this chat's on-screen status card,
+     *  its newest work. Live work is cancelled and stamped
+     *  killed-by-hand exactly as a kill-all kill (terminal
+     *  under the watchdog); "completely" also archives the
+     *  record so it never resurfaces. A record that already
+     *  finished can only be closed away (with "completely")
+     *  or is answered honestly — a finished task is never
+     *  stamped as stopped. The chat's living status card
+     *  for the killed task is refreshed in the same turn,
+     *  like the kill-all path. */
+    private fun killTargetedTask(
+        chatId: String,
+        command: String,
+        cmd: TaskControl.KillCommand.Targeted
+    ) {
+        val store = TaskStore(this)
+        val now = System.currentTimeMillis()
+        val target = TaskControl.resolveTarget(
+            store.all(), chatId, cmd.hint,
+            chatStore.lastStatusTaskId(chatId)
+        )
+        if (target == null) {
+            appendAssistantMessage(chatId, TaskControl.NO_REFERENT_LINE)
+            return
+        }
+        val id = target.optString("id")
+        val title = TaskTransparency.titleFor(target)
+        when {
+            TaskControl.isStoppable(target) -> {
+                TaskWorker.cancel(this, id)
+                store.update(id, TaskStates.CANCELLED) {
+                    TaskControl.stampKill(it, command, now)
+                    if (cmd.completely) {
+                        TaskControl.stampArchive(it, now)
+                    }
+                }
+                val fresh = store.get(id)
+                if (fresh != null &&
+                    chatStore.hasTaskStatus(chatId, id)
+                ) {
+                    chatStore.upsertTaskStatus(
+                        chatId, id,
+                        StatusProbe.answerFor(fresh, now),
+                        fresh.optLong("updatedAt", 0L)
+                    )
+                    if (chatId == renderedChatId && uiAlive) {
+                        renderChat(chatId)
+                    }
+                }
+                appendAssistantMessage(
+                    chatId, TaskControl.replyForTarget(title)
+                )
+            }
+            cmd.completely -> {
+                store.update(id) { TaskControl.stampArchive(it, now) }
+                appendAssistantMessage(
+                    chatId, TaskControl.replyForClosed(title)
+                )
+            }
+            else -> appendAssistantMessage(
+                chatId, TaskControl.replyForAlreadyFinished(title)
+            )
+        }
+        BackupManager.requestBackup(this)
+    }
+
+    /** The deterministic resume (v1.0.6): restart the ONE
+     *  record the command resolved to, in its own lane —
+     *  a waiting record gets a forced pass (its stored
+     *  wait cleared, a fresh all-routes attempt), a paused
+     *  record is enqueued (the runner reads a spent
+     *  budget window entering a run as deliberately
+     *  resumed and grants a fresh one), a queued record
+     *  is already going and is answered as such. A record
+     *  PARKED at the user's own step is never enqueued:
+     *  resume reopens the browser panel at that step
+     *  (dismissal cleared; the panel follows the record)
+     *  and the handback there is what resumes her. The
+     *  resume is stamped on the record with his command. */
+    private fun resumeTaskDeterministic(
+        chatId: String,
+        command: String,
+        cmd: TaskControl.ResumeCommand
+    ) {
+        val store = TaskStore(this)
+        val now = System.currentTimeMillis()
+        val target = TaskControl.resolveResumeTarget(
+            store.all(), chatId, cmd.hint,
+            chatStore.lastStatusTaskId(chatId)
+        )
+        if (target == null) {
+            val latest = StatusProbe.latestTaskForChat(
+                store.all(), chatId
+            )
+            if (latest != null &&
+                latest.optString("state") == TaskStates.RUNNING
+            ) {
+                appendAssistantMessage(
+                    chatId,
+                    TaskControl.replyForAlreadyGoing(
+                        TaskTransparency.titleFor(latest)
+                    )
+                )
+            } else {
+                appendAssistantMessage(
+                    chatId, TaskControl.NO_RESUMABLE_LINE
+                )
+            }
+            return
+        }
+        val id = target.optString("id")
+        val title = TaskTransparency.titleFor(target)
+        when (target.optString("state")) {
+            TaskStates.PARKED_AT_WALL -> {
+                store.update(id) {
+                    TaskControl.stampResume(it, command, now)
+                }
+                if (panelDismissedTaskId == id) {
+                    panelDismissedTaskId = null
+                }
+                refreshBrowserPanel()
+                appendAssistantMessage(
+                    chatId,
+                    TaskControl.replyForParkedResume(
+                        title, target.optString("wallStep")
+                    )
+                )
+            }
+            TaskStates.QUEUED -> appendAssistantMessage(
+                chatId, TaskControl.replyForAlreadyGoing(title)
+            )
+            TaskStates.WAITING_ROUTE,
+            TaskStates.WAITING_NETWORK -> {
+                store.update(id) {
+                    TaskControl.stampResume(it, command, now)
+                }
+                TaskWorker.enqueueForced(this, id)
+                appendAssistantMessage(
+                    chatId, TaskControl.replyForResumed(title)
+                )
+            }
+            else -> {
+                store.update(id) {
+                    TaskControl.stampResume(it, command, now)
+                }
+                TaskWorker.enqueue(this, id)
+                appendAssistantMessage(
+                    chatId, TaskControl.replyForResumed(title)
+                )
+            }
+        }
         BackupManager.requestBackup(this)
     }
 
@@ -2126,6 +2472,7 @@ class MainActivity : AppCompatActivity() {
             }
             replaceCurrentReply(chatId, shown)
             chatStore.appendMessage(chatId, "assistant", shown)
+            applyPendingLiveReaction(chatId)
             renderedMtime = chatStore.lastModified()
         }
         flight.partial = ""
@@ -2144,6 +2491,9 @@ class MainActivity : AppCompatActivity() {
         flight.waiting = false
         flight.call = null
         flight.replyOpen = false
+        // Leak guard: an unapplied live reaction dies with
+        // its flight — it never lands on a later reply.
+        flight.pendingLiveReaction = null
         if (chatId == renderedChatId) liveBubble = null
         val next = flight.queue.startNext()
         if (next == null) {
@@ -2158,23 +2508,36 @@ class MainActivity : AppCompatActivity() {
         if (chatId == activeChatId) updateComposerState()
     }
 
+    /** Does the composer hold anything submitMessage
+     *  would send — text beyond whitespace, or a pending
+     *  attachment? The ComposerAction input: a stop face
+     *  over sendable content is the 1.0.5 defect. */
+    private fun composerHasContent(): Boolean =
+        input.text.toString().trim().isNotEmpty() ||
+            pendingAttachment != null
+
     /** Send button + header mascot follow the RENDERED chat's
-     *  flight state: the button morphs Send → Stop while busy
-     *  (composer and attach stay live), and the mascot carries
+     *  flight state AND the composer's content (v1.0.6,
+     *  ComposerAction): Stop only when busy with an empty
+     *  composer; Send whenever tapping would send — now, or
+     *  queued in order behind the flight. The mascot carries
      *  the state — WAITING while BrainPacing holds the reply,
      *  WORKING while a reply is actually being produced, IDLE
      *  at rest. */
     private fun updateComposerState() {
         val flight = flights[activeChatId]
         val busy = flight?.queue?.inFlight == true
-        if (busy) {
-            sendButton.setImageResource(R.drawable.ic_stop)
-            sendButton.contentDescription = "Stop"
-            input.hint = "Type another message — the send key queues it"
+        val action = ComposerAction.actionFor(composerHasContent(), busy)
+        sendButton.setImageResource(
+            resources.getIdentifier(
+                ComposerAction.iconName(action), "drawable", packageName
+            )
+        )
+        sendButton.contentDescription = ComposerAction.description(action)
+        input.hint = if (busy) {
+            "Type another message — the send key queues it"
         } else {
-            sendButton.setImageResource(R.drawable.ic_send)
-            sendButton.contentDescription = "Send message"
-            input.hint = defaultHint
+            defaultHint
         }
         val mascot = MascotStates.forChat(busy, flight?.waiting == true)
         headerMascot.setImageResource(
@@ -2374,6 +2737,7 @@ class MainActivity : AppCompatActivity() {
         flight.history.add(JSONObject().put("role", "user").put("content", historyText))
         flight.history.add(JSONObject().put("role", "assistant").put("content", shown))
         chatStore.appendMessage(chatId, "assistant", shown)
+        applyPendingLiveReaction(chatId)
         if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
         replaceCurrentReply(chatId, shown)
         BackupManager.requestBackup(this)
@@ -2403,10 +2767,10 @@ class MainActivity : AppCompatActivity() {
         logGuardRejection(rejectedText)
         val reason = (ChatOutputGuard.verdict(rejectedText)
             as? ChatOutputGuard.Verdict.Rejected)?.reason
-        val fallback = if (reason == "capability-denial") {
-            CapabilitySheet.GROUNDED_LINE
-        } else {
-            ChatOutputGuard.PLAIN_LINE
+        val fallback = when (reason) {
+            "capability-denial" -> CapabilitySheet.GROUNDED_LINE
+            "identity-ask" -> ChatOutputGuard.IDENTITY_LINE
+            else -> ChatOutputGuard.PLAIN_LINE
         }
         if (!flight.guardRetried) {
             val next = BrainFailure.pickNext(
@@ -2715,6 +3079,7 @@ class MainActivity : AppCompatActivity() {
             val shown = BrainFailure.EXHAUSTED_LINE
             replaceCurrentReply(chatId, shown)
             chatStore.appendMessage(chatId, "assistant", shown)
+            applyPendingLiveReaction(chatId)
             if (chatId == renderedChatId) renderedMtime = chatStore.lastModified()
             finishFlight(chatId)
             return
@@ -3169,7 +3534,9 @@ class MainActivity : AppCompatActivity() {
             bubble.text = styledText(text)
             scrollToBottom()
         } else {
-            liveBubble = appendLine("Lille", text)
+            val created = appendLine("Lille", text)
+            liveBubble = created
+            attachLiveMenu(chatId, created)
         }
     }
 
@@ -3219,14 +3586,19 @@ class MainActivity : AppCompatActivity() {
     private fun appendLine(who: String, text: String): TextView {
         val bubble = TextView(this)
         bubble.text = styledText(text)
-        // v0.12.2: chat text must be copyable — a programmatic
-        // TextView is NOT selectable by default (the XML ones
-        // carry android:textIsSelectable), so without this line
-        // neither the user's messages nor Lille's replies could
-        // be long-pressed, selected or copied. Selection lives
-        // inside the bubble; it does not change layout, the
-        // queue badges appended to the text, or scrolling.
-        bubble.setTextIsSelectable(true)
+        // v1.0.6 (supersedes the v0.12.2 selectable default):
+        // bubbles are NOT selectable by default. On-device
+        // proof (2026-11-27): a selectable TextView swallows
+        // the long-press into text selection — the user got
+        // selection handles and the system Copy/Share bar,
+        // and the LilleMenu (reactions, Reply/Copy/Select/
+        // Share) never opened. Now the long-press is the
+        // menu's alone; the menu's Select item enables
+        // selection on that one bubble (the v0.12.2 copying
+        // path, one tap deeper), and selection resets when
+        // the thread re-renders. Copy in the menu covers
+        // the quick case.
+        bubble.setTextIsSelectable(false)
         bubble.textSize = 15f
         bubble.setPadding(dp(14), dp(9), dp(14), dp(9))
         val params = LinearLayout.LayoutParams(

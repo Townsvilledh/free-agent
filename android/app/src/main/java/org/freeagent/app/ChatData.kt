@@ -186,6 +186,22 @@ object ChatData {
         return msg.optLong(TASK_STATUS_AT_FIELD)
     }
 
+    /** The task id on the LAST living status message in a
+     *  chat — the card sitting lowest in the thread, the
+     *  one on screen above the user's next message. The
+     *  targeted kill (v1.0.6) resolves "this" to it before
+     *  falling back to recency. Null when the chat carries
+     *  no status message. */
+    fun lastStatusTaskId(root: JSONObject, chatId: String): String? {
+        val chat = findChat(root, chatId) ?: return null
+        val arr = chat.optJSONArray("messages") ?: return null
+        for (i in arr.length() - 1 downTo 0) {
+            val id = arr.getJSONObject(i).optString(TASK_STATUS_FIELD)
+            if (id.isNotEmpty()) return id
+        }
+        return null
+    }
+
     /**
      * Create-or-rewrite the ONE living status message for
      * [taskId] in a chat: an existing marked message is
