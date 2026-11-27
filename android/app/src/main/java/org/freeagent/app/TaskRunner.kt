@@ -26,6 +26,15 @@ import java.util.concurrent.TimeUnit
  *   Tasks that need CODE EXECUTION are never faked on-device:
  *   they are marked needs_runner and exported as a task spec
  *   JSON for the GitHub Actions runner lane (OFFLINE.md mode C).
+ * - General tasks whose text requires the browser (v1.0.3,
+ *   TaskTools): the SAME device browser toolset as the
+ *   packaged lane, under an allowlist derived from the job's
+ *   own words and stamped on the record, plus notes/search.
+ *   The X lane tools stay packaged-only (Sentinel refusal).
+ *   Classes this phone does not have (mail, repo/code,
+ *   video) are declared up front on the record and in the
+ *   task's first status — never discovered at the end, and
+ *   a finish with them outstanding is labelled partial.
  * - Browser tasks (kind="browser", v0.9): the device browser
  *   lane — BrowserSession's WebView driven through the SAME tool
  *   contract as the host lane (browser_open/read/click/type/
@@ -84,11 +93,26 @@ class TaskRunner(private val context: Context) {
             "finish, and the task parks until the user hands back. Never use it for work you can do " +
             "yourself, and never ask the user for a password: passwords are typed by the user in the " +
             "parked session, never by you. Never invent tool results."
-        private val CODE_HINTS = listOf(
-            "python", "run code", "execute code", "compile", "build an app",
-            "build the app", "create an apk", "make an apk", "script that runs",
-            "run a script", "run the script"
-        )
+        private const val GENERAL_BROWSER_SYSTEM_PROMPT =
+            "You are Lille, an autonomous agent completing a task on the user's phone by calling tools. " +
+            "Reply with exactly ONE fenced JSON block per step, like:\n" +
+            "```json\n{\"tool\": \"browser_open\", \"args\": {\"url\": \"https://example.com\"}}\n```\n" +
+            "Tools: browser_open{url}, browser_read{}, browser_click{ref or text}, browser_type{ref,text}, " +
+            "browser_type_secret{ref,vault_key}, browser_upload{ref,path}, browser_screenshot{name}, " +
+            "browser_wait{seconds or text,timeout}, browser_handoff{step}, vault_gen_secret{key}, " +
+            "vault_record_account{site,username,vault_key}, web_search{query}, write_note{path,content}, " +
+            "read_note{path}, list_notes{}, finish{summary}. The browser is bound by this task's domain " +
+            "allowlist (named in the environment note): browser_open only those domains, and work from " +
+            "browser_read's element refs — refs are reassigned on every read, so re-read after each " +
+            "navigation. Passwords are NEVER typed by you and NEVER written into any file or message: " +
+            "create them with vault_gen_secret (you receive only a key name) and type them with " +
+            "browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only " +
+            "wall (CAPTCHA, an emailed code you cannot read, a phone demand): do NOT try to solve, " +
+            "bypass, or route around that wall itself — if the task names another legitimate route, " +
+            "take it; otherwise call finish naming that exact wall. browser_handoff{step} hands your " +
+            "browser to the user for a step the TASK ITSELF names (e.g. signing in with their OWN " +
+            "account): it is honoured only on tasks that carry a user step — the task text will say " +
+            "so. Never invent tool results."
         private val CHALLENGE_RE =
             Regex("^CHALLENGE kind=(\\S+) detail=(.*?) — ", RegexOption.DOT_MATCHES_ALL)
         private const val X_POST_MIN_INTERVAL_MS = 90_000L
@@ -97,13 +121,23 @@ class TaskRunner(private val context: Context) {
         @Volatile
         private var lastPostTs = 0L
 
-        fun looksLikeCodeTask(text: String): Boolean {
-            val low = text.lowercase()
-            return CODE_HINTS.any { low.contains(it) }
-        }
+        /** The v0.4 code-execution predicate — since v1.0.3
+         *  the hints live in TaskTools (one home for the
+         *  detection the plan and the export gate share). */
+        fun looksLikeCodeTask(text: String): Boolean =
+            TaskTools.looksLikeCodeTask(text)
 
+        /** True when the task drives the device browser:
+         *  a packaged browser record (kind or a packaged
+         *  allowlist), or a general record the tool plan
+         *  stamped with browser tools (v1.0.3). TaskGate
+         *  admission and the in-chat browser panel both key
+         *  on this — a general browser task serialises on
+         *  the one WebView and shows in the panel exactly
+         *  like a packaged one. */
         fun isBrowserTask(task: JSONObject): Boolean =
             task.optString("kind") == "browser" ||
+                task.optBoolean(TaskTools.BROWSER_TOOLS_FIELD) ||
                 task.optJSONArray("browserDomains")?.let { it.length() > 0 } == true
     }
 
@@ -125,6 +159,16 @@ class TaskRunner(private val context: Context) {
         var task = store.get(id) ?: return TaskStates.FAILED
         val text = task.optString("text")
         val browserTask = isBrowserTask(task)
+        // TOOL AVAILABILITY (v1.0.3, TaskTools): a general
+        // task is PLANNED from its text — which tool classes
+        // it requires, which of those this phone lacks, and
+        // the browser allowlist its own words authorise.
+        // Packaged tasks (kind set) keep their package's
+        // toolset and are never planned.
+        val packaged = TaskTools.isPackaged(task)
+        val plan = if (packaged) null else TaskTools.planFor(text)
+        val browserToolsActive = browserTask ||
+            (plan?.requiresBrowser == true)
 
         if (task.optString("lane") == "host") {
             // Lane discipline: a host-lane task belongs to the
@@ -139,7 +183,14 @@ class TaskRunner(private val context: Context) {
             return TaskStates.NEEDS_RUNNER
         }
 
-        if (!browserTask && looksLikeCodeTask(text)) {
+        if (!browserToolsActive && TaskTools.looksLikeCodeTask(text)) {
+            // The v0.4 export gate, narrowed by exactly one
+            // case (v1.0.3): a MIXED job — code work AND
+            // browser work — no longer exports whole. It
+            // runs here with the browser tools, its plan
+            // declaring the code class as computer-lane and
+            // its finish labelled partial. A job whose code
+            // is the whole job exports exactly as before.
             exportSpec(task)
             store.update(id, TaskStates.NEEDS_RUNNER) {
                 it.put("note", "Needs code execution — exported as a task spec for the " +
@@ -148,19 +199,38 @@ class TaskRunner(private val context: Context) {
             return TaskStates.NEEDS_RUNNER
         }
 
-        store.update(id, TaskStates.RUNNING)
+        store.update(id, TaskStates.RUNNING) {
+            // The plan is stamped at run start (creation
+            // stamps it too, for the chat's first status):
+            // requires/unavailable classes + the derived
+            // browser allowlist are record evidence from
+            // here on. A new run also supersedes the last
+            // budget rest's flag.
+            if (plan != null) TaskTools.stampPlan(it, plan)
+            it.remove(StepBudget.REST_FLAG)
+        }
         var messages = task.optJSONArray("messages") ?: JSONArray()
         if (messages.length() == 0) {
             messages.put(JSONObject().put("role", "system")
-                .put("content", if (browserTask) BROWSER_SYSTEM_PROMPT else SYSTEM_PROMPT))
+                .put("content", when {
+                    packaged -> BROWSER_SYSTEM_PROMPT
+                    browserToolsActive -> GENERAL_BROWSER_SYSTEM_PROMPT
+                    else -> SYSTEM_PROMPT
+                }))
             messages.put(JSONObject().put("role", "user").put("content", text))
         }
+        var stepsDone = task.optInt("steps", 0)
+        val maxSteps = if (browserToolsActive) BROWSER_MAX_STEPS else MAX_STEPS
+        // The step budget is spent in WINDOWS (v1.0.3,
+        // StepBudget): stepsInWindow persists across runs
+        // of the same window; a budget rest zeroes it.
+        var windowSteps = StepBudget.windowFor(task, maxSteps)
         // PARKED_AT_WALL resume: the human step was taken in her
         // session (BrowserActivity handback). Tell her once, from
         // the record — the wall fields are evidence, not memory.
         val wall = task.optJSONObject("wall")
         val handedBackAt = task.optLong("handedBackAt", 0L)
-        if (browserTask && wall != null && handedBackAt > task.optLong("wallAt", 0L) &&
+        if (browserToolsActive && wall != null && handedBackAt > task.optLong("wallAt", 0L) &&
             task.optLong("wallResumeNoted", 0L) < handedBackAt
         ) {
             // A planned user handoff (v0.10.1) resumes with its
@@ -181,10 +251,30 @@ class TaskRunner(private val context: Context) {
                 it.remove("wall")
                 it.remove("handoffStep")
             }
-            checkpoint(id, messages, task.optInt("steps", 0))
+            checkpoint(id, messages, stepsDone, windowSteps)
         }
-        var stepsDone = task.optInt("steps", 0)
-        val maxSteps = if (browserTask) BROWSER_MAX_STEPS else MAX_STEPS
+        // TOOL AVAILABILITY, model-facing (v1.0.3): a
+        // general task hears its real toolset — and the
+        // classes this phone does NOT have — as a recorded
+        // environment note before its first step, exactly
+        // once. The user-facing copy of the same facts is
+        // the plan stamp on the record (the chat's status
+        // renders it); this copy is so the run plans around
+        // them from step one instead of discovering them
+        // in its final report.
+        if (plan != null && !task.optBoolean("envNotePosted")) {
+            messages.put(JSONObject().put("role", "user")
+                .put("content", TaskTools.environmentNote(plan)))
+            store.update(id) { it.put("envNotePosted", true) }
+            checkpoint(id, messages, stepsDone, windowSteps)
+        }
+        // Window outcome counters for the progress-aware
+        // budget: graded from THIS run's observations (the
+        // window's step count itself persists on the
+        // record; a resumed window re-earns its verdict).
+        var windowOk = 0
+        var windowFailed = 0
+        var consecErrors = 0
         // OWN KEYS LEAD + NO SLEEPING WHILE A ROUTE LIVES
         // (v1.0.2): callModel walks the user's own-key routes
         // first, and ALL pacing/cooldown discipline is PER
@@ -196,7 +286,7 @@ class TaskRunner(private val context: Context) {
         var lastChallenge: BrowserPerception.Challenge? = null
         var pendingHandoffStep: String? = null
 
-        while (stepsDone < maxSteps) {
+        while (windowSteps < maxSteps) {
             // Honour pause/cancel that landed while we were working.
             val fresh = store.get(id) ?: return TaskStates.FAILED
             when (fresh.optString("state")) {
@@ -296,10 +386,16 @@ class TaskRunner(private val context: Context) {
             messages.put(JSONObject().put("role", "assistant").put("content", content))
             val call = parseToolCall(content)
             stepsDone += 1
+            windowSteps += 1
             if (call == null) {
+                // A reply with no tool call spends budget
+                // but is not progress (the budget verdict
+                // counts it as a failed step, though not as
+                // a tool error streak).
+                windowFailed += 1
                 messages.put(JSONObject().put("role", "user").put("content",
                     "Reply with exactly one fenced JSON tool block, or finish."))
-                checkpoint(id, messages, stepsDone)
+                checkpoint(id, messages, stepsDone, windowSteps)
                 continue
             }
             val (name, args) = call
@@ -316,15 +412,15 @@ class TaskRunner(private val context: Context) {
                 if (missing.isNotEmpty()) {
                     messages.put(JSONObject().put("role", "user").put("content",
                         "finish rejected: claimed outputs do not exist: $missing. Create them first."))
-                    checkpoint(id, messages, stepsDone)
+                    checkpoint(id, messages, stepsDone, windowSteps)
                     continue
                 }
-                if (browserTask && lastChallenge != null) {
+                if (browserToolsActive && lastChallenge != null) {
                     // She stopped AT an observed wall: park, do
                     // not complete (the wall is Ethuram's step).
                     return park(id, lastChallenge, messages, stepsDone)
                 }
-                if (browserTask && pendingHandoffStep != null) {
+                if (browserToolsActive && pendingHandoffStep != null) {
                     // She asked to hand the browser to the user
                     // for the task's own named step (v0.10.1):
                     // park as a user step, not a wall.
@@ -341,15 +437,46 @@ class TaskRunner(private val context: Context) {
                     it.put("summary", args.optString("summary", "Done."))
                     it.put("steps", stepsDone)
                     it.put("messages", messages)
+                    // Never silently downgrade (v1.0.3): a
+                    // finish with computer-lane classes
+                    // outstanding is labelled partial on the
+                    // record, and the graded report says so.
+                    if (plan != null && plan.partial) {
+                        it.put("partialCompletion", true)
+                    }
                 }
                 return TaskStates.COMPLETED
             }
-            val observation = if (browserTask) {
-                executeBrowserTool(id, task, name, args)
-            } else {
-                executeTool(id, name, args)
+            val observation = when {
+                packaged -> executeBrowserTool(id, task, name, args)
+                browserToolsActive ->
+                    // General task, browser in play (v1.0.3):
+                    // the pure dispatch (TaskTools.executorFor)
+                    // routes browser-family calls to the SAME
+                    // device browser executor the packaged
+                    // lane uses, refuses the X lane tools by
+                    // Sentinel, and leaves notes/search to the
+                    // note executor.
+                    when (TaskTools.executorFor(true, name)) {
+                        TaskTools.Executor.BROWSER ->
+                            executeBrowserTool(id, task, name, args)
+                        TaskTools.Executor.REFUSE_X -> TaskTools.X_REFUSAL
+                        else -> executeTool(id, name, args)
+                    }
+                else -> executeTool(id, name, args)
             }
-            if (browserTask) {
+            // The window's outcome, for the progress-aware
+            // budget: an error observation is a step that
+            // did not work; anything else is a step that
+            // landed.
+            if (observation.startsWith("error:")) {
+                windowFailed += 1
+                consecErrors += 1
+            } else {
+                windowOk += 1
+                consecErrors = 0
+            }
+            if (browserToolsActive) {
                 lastChallenge = trackChallenge(name, observation, lastChallenge)
                 if (UserHandoff.isHandoffObservation(observation)) {
                     // The handler recorded the cleaned step on
@@ -363,14 +490,14 @@ class TaskRunner(private val context: Context) {
             }
             messages.put(JSONObject().put("role", "user")
                 .put("content", "Tool result ($name): $observation"))
-            checkpoint(id, messages, stepsDone)
+            checkpoint(id, messages, stepsDone, windowSteps)
             task = store.get(id) ?: return TaskStates.FAILED
         }
 
-        if (browserTask && lastChallenge != null) {
+        if (browserToolsActive && lastChallenge != null) {
             return park(id, lastChallenge, messages, stepsDone)
         }
-        if (browserTask && pendingHandoffStep != null) {
+        if (browserToolsActive && pendingHandoffStep != null) {
             return park(
                 id,
                 BrowserPerception.Challenge(
@@ -380,12 +507,42 @@ class TaskRunner(private val context: Context) {
                 stepOverride = pendingHandoffStep
             )
         }
-        store.update(id, TaskStates.PAUSED) {
-            it.put("note", "Step budget ($maxSteps) reached — resume to continue.")
-            it.put("steps", stepsDone)
-            it.put("messages", messages)
+        // PROGRESS-AWARE STEP BUDGET (v1.0.3, StepBudget):
+        // the window is spent. A window that was making
+        // progress RESTS and auto-resumes on the ordinary
+        // waiting machinery (the worker re-enqueues at the
+        // record's nextRetryAt; the watchdog's app-open kick
+        // covers a lost chain) — up to the daily rest cap.
+        // A stalled window, or a task out of rests, parks
+        // for the user's word exactly as before.
+        val budgetRecord = store.get(id) ?: task
+        val today = StepBudget.dayKey(System.currentTimeMillis())
+        val rests = StepBudget.restsToday(budgetRecord, today)
+        return if (StepBudget.decide(
+                windowOk, windowFailed, consecErrors, rests
+            ) == StepBudget.Decision.AUTO_REST
+        ) {
+            store.update(id) {
+                it.put("steps", stepsDone)
+                it.put("messages", messages)
+                it.put(StepBudget.WINDOW_FIELD, 0)
+                it.put(StepBudget.RESTS_FIELD, rests + 1)
+                it.put(StepBudget.REST_DAY_FIELD, today)
+                it.put(StepBudget.REST_FLAG, true)
+            }
+            wait(
+                id, TaskStates.WAITING_ROUTE,
+                StepBudget.REST_NOTE, StepBudget.REST_MS
+            )
+        } else {
+            store.update(id, TaskStates.PAUSED) {
+                it.put("note", "Step budget ($maxSteps) reached — resume to continue.")
+                it.put("steps", stepsDone)
+                it.put("messages", messages)
+                it.put(StepBudget.WINDOW_FIELD, windowSteps)
+            }
+            TaskStates.PAUSED
         }
-        return TaskStates.PAUSED
     }
 
     /** The wall tracker: an OBSERVED CHALLENGE from a browser/X
@@ -476,10 +633,13 @@ class TaskRunner(private val context: Context) {
         return state
     }
 
-    private fun checkpoint(id: String, messages: JSONArray, steps: Int) {
+    private fun checkpoint(
+        id: String, messages: JSONArray, steps: Int, windowSteps: Int
+    ) {
         store.update(id) {
             it.put("messages", messages)
             it.put("steps", steps)
+            it.put(StepBudget.WINDOW_FIELD, windowSteps)
         }
     }
 

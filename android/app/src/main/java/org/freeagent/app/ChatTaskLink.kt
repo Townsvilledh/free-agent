@@ -115,7 +115,28 @@ object ChatTaskLink {
         val stepsBlock = TaskTransparency.reportSteps(task)
         return when (newState) {
             TaskStates.COMPLETED -> buildString {
-                append("Done — that work is finished.")
+                // Never silently downgrade (v1.0.3): a
+                // finish with computer-lane classes
+                // outstanding is labelled PARTIAL — the
+                // headline scopes itself to what this phone
+                // did, and the not-done classes are named.
+                val partialPlan = if (task.optBoolean("partialCompletion")) {
+                    TaskTools.planFromRecord(task)
+                } else {
+                    null
+                }
+                if (partialPlan != null) {
+                    append("Done — the parts this phone can do ")
+                    append("are finished (partial).")
+                    if (partialPlan.unavailable.isNotEmpty()) {
+                        append("\n\nNot done here (needs the ")
+                        append("computer lane): ")
+                        append(TaskTools.labelsFor(partialPlan.unavailable))
+                        append(".")
+                    }
+                } else {
+                    append("Done — that work is finished.")
+                }
                 if (stepsBlock != null) {
                     append("\n\n").append(stepsBlock)
                 }

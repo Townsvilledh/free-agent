@@ -181,20 +181,42 @@
                 android:layout_weight="1"
                 android:textColor="#F5EFE7"
                 android:textSize="13sp" />
-            <Button
+            <!-- Panel controls (v1.0.3): small tonal icon
+                 buttons in the shared menu language — no
+                 text bars. Expand trades the transcript's
+                 space for the panel's; the action button is
+                 take-over (wheel) or hand-back (return
+                 arrow) by state; close dismisses the panel
+                 while the work keeps running. -->
+            <ImageButton
                 android:id="@+id/browserPanelExpand"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:background="@drawable/bg_icon_button"
-                android:text="Expand"
-                android:textColor="#E8E2D9" />
-            <Button
+                android:contentDescription="Expand"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_expand" />
+            <ImageButton
                 android:id="@+id/browserPanelAction"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_icon_button"
-                android:textColor="#E8E2D9" />
+                android:contentDescription="Take over"
+                android:padding="8dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_takeover" />
+            <ImageButton
+                android:id="@+id/browserPanelClose"
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_icon_button"
+                android:contentDescription="Close — she keeps working"
+                android:padding="9dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_close" />
         </LinearLayout>
         <TextView
             android:id="@+id/browserPanelWaiting"
@@ -210,6 +232,25 @@
             android:layout_height="300dp"
             android:layout_marginTop="8dp" />
     </LinearLayout>
+
+    <!-- The dismissed-panel indicator (v1.0.3): while the
+         panel is closed the browser work keeps running
+         behind the chat; this slim chip is its presence —
+         one tap brings the panel back. A park reopens the
+         panel on its own and the chip steps aside. -->
+    <TextView
+        android:id="@+id/browserChip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:paddingStart="12dp"
+        android:paddingTop="7dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="7dp"
+        android:textColor="#E8E2D9"
+        android:textSize="12.5sp"
+        android:visibility="gone" />
 
     <!-- Attachment preview: shown above the input when a file/image
          has been picked. Thumbnail (images) + display name + remove. -->

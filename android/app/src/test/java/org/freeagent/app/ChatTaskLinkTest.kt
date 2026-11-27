@@ -158,6 +158,35 @@ class ChatTaskLinkTest {
     }
 
     @Test
+    fun partialCompletionIsLabelledPartialNeverFullDone() {
+        // v1.0.3: a finish with computer-lane classes
+        // outstanding is labelled partial — the headline
+        // scopes itself, the not-done classes are named,
+        // and the plain full-done headline never appears.
+        val t = task(
+            TaskStates.COMPLETED,
+            summary = "Joined the Discord server and read the page."
+        )
+        t.put("partialCompletion", true)
+        TaskTools.stampPlan(
+            t,
+            TaskTools.planFor(
+                "Join the Discord server, read my Gmail inbox, " +
+                    "and record a demo video"
+            )
+        )
+        val text = ChatTaskLink.reportFor(t, TaskStates.COMPLETED)!!
+        assertTrue(text.contains("(partial)"))
+        assertTrue(
+            text.contains("Not done here (needs the computer lane)")
+        )
+        assertTrue(text.contains("email work"))
+        assertTrue(text.contains("video work"))
+        assertFalse(text.contains("Done — that work is finished."))
+        assertTrue(text.contains(ChatTaskLink.COST_LINE))
+    }
+
+    @Test
     fun nonChatTasksNeverReportToChat() {
         for (state in ChatTaskLink.MATERIAL) {
             assertNull(

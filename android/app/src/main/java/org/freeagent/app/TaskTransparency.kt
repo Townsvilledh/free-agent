@@ -317,6 +317,9 @@ object TaskTransparency {
         detailFor(task, state, now)?.let {
             out.append("\n").append(it)
         }
+        declarationFor(task)?.let {
+            out.append("\n").append(it)
+        }
         val updatedAt = task.optLong("updatedAt", 0L)
         if (updatedAt > 0L) {
             out.append("\nLast movement ").append(clockLabel(updatedAt)).append(".")
@@ -353,9 +356,19 @@ object TaskTransparency {
                     "she continues on her own." + retryBit(task, now) +
                     watchdogBit(task)
             TaskStates.WAITING_ROUTE ->
-                "Taking a short pause before the next step — " +
-                    "she continues on her own." + retryBit(task, now) +
-                    watchdogBit(task)
+                if (task.optBoolean(StepBudget.REST_FLAG)) {
+                    // A budget rest (v1.0.3) is work resting,
+                    // not a route resting: it says so, in the
+                    // brief's own terms — resting, continues
+                    // on her own.
+                    "Resting between work sessions — she " +
+                        "continues on her own." + retryBit(task, now) +
+                        watchdogBit(task)
+                } else {
+                    "Taking a short pause before the next step — " +
+                        "she continues on her own." + retryBit(task, now) +
+                        watchdogBit(task)
+                }
             TaskStates.PARKED_AT_WALL -> {
                 val step = task.optString("wallStep").trim()
                 when {
@@ -382,6 +395,27 @@ object TaskTransparency {
                     ?.let { "Why: $it" }
             else -> null
         }
+
+    /**
+     * The up-front tool declaration (v1.0.3): when the
+     * record's plan names classes this phone does not have,
+     * the status says so from the job's FIRST appearance —
+     * what she has here, what needs the computer lane, and
+     * that the rest will be marked in her report. The truth
+     * at the start, not in the final report (the Agentware
+     * lesson). Composed deterministically from the plan
+     * fields (TaskTools), never from narration.
+     */
+    fun declarationFor(task: JSONObject): String? {
+        val plan = TaskTools.planFromRecord(task) ?: return null
+        if (plan.unavailable.isEmpty()) return null
+        return TaskTools.availableLine(plan) +
+            " This job also names " +
+            TaskTools.labelsFor(plan.unavailable) +
+            " — that needs the computer lane, so she'll do " +
+            "the parts this phone supports and mark the rest " +
+            "in her report."
+    }
 
     /** The watchdog's visible trace (v1.0.2): when a forced
      *  retry still ended waiting, the record's watchdogNote
@@ -455,8 +489,13 @@ object TaskTransparency {
                 "Waiting for the network — continues on her own" +
                     retryBit(task, now)
             TaskStates.WAITING_ROUTE ->
-                "Pausing briefly — continues on her own" +
-                    retryBit(task, now)
+                if (task.optBoolean(StepBudget.REST_FLAG)) {
+                    "Resting between work sessions — continues " +
+                        "on her own" + retryBit(task, now)
+                } else {
+                    "Pausing briefly — continues on her own" +
+                        retryBit(task, now)
+                }
             TaskStates.PARKED_AT_WALL ->
                 "Waiting on your step (named above)"
             TaskStates.PAUSED -> "Paused"

@@ -2,6 +2,7 @@ package org.freeagent.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -97,6 +98,98 @@ class BrowserPanelTest {
             BrowserPanel.PARKED_LABEL,
             BrowserPanel.USER_HOLD_LABEL,
             BrowserPanel.WAITING_OTHER_LINE
+        )) {
+            assertFalse(NarrationGuard.containsNarration(label))
+        }
+    }
+
+    // ---------- dismissal (v1.0.3) ----------
+
+    @Test
+    fun closeHidesThePanelAndShowsTheIndicator() {
+        // Close is a view choice: the panel hides, the slim
+        // indicator carries the browser's presence, and the
+        // state machine's task facts are untouched (the
+        // dismissal never reaches the task record — it is
+        // an input to visibility, nothing more).
+        assertFalse(
+            BrowserPanel.panelVisible(BrowserPanel.State.WATCH, true)
+        )
+        assertTrue(
+            BrowserPanel.indicatorShown(BrowserPanel.State.WATCH, true)
+        )
+        assertFalse(
+            BrowserPanel.panelVisible(
+                BrowserPanel.State.WAITING_OTHER, true
+            )
+        )
+        assertTrue(
+            BrowserPanel.indicatorShown(
+                BrowserPanel.State.WAITING_OTHER, true
+            )
+        )
+        assertTrue(
+            BrowserPanel.indicatorShown(
+                BrowserPanel.State.USER_HOLD, true
+            )
+        )
+    }
+
+    @Test
+    fun indicatorTapReopensThePanel() {
+        // Not dismissed: the panel shows, no indicator.
+        assertTrue(
+            BrowserPanel.panelVisible(BrowserPanel.State.WATCH, false)
+        )
+        assertFalse(
+            BrowserPanel.indicatorShown(BrowserPanel.State.WATCH, false)
+        )
+    }
+
+    @Test
+    fun parkWhileHiddenReopensThePanelOnItsOwn() {
+        // A park overrides dismissal — when she needs him,
+        // the panel is back in front of him at the parked
+        // page, and the indicator steps aside.
+        assertTrue(
+            BrowserPanel.panelVisible(BrowserPanel.State.PARKED, true)
+        )
+        assertFalse(
+            BrowserPanel.indicatorShown(BrowserPanel.State.PARKED, true)
+        )
+        assertTrue(
+            BrowserPanel.panelVisible(BrowserPanel.State.PARKED, false)
+        )
+    }
+
+    @Test
+    fun hiddenStateShowsNeitherPanelNorIndicator() {
+        assertFalse(
+            BrowserPanel.panelVisible(BrowserPanel.State.HIDDEN, true)
+        )
+        assertFalse(
+            BrowserPanel.indicatorShown(BrowserPanel.State.HIDDEN, true)
+        )
+        assertFalse(
+            BrowserPanel.panelVisible(BrowserPanel.State.HIDDEN, false)
+        )
+    }
+
+    @Test
+    fun controlLabelsAreThePinnedPlainNames() {
+        assertEquals("Take over", BrowserPanel.TAKE_OVER_LABEL)
+        assertEquals("Done — hand back", BrowserPanel.HAND_BACK_LABEL)
+        assertEquals("Expand", BrowserPanel.EXPAND_LABEL)
+        assertEquals("Shrink", BrowserPanel.SHRINK_LABEL)
+        assertTrue(BrowserPanel.CLOSE_LABEL.contains("keeps working"))
+        assertTrue(BrowserPanel.INDICATOR_LINE.contains("tap to view"))
+        for (label in listOf(
+            BrowserPanel.TAKE_OVER_LABEL,
+            BrowserPanel.HAND_BACK_LABEL,
+            BrowserPanel.EXPAND_LABEL,
+            BrowserPanel.SHRINK_LABEL,
+            BrowserPanel.CLOSE_LABEL,
+            BrowserPanel.INDICATOR_LINE
         )) {
             assertFalse(NarrationGuard.containsNarration(label))
         }

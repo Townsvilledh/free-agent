@@ -212,11 +212,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var browserPanelLabel: TextView
     private lateinit var browserPanelContainer: FrameLayout
     private lateinit var browserPanelWaiting: TextView
-    private lateinit var browserPanelExpand: Button
-    private lateinit var browserPanelAction: Button
+    private lateinit var browserPanelExpand: ImageButton
+    private lateinit var browserPanelAction: ImageButton
+    private lateinit var browserPanelClose: ImageButton
+    private lateinit var browserChip: TextView
     private var panelState: BrowserPanel.State = BrowserPanel.State.HIDDEN
     private var panelTaskId: String? = null
     private var panelExpanded = false
+
+    /** The panel dismissal (v1.0.3): the task id whose
+     *  panel the user closed. A VIEW fact only — it lives
+     *  here, never on the task record; closing the panel
+     *  does not touch the work. A different task becoming
+     *  the chat's latest clears it; a park overrides it
+     *  (BrowserPanel.panelVisible). */
+    private var panelDismissedTaskId: String? = null
     private val panelTick = object : Runnable {
         override fun run() {
             if (!uiAlive) return
@@ -430,10 +440,24 @@ class MainActivity : AppCompatActivity() {
         browserPanelWaiting = findViewById(R.id.browserPanelWaiting)
         browserPanelExpand = findViewById(R.id.browserPanelExpand)
         browserPanelAction = findViewById(R.id.browserPanelAction)
+        browserPanelClose = findViewById(R.id.browserPanelClose)
+        browserChip = findViewById(R.id.browserChip)
         browserPanelExpand.setOnClickListener {
             setPanelExpanded(!panelExpanded)
         }
         browserPanelAction.setOnClickListener { onPanelAction() }
+        // Close (v1.0.3): hide the panel; the work keeps
+        // running untouched — dismissal is recorded HERE,
+        // never on the task. The chip reopens it; a park
+        // reopens it on its own.
+        browserPanelClose.setOnClickListener {
+            panelDismissedTaskId = panelTaskId
+            refreshBrowserPanel()
+        }
+        browserChip.setOnClickListener {
+            panelDismissedTaskId = null
+            refreshBrowserPanel()
+        }
         // Chat parity: while a reply is in flight the send
         // button IS the stop button (same slot); the composer
         // stays live and the keyboard's send key queues the
@@ -1129,6 +1153,16 @@ class MainActivity : AppCompatActivity() {
             instruction + "\n\n" + ChatTaskLink.INTAKE_NOTE
         )
         val taskId = task.optString("id")
+        // TOOL AVAILABILITY (v1.0.3, TaskTools): the plan
+        // is stamped at creation — from the user's own
+        // words, before the intake direction is added — so
+        // the job's FIRST status in this chat already
+        // declares what she can and cannot do here, and a
+        // browser job holds the browser lane from its
+        // first run. The runner re-stamps the same plan at
+        // run start (idempotent).
+        val plan = TaskTools.planFor(instruction)
+        taskStore.update(taskId) { TaskTools.stampPlan(it, plan) }
         linkTaskToChat(taskId, chatId)
         TaskWorker.enqueue(this, taskId)
         appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
@@ -1354,20 +1388,47 @@ class MainActivity : AppCompatActivity() {
             ownerId != null && ownerId != taskId,
             task?.optBoolean("browserTakeover", false) == true
         )
-        applyPanelState(state, task)
+        // A dismissal belongs to ONE task; a different
+        // task becoming this chat's latest clears it.
+        if (panelDismissedTaskId != null &&
+            panelDismissedTaskId != taskId
+        ) {
+            panelDismissedTaskId = null
+        }
+        val dismissed = panelDismissedTaskId != null &&
+            panelDismissedTaskId == taskId
+        applyPanelState(state, task, dismissed)
     }
 
-    private fun applyPanelState(state: BrowserPanel.State, task: JSONObject?) {
+    private fun applyPanelState(
+        state: BrowserPanel.State,
+        task: JSONObject?,
+        dismissed: Boolean = false
+    ) {
         panelState = state
         panelTaskId = task?.optString("id")?.takeIf { it.isNotEmpty() }
-        when (state) {
-            BrowserPanel.State.HIDDEN -> {
-                browserPanel.visibility = View.GONE
-                if (panelExpanded) setPanelExpanded(false)
-                if (browserPanelContainer.childCount > 0) {
-                    BrowserSession.detach()
-                }
+        // The indicator chip (v1.0.3): shown exactly while
+        // the panel is dismissed and the work is still
+        // browsing — one tap reopens the panel.
+        if (BrowserPanel.indicatorShown(state, dismissed)) {
+            browserChip.text = BrowserPanel.INDICATOR_LINE
+            browserChip.visibility = View.VISIBLE
+        } else {
+            browserChip.visibility = View.GONE
+        }
+        if (!BrowserPanel.panelVisible(state, dismissed)) {
+            // Hidden — no work, or dismissed by the user.
+            // Either way the session detaches (it lives on
+            // in BrowserSession; her steps keep driving it)
+            // and the task itself is never touched here.
+            browserPanel.visibility = View.GONE
+            if (panelExpanded) setPanelExpanded(false)
+            if (browserPanelContainer.childCount > 0) {
+                BrowserSession.detach()
             }
+            return
+        }
+        when (state) {
             BrowserPanel.State.WAITING_OTHER -> {
                 browserPanel.visibility = View.VISIBLE
                 browserPanelLabel.text = "Lille's browser"
@@ -1376,6 +1437,7 @@ class MainActivity : AppCompatActivity() {
                 browserPanelContainer.visibility = View.GONE
                 browserPanelAction.visibility = View.GONE
                 browserPanelExpand.visibility = View.GONE
+                browserPanelClose.visibility = View.VISIBLE
                 if (browserPanelContainer.childCount > 0) {
                     BrowserSession.detach()
                 }
@@ -1385,15 +1447,25 @@ class MainActivity : AppCompatActivity() {
                 browserPanelWaiting.visibility = View.GONE
                 browserPanelContainer.visibility = View.VISIBLE
                 browserPanelExpand.visibility = View.VISIBLE
+                browserPanelClose.visibility = View.VISIBLE
                 browserPanelLabel.text = when (state) {
                     BrowserPanel.State.PARKED -> BrowserPanel.PARKED_LABEL
                     BrowserPanel.State.USER_HOLD -> BrowserPanel.USER_HOLD_LABEL
                     else -> BrowserPanel.WATCH_LABEL
                 }
+                // The action is an icon button now (v1.0.3):
+                // the wheel takes over, the return arrow
+                // hands back; the words live in the content
+                // description (BrowserPanel's pinned labels).
                 browserPanelAction.visibility = View.VISIBLE
-                browserPanelAction.text = when (state) {
-                    BrowserPanel.State.WATCH -> "Take over"
-                    else -> "Done — hand back"
+                if (state == BrowserPanel.State.WATCH) {
+                    browserPanelAction.setImageResource(R.drawable.ic_takeover)
+                    browserPanelAction.contentDescription =
+                        BrowserPanel.TAKE_OVER_LABEL
+                } else {
+                    browserPanelAction.setImageResource(R.drawable.ic_handback)
+                    browserPanelAction.contentDescription =
+                        BrowserPanel.HAND_BACK_LABEL
                 }
                 if (browserPanelContainer.childCount == 0) {
                     BrowserSession.attachTo(this, browserPanelContainer)
@@ -1407,7 +1479,14 @@ class MainActivity : AppCompatActivity() {
      *  Same session throughout — only the frame changes. */
     private fun setPanelExpanded(expanded: Boolean) {
         panelExpanded = expanded
-        browserPanelExpand.text = if (expanded) "Shrink" else "Expand"
+        browserPanelExpand.setImageResource(
+            if (expanded) R.drawable.ic_shrink else R.drawable.ic_expand
+        )
+        browserPanelExpand.contentDescription = if (expanded) {
+            BrowserPanel.SHRINK_LABEL
+        } else {
+            BrowserPanel.EXPAND_LABEL
+        }
         scrollView.visibility = if (expanded) View.GONE else View.VISIBLE
         val plp = browserPanel.layoutParams as LinearLayout.LayoutParams
         if (expanded) {

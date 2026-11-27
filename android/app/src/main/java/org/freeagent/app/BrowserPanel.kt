@@ -39,6 +39,47 @@ object BrowserPanel {
     const val PARKED_LABEL = "Lille's browser — your step"
     const val USER_HOLD_LABEL = "Lille's browser — you're driving"
 
+    // The panel's controls (v1.0.3): small tonal icon
+    // buttons in the shared menu language — these labels
+    // are their content descriptions (and the test-pinned
+    // names); no text bars on the panel itself.
+    const val TAKE_OVER_LABEL = "Take over"
+    const val HAND_BACK_LABEL = "Done — hand back"
+    const val EXPAND_LABEL = "Expand"
+    const val SHRINK_LABEL = "Shrink"
+    const val CLOSE_LABEL = "Close — she keeps working"
+
+    /** The slim indicator shown while the panel is
+     *  dismissed: the browser work continues behind the
+     *  chat; one tap brings the panel back. */
+    const val INDICATOR_LINE =
+        "Lille's browser is working — tap to view"
+
+    /**
+     * Whether the panel itself is on screen (v1.0.3).
+     * Dismissal is a VIEW choice only: closing the panel
+     * never touches the task — the work keeps running in
+     * the background exactly as it does when the app is
+     * closed. A PARK overrides dismissal: when she needs
+     * the user, the panel reopens on its own at the
+     * parked page.
+     */
+    fun panelVisible(state: State, dismissed: Boolean): Boolean =
+        when (state) {
+            State.HIDDEN -> false
+            State.PARKED -> true
+            else -> !dismissed
+        }
+
+    /**
+     * Whether the slim indicator shows (v1.0.3): exactly
+     * when the panel would be on screen but the user
+     * dismissed it. Parked and hidden states never show
+     * it (parked shows the panel; hidden has no work).
+     */
+    fun indicatorShown(state: State, dismissed: Boolean): Boolean =
+        dismissed && state != State.HIDDEN && state != State.PARKED
+
     /**
      * @param taskState the chat's newest work record's
      *   state, or null when the chat has no work.
