@@ -442,6 +442,17 @@ object TaskTransparency {
     fun declarationFor(task: JSONObject): String? {
         val plan = TaskTools.planFromRecord(task) ?: return null
         val parts = mutableListOf<String>()
+        // v1.0.13: a job about her own product states its
+        // target repository up front — a fact from her own
+        // records, declared like every other part of the
+        // plan, never asked of the user mid-job.
+        val targetRepo = task.optString(TaskTools.TARGET_REPO_FIELD)
+        if (targetRepo.isNotEmpty()) {
+            parts.add(
+                "The work targets her own repository, " +
+                    targetRepo + "."
+            )
+        }
         // v1.0.4: routed classes are HANDED OFF, with the
         // receipt named — not merely "unavailable".
         if (plan.routed.isNotEmpty()) {

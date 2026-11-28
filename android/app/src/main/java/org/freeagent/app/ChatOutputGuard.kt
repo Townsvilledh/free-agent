@@ -60,6 +60,50 @@ package org.freeagent.app
  *   the question is never a legitimate reply. Whole-
  *   prose shape only.
  *
+ * - ACTION_CLAIM (v1.0.13): the reply CLAIMS an action
+ *   is happening or has happened — "I'm launching the
+ *   Fluid wallet UI now", "You should see the wallet
+ *   screen appear on your phone momentarily", "I've
+ *   opened…" — with no executed action behind it.
+ *   Verify-state applied to her own actions: real
+ *   actions leave receipts (a shell command's
+ *   deterministic line, a task's recorded steps), and
+ *   those surfaces are composed from the record, never
+ *   screened — what reaches this guard is narration,
+ *   and a first-person action claim in narration is a
+ *   hallucination by construction. Born of the
+ *   2026-11-28 "bring up mu fluid wallet" exchange
+ *   (his verdict: "This is just hallucinations"). On
+ *   the REPORT path the verdict narrows to UI claims
+ *   (wallet / UI / screen / settings / Fluid / panel /
+ *   app): a task's step-backed summaries of its own
+ *   lane work ("opened the page and read the rules")
+ *   are the finish machinery's to grade, not this
+ *   screen's — but no lane opens a UI, so a UI claim
+ *   in a report is unbacked by construction too.
+ *
+ * - INFORMATION_ASK (v1.0.13): the reply asks the user
+ *   for INFORMATION — a link, a file location, which
+ *   repo or file, her own setup facts, a secret — when
+ *   the only things she may ever ask for are what is
+ *   physically HIS: a sign-in only he can perform in
+ *   her parked browser panel, a code he types there, an
+ *   approval (Ethuram's boundary, 2026-11-28). A fact
+ *   she does not hold she fetches herself or derives
+ *   from her state. Born of the 2026-11-28 reply that
+ *   asked him for the repository URL, the files holding
+ *   her own referral logic, and an API key, for a job
+ *   about her own product. Structural: a request frame
+ *   bound to an information object in the same
+ *   sentence. Access asks carry none of these shapes
+ *   and pass.
+ *
+ * - INTAKE_QUESTIONNAIRE (v1.0.13): the reply turns a
+ *   stated job into a form — three or more distinct
+ *   input-request frame types in one reply. One genuine
+ *   question is conversation; a form is the job handed
+ *   back as homework.
+ *
  * - IDENTITY_ASK (v1.0.6; explainer framing v1.0.7):
  *   the reply asks the user for the AGENT'S OWN identity
  *   items — her handle, her mailbox, a password, a phone
@@ -125,6 +169,32 @@ object ChatOutputGuard {
             "mailbox are set up on this phone, and my " +
             "password is one I generated into my " +
             "encrypted vault. I don't need those from you."
+
+    /** The grounded line for a second information-ask /
+     *  intake hit (v1.0.13): the boundary asserted in her
+     *  own voice — facts are hers to fetch or work from;
+     *  the job, stated, is taken on as a task here. Itself
+     *  clean under every verdict (pinned). */
+    const val OWN_FACTS_LINE =
+        "I don't need that from you — links, files and " +
+            "my own setup are mine to fetch or work from, " +
+            "and a fact I don't hold I look up myself. " +
+            "Say the job and I'll take it on as a task in " +
+            "this conversation."
+
+    /** The grounded line for a second action-claim hit
+     *  (v1.0.13): the honest negative plus the screens
+     *  she CAN bring up by name — a UI demand for one of
+     *  those classifies under the IntentContract and is
+     *  performed by the shell, never narrated. Itself
+     *  clean under every verdict (pinned) — worded so it
+     *  makes no action claim of its own. */
+    const val ACTION_LINE =
+        "I haven't opened anything — no screen has been " +
+            "launched from here. The screens I can bring " +
+            "up by name are my wallet, the Fluid wallet, " +
+            "Settings and your chats; name one as a " +
+            "command and it opens."
 
     sealed class Verdict {
         object Clean : Verdict()
@@ -235,11 +305,137 @@ object ChatOutputGuard {
         if (identityAsk(prose)) {
             return Verdict.Rejected("identity-ask")
         }
+        // Information/intake BEFORE the action-claim
+        // screen (v1.0.13): the referral screenshot's
+        // reply both narrates a task-start AND asks for
+        // her facts — for that reply the grounded facts
+        // line is the honest fallback. A pure action
+        // claim (the UI hallucination) carries no
+        // information ask and still lands on the action
+        // screen below.
+        if (informationAsk(prose)) {
+            return Verdict.Rejected("information-ask")
+        }
+        if (intakeQuestionnaire(prose)) {
+            return Verdict.Rejected("intake-ask")
+        }
+        if (actionClaim(prose, uiOnly = false)) {
+            return Verdict.Rejected("action-claim")
+        }
         if (CONFIRM_QUESTION_RE.containsMatchIn(prose.trim())) {
             return Verdict.Rejected("confirmation-question")
         }
         return Verdict.Clean
     }
+
+    /**
+     * INFORMATION ASK (v1.0.13; see the class doc for the
+     * boundary). The object families, each bound to a
+     * request frame within the same sentence:
+     *  - HER OWN RECORDS + LOCATORS: repository, repo,
+     *    branch, codebase, source code, which/what file,
+     *    file location, folder, directory — where her own
+     *    work lives is hers to know or find.
+     *  - SECRETS THAT NEVER TRAVEL IN CHAT: an API key,
+     *    credentials, a code (keys live in Settings; codes
+     *    are typed into her panel by the user himself).
+     *  - LINKS: bound to the transfer frames only (share /
+     *    send / give / tell me the link) — she fetches
+     *    links herself; "let me know once the link is
+     *    live" is a state report-back, a different shape
+     *    (and the ask-back verdict's business where it
+     *    applies), not an information ask.
+     * Access asks pass: they request his hands (sign in,
+     * type, tap, approve), never a fact.
+     */
+    private val INFO_OBJECT =
+        "(repository|repo|branch|api\\s?key|credentials?|" +
+            "codebase|source code|which files?|what files?|" +
+            "file location|folder|directory|code)"
+
+    private val INFO_ASK_RES = listOf(
+        Regex(
+            "\\b(i need|i'll need|i will need|send me|give me|" +
+                "tell me|let me know)\\b[^.!?\\n]{0,60}" +
+                "\\b$INFO_OBJECT\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bplease\\s+(share|provide|send|give)\\b" +
+                "[^.!?\\n]{0,60}\\b$INFO_OBJECT\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "(^|[.!?]\\s+|\\n\\s*)(share|provide|send|give)" +
+                "\\s+(me\\s+)?(the|your)\\b[^.!?\\n]{0,40}" +
+                "\\b$INFO_OBJECT\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\b(share|provide|send|give)\\s+your\\b" +
+                "[^.!?\\n]{0,40}\\b$INFO_OBJECT\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bwhat('s| is) your\\b[^.!?\\n]{0,40}" +
+                "\\b$INFO_OBJECT\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        // Links under the transfer frames.
+        Regex(
+            "\\b(send|give) me\\b[^.!?\\n]{0,40}\\b(link|url)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\btell me\\b[^.!?\\n]{0,30}\\b(link|url)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bplease\\s+(share|provide|send|give)\\b" +
+                "[^.!?\\n]{0,60}\\b(link|url)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "(^|[.!?]\\s+|\\n\\s*)(share|provide|send|give)" +
+                "\\s+(me\\s+)?(the|your)\\b[^.!?\\n]{0,40}" +
+                "\\b(link|url)\\b",
+            RegexOption.IGNORE_CASE
+        )
+    )
+
+    private fun informationAsk(prose: String): Boolean =
+        INFO_ASK_RES.any { it.containsMatchIn(prose) }
+
+    /** The input-request frame TYPES (see
+     *  [intakeQuestionnaire]). */
+    private val INPUT_REQUEST_RES = listOf(
+        Regex("\\blet me know\\b", RegexOption.IGNORE_CASE),
+        Regex("\\btell me\\b", RegexOption.IGNORE_CASE),
+        Regex("\\b(send|give) me\\b", RegexOption.IGNORE_CASE),
+        Regex(
+            "\\bplease\\s+(share|provide|send|give|tell)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex(
+            "\\bi\\s+(need|will need|'ll need)\\b" +
+                "[^.!?\\n]{0,40}\\b(the|your|a)\\b",
+            RegexOption.IGNORE_CASE
+        ),
+        Regex("\\bwhat('s| is) your\\b", RegexOption.IGNORE_CASE)
+    )
+
+    /** INTAKE QUESTIONNAIRE (v1.0.13): three or more
+     *  DISTINCT input-request frame types in one reply —
+     *  the reply is a form, whatever its objects. The
+     *  2026-11-28 reply carried three types across four
+     *  asks (please share…, let me know…, tell me…). The
+     *  distinct-type bar is the precision: a follow-up
+     *  conversation reuses one or two frames ("tell me
+     *  more… let me know if…") and passes; a form cycles
+     *  through the whole repertoire. The grounded
+     *  fallback lines carry at most one type and pass. */
+    private fun intakeQuestionnaire(prose: String): Boolean =
+        INPUT_REQUEST_RES.count { it.containsMatchIn(prose) } >= 3
 
     /**
      * STATUS-DENIAL (v1.0.8, born of the 2026-11-27
@@ -405,6 +601,76 @@ object ChatOutputGuard {
             }
         }
         return false
+    }
+
+    /**
+     * ACTION CLAIM (v1.0.13; see the class doc). The
+     * shapes, each a first-person claim verb bound to an
+     * action referent within the same breath:
+     *  - progressive: "I'm launching / opening / bringing
+     *    up / starting … <referent>";
+     *  - perfect: "I've opened / launched / started …
+     *    <referent>";
+     *  - imminent display: "I'll launch / open …
+     *    <referent>", "you should see … appear", "… will
+     *    appear on your phone/screen".
+     * The referent requirement is the precision: "I'm
+     * opening with a summary" claims a rhetorical act,
+     * not an executed one, and passes; claims attributed
+     * to the record ("the task opened the page at step
+     * 3") are third-person and pass — record-backed
+     * lines are composed deterministically and never
+     * screened at all. [uiOnly] narrows the referents to
+     * the UI set for the report path (see the class doc).
+     */
+    private val ACTION_REFERENT_CHAT =
+        "(wallet|ui|screen|settings|browser|panel|fluid|" +
+            "task|app|page)"
+    private val ACTION_REFERENT_UI =
+        "(wallet|ui|screen|settings|fluid|panel|app)"
+
+    private fun actionClaimRes(referent: String): List<Regex> =
+        listOf(
+            Regex(
+                "\\bi(?:'m|\\s+am)\\s+(?:now\\s+)?" +
+                    "(launching|opening|bringing\\s+up|showing|" +
+                    "starting|loading)\\b[^.!?\\n]{0,50}" +
+                    "\\b$referent\\b",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                "\\bi(?:'ve|\\s+have)\\s+" +
+                    "(opened|launched|started|brought\\s+up|" +
+                    "shown)\\b[^.!?\\n]{0,50}\\b$referent\\b",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                "\\bi(?:'ll|\\s+will)\\s+" +
+                    "(launch|open|bring\\s+up|show)\\b" +
+                    "[^.!?\\n]{0,50}\\b$referent\\b",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                "\\byou should see\\b[^.!?\\n]{0,60}" +
+                    "\\b(appear|pop\\s+up)\\b",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                "\\bwill appear\\b[^.!?\\n]{0,40}" +
+                    "\\b(phone|screen)\\b",
+                RegexOption.IGNORE_CASE
+            )
+        )
+
+    private fun actionClaim(prose: String, uiOnly: Boolean): Boolean {
+        val referent = if (uiOnly) {
+            ACTION_REFERENT_UI
+        } else {
+            ACTION_REFERENT_CHAT
+        }
+        return actionClaimRes(referent).any {
+            it.containsMatchIn(prose)
+        }
     }
 
     /**
@@ -722,6 +988,13 @@ object ChatOutputGuard {
         val prose = proseOnly(text)
         if (HOMEWORK_RES.any { it.containsMatchIn(prose) }) {
             return Verdict.Rejected("homework")
+        }
+        // v1.0.13: a UI action claim in a report is
+        // unbacked by construction (no lane opens a UI) —
+        // the action-claim verdict, narrowed to UI
+        // referents so step-backed lane summaries pass.
+        if (actionClaim(prose, uiOnly = true)) {
+            return Verdict.Rejected("action-claim")
         }
         return Verdict.Clean
     }

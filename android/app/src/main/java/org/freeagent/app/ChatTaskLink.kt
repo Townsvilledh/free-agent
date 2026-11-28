@@ -170,6 +170,15 @@ object ChatTaskLink {
                         append("): ")
                         append(TaskTools.labelsFor(partialPlan.routed))
                         append(".")
+                        // PROACTIVITY (v1.0.13): a routed
+                        // finish states her next own move —
+                        // the brief stands exported under her
+                        // watch, and its result is brought
+                        // back HERE by her, not chased by him.
+                        append("\n\nNext from me: the brief ")
+                        append("stands exported under my watch ")
+                        append("— when its result comes back, ")
+                        append("I'll bring it here.")
                     }
                     if (partialPlan.mailNotConnected) {
                         append("\n\nThe email part is not done — ")
@@ -283,6 +292,13 @@ object ChatTaskLink {
                 if (note != null) {
                     append("\n\n").append(note)
                 }
+                // PROACTIVITY (v1.0.13): the routed report
+                // states her next own move — the spec stands
+                // exported under her watch; its result is
+                // brought back here by her.
+                append("\n\nNext from me: the spec stands ")
+                append("exported under my watch — when its ")
+                append("result comes back, I'll bring it here.")
             }
             TaskStates.PAUSED -> buildString {
                 append("That work paused before it finished.")

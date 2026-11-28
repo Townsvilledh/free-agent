@@ -624,6 +624,22 @@ class TaskRunner(private val context: Context) {
         if (plan != null && !task.optBoolean("envNotePosted")) {
             messages.put(JSONObject().put("role", "user")
                 .put("content", TaskTools.environmentNote(plan)))
+            // OWN-PRODUCT TARGET (v1.0.13): a job about her
+            // own product carries its default repository on
+            // the record (stamped at creation) — the run
+            // hears it as a fact, so no step of the work
+            // ever needs to ask the user for it.
+            val targetRepo = task.optString(TaskTools.TARGET_REPO_FIELD)
+            if (targetRepo.isNotEmpty()) {
+                messages.put(JSONObject().put("role", "user").put(
+                    "content",
+                    "This job targets your own repository, " +
+                        targetRepo + ". Its files and layout " +
+                        "are yours to work from — never ask " +
+                        "the user for the repository, its " +
+                        "files, or any credential."
+                ))
+            }
             if (plan.requiresCalendar) {
                 // Calendar tools take epoch times — give her
                 // the anchor instead of letting her guess it.

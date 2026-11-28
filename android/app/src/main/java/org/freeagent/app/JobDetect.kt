@@ -54,6 +54,25 @@ import org.json.JSONObject
  * his alone (a sign-in tap, a human check), and those
  * surface as parked steps, not questions in chat.
  *
+ * v1.0.13 — THE SECOND STAGE IS INTELLIGENCE-LED
+ * (Ethuram's ruling, 2026-11-28: "I don't want hardcodes
+ * I want a smart and proficient that can distinguish
+ * task and handle them proficiently"). This component
+ * stays exactly what it was — the deterministic first
+ * stage, for the shapes it already covers. Everything
+ * it does NOT cover no longer falls to an uncontracted
+ * brain reply: the chat brain classifies intent under
+ * the IntentContract (TASK / COMMAND / CHAT) and the
+ * verdict is executed record-first — a TASK verdict
+ * creates the record and starts the lane before any
+ * reply is composed, so narration can never precede
+ * the action. No new sentence grammars grow here for
+ * new surfaces; discrimination of the residue is the
+ * classifier's job, with the output guard as its net.
+ * (The wrapped-instruction failure that forced this —
+ * "I need you to edit on github…" answered with an
+ * intake list — is the ship note's lead diagnosis.)
+ *
  * Pure Kotlin + org.json (the house pattern): every rule is
  * pinned by JobDetectTest over a fixture set of job-shaped,
  * ambiguous and chat-shaped messages.

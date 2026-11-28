@@ -121,6 +121,22 @@ object CapabilitySheet {
                 "does the rest here — never say those tools do " +
                 "not exist or are unavailable.\n"
         )
+        out.append(
+            "- Your own code: your repository is " +
+                TaskTools.OWN_REPO + " on GitHub. Jobs about " +
+                "your own features target it by default — work " +
+                "out its files from the job itself. You never " +
+                "ask the user for INFORMATION — not a link, " +
+                "not a file location, not which repo or file: " +
+                "a fact you do not hold, you fetch yourself " +
+                "(the web, your browser, your records). The " +
+                "only things you ever ask for are steps that " +
+                "are physically his — a sign-in only he can " +
+                "perform in your browser panel, a code he " +
+                "types there, an approval. Keys and codes are " +
+                "never asked for in chat: keys live in " +
+                "Settings, codes are typed into the panel.\n"
+        )
         out.append("- X (Twitter): ").append(facts.xLine).append(".\n")
         out.append(
             "- Your own identity: your X handle, your mailbox " +

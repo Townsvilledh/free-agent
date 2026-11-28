@@ -824,7 +824,20 @@ class MainActivity : AppCompatActivity() {
         if (flight != null && flight.queue.inFlight) {
             val liveText = when {
                 flight.partial.isNotEmpty() || flight.carry.isNotEmpty() ->
-                    stitch(flight.carry, flight.partial)
+                    // INTENT CONTRACT (v1.0.13): while a
+                    // reply streams, the bubble shows only
+                    // what the contract allows — a verdict
+                    // still forming shows nothing, a TASK /
+                    // COMMAND verdict's text is never shown
+                    // (its reply comes from the execution),
+                    // a CHAT verdict streams its body with
+                    // the verdict line stripped. Narration
+                    // cannot precede the action on screen
+                    // either. A held display falls back to
+                    // the flight's status text, if any.
+                    IntentContract.displayText(
+                        stitch(flight.carry, flight.partial)
+                    ) ?: flight.statusText
                 flight.statusText != null -> flight.statusText!!
                 flight.replyOpen -> "…thinking"
                 else -> null
@@ -1300,6 +1313,19 @@ class MainActivity : AppCompatActivity() {
             openBrowserCommand(chatId)
             return
         }
+
+        // UI DEMANDS (v1.0.13) are NOT intercepted here:
+        // there is no sentence grammar for them (his
+        // ruling — no new hardcodes). They fall through
+        // to the brain, which classifies them under the
+        // IntentContract (COMMAND + target), and the
+        // verdict is executed record-first at settle:
+        // the navigation is performed and the reply is
+        // the performed fact's line (settleBrainReply).
+        // On 1.0.12 the same demand got a narrated launch
+        // that never happened ("I'm launching the Fluid
+        // wallet UI now…" — "This is just
+        // hallucinations", 2026-11-28).
 
         // LOG OUT / SWITCH (v1.0.10, Fix 3.5): "log out
         // of X", "switch to @handle" — session commands,
@@ -1915,6 +1941,28 @@ class MainActivity : AppCompatActivity() {
         appendAssistantMessage(chatId, plan.reply)
     }
 
+    /** A UI COMMAND'S NAVIGATION, PERFORMED (v1.0.13):
+     *  the IntentContract's COMMAND verdict, executed —
+     *  the target's activity opens. The FLUID target
+     *  opens the embedded Fluid sheet with no pairing
+     *  pending, which simply loads Fluid itself: the
+     *  connected main wallet's own surface, brought up
+     *  inside Lille. The reply line is delivered by the
+     *  caller (settleBrainReply) from UiScreens' table,
+     *  after this runs — the fact first, the line after. */
+    private fun performUiNavigation(target: UiScreens.Target) {
+        when (target) {
+            UiScreens.Target.WALLET ->
+                startActivity(Intent(this, WalletActivity::class.java))
+            UiScreens.Target.FLUID ->
+                startActivity(Intent(this, FluidSheetActivity::class.java))
+            UiScreens.Target.SETTINGS ->
+                startActivity(Intent(this, SettingsActivity::class.java))
+            UiScreens.Target.CHATS ->
+                startActivity(Intent(this, ChatListActivity::class.java))
+        }
+    }
+
     /** A SPOKEN SESSION COMMAND, DISPATCHED (v1.0.10):
      *  BrowserControl's plan names the record the
      *  command rides (or that one must be created for
@@ -2199,6 +2247,18 @@ class MainActivity : AppCompatActivity() {
      *  thread's invisible backbone. There is no hand-off
      *  and no other screen where the work lives. */
     private fun startChatTask(chatId: String, instruction: String) {
+        createChatTask(chatId, instruction)
+        appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
+    }
+
+    /** Create + link + enqueue a chat-born task record,
+     *  WITHOUT the acknowledgement: the record-first half
+     *  of [startChatTask], shared with the IntentContract's
+     *  settle path (v1.0.13), where the acknowledgement is
+     *  delivered through the flight's own delivery path
+     *  instead — one stored ack either way, and the record
+     *  exists before any reply is composed. */
+    private fun createChatTask(chatId: String, instruction: String) {
         val taskStore = TaskStore(this)
         // The task carries what the user sent, in full, plus
         // the standing fluency direction: gather missing
@@ -2223,6 +2283,14 @@ class MainActivity : AppCompatActivity() {
         )
         taskStore.update(taskId) {
             TaskTools.stampPlan(it, plan)
+            // OWN-PRODUCT TARGET (v1.0.13): a job about her
+            // own product stamps its default repository on
+            // the record at creation — stated in the job's
+            // first status (TaskTransparency), read by the
+            // run as a fact. Never asked of the user.
+            TaskTools.ownRepoTarget(instruction, plan)?.let {
+                repo -> it.put(TaskTools.TARGET_REPO_FIELD, repo)
+            }
             // PLAN/ACT (v1.0.4): a consequential job is
             // stamped PLAN at creation too, so its first
             // status already says she is planning first.
@@ -2230,7 +2298,6 @@ class MainActivity : AppCompatActivity() {
         }
         linkTaskToChat(taskId, chatId)
         TaskWorker.enqueue(this, taskId)
-        appendAssistantMessage(chatId, ChatTaskLink.START_ACK)
     }
 
     /** Release a parked approval (v1.0.4): the word landed
@@ -3301,12 +3368,68 @@ class MainActivity : AppCompatActivity() {
             ),
             System.currentTimeMillis()
         )
+        // THE INTENT CONTRACT (v1.0.13) rides every chat
+        // prompt, after the sheets: the brain classifies
+        // intent under the strict verdict contract, and
+        // the verdict is executed record-first at settle
+        // (settleBrainReply) — discrimination of anything
+        // the deterministic layers don't cover is
+        // intelligence-led, never a new sentence grammar.
         val base = SYSTEM_PROMPT + "\n\n" +
-            CapabilitySheet.render(facts) + "\n\n" + stateSheet
+            CapabilitySheet.render(facts) + "\n\n" + stateSheet +
+            "\n\n" + IntentContract.INSTRUCTION
         return if (flightFor(chatId).guardReassert) {
             base + "\n\n" + CapabilitySheet.REASSERT_LINE
         } else {
             base
+        }
+    }
+
+    /** THE INTENT CONTRACT, EXECUTED (v1.0.13): every
+     *  route's finished reply lands here first. The
+     *  brain's verdict is parsed and EXECUTED before any
+     *  reply text is composed — a TASK verdict creates
+     *  the record from the user's own message and starts
+     *  its lane, and the reply delivered is the record's
+     *  start acknowledgement; a COMMAND verdict performs
+     *  the navigation and the reply is the performed
+     *  fact's line; a CHAT verdict strips the verdict
+     *  line and the rest is guard-screened and delivered
+     *  like every answer. The model's own text under a
+     *  TASK/COMMAND verdict is discarded entire —
+     *  narration cannot precede the action, because the
+     *  action is what produces the reply. */
+    private fun settleBrainReply(
+        chatId: String, userText: String, historyText: String,
+        route: BrainFailure.Route, full: String
+    ) {
+        when (val intent = IntentContract.parse(full)) {
+            is IntentContract.Verdict.Task -> {
+                createChatTask(chatId, userText)
+                deliverChatAnswer(
+                    chatId, historyText, ChatTaskLink.START_ACK
+                )
+            }
+            is IntentContract.Verdict.Command -> {
+                val plan = UiScreens.planFor(intent.target)
+                performUiNavigation(plan.target)
+                deliverChatAnswer(chatId, historyText, plan.reply)
+            }
+            is IntentContract.Verdict.UnknownCommand -> {
+                deliverChatAnswer(
+                    chatId, historyText, UiScreens.UNKNOWN_LINE
+                )
+            }
+            is IntentContract.Verdict.Chat -> {
+                val answer = intent.body
+                if (!ChatOutputGuard.isClean(answer)) {
+                    guardRegenerateOrPlain(
+                        chatId, userText, historyText, route, answer
+                    )
+                } else {
+                    deliverChatAnswer(chatId, historyText, answer)
+                }
+            }
         }
     }
 
@@ -3364,6 +3487,19 @@ class MainActivity : AppCompatActivity() {
             // the same record answer; the facts are hers
             // to state, not his to fetch.
             "ask-back" -> statusDenialFallback(chatId)
+            // Information-ask / intake (v1.0.13): she asked
+            // him for a fact — a link, a file, her own
+            // setup — or handed the job back as a form.
+            // The fallback asserts the boundary: facts are
+            // hers to fetch; the job is taken on as a task.
+            "information-ask" -> ChatOutputGuard.OWN_FACTS_LINE
+            "intake-ask" -> ChatOutputGuard.OWN_FACTS_LINE
+            // Action-claim (v1.0.13): she narrated an
+            // action that never ran — the fallback is the
+            // honest negative plus the screens she CAN
+            // bring up by name (those are shell commands
+            // and never reach the brain at all).
+            "action-claim" -> ChatOutputGuard.ACTION_LINE
             else -> ChatOutputGuard.PLAIN_LINE
         }
         if (!flight.guardRetried) {
@@ -3376,7 +3512,8 @@ class MainActivity : AppCompatActivity() {
                 if (reason == "capability-denial" ||
                     reason == "identity-denial" ||
                     reason == "status-denial" ||
-                    reason == "ask-back"
+                    reason == "ask-back" ||
+                    reason == "information-ask"
                 ) {
                     flight.guardReassert = true
                 }
@@ -3614,18 +3751,15 @@ class MainActivity : AppCompatActivity() {
                         code == 200 && full.isNotEmpty() -> {
                             flight.brainStreak = 0
                             noteRouteSuccess(BrainFailure.Route.POLLINATIONS)
-                            // The output guard screens EVERY reply
-                            // before display; a reframed answer is
-                            // shown bare, exactly as the model
-                            // wrote it.
-                            if (!ChatOutputGuard.isClean(full)) {
-                                guardRegenerateOrPlain(
-                                    chatId, userText, historyText,
-                                    BrainFailure.Route.POLLINATIONS, full
-                                )
-                            } else {
-                                deliverChatAnswer(chatId, historyText, full)
-                            }
+                            // The intent contract executes FIRST
+                            // (record-first), the output guard
+                            // screens the CHAT body — a reframed
+                            // answer is shown bare, exactly as
+                            // the model wrote it.
+                            settleBrainReply(
+                                chatId, userText, historyText,
+                                BrainFailure.Route.POLLINATIONS, full
+                            )
                         }
                         (code == 402 || code == 429) -> {
                             // Busy route (v0.12): the chain
@@ -3914,15 +4048,10 @@ class MainActivity : AppCompatActivity() {
         flight.brainStreak = 0
         noteRouteSuccess(BrainFailure.Route.HORDE)
         BrainLane.shared.chatFinished(System.currentTimeMillis())
-        val answer = rawAnswer.trim()
-        if (!ChatOutputGuard.isClean(answer)) {
-            guardRegenerateOrPlain(
-                chatId, userText, historyText,
-                BrainFailure.Route.HORDE, answer
-            )
-            return
-        }
-        deliverChatAnswer(chatId, historyText, answer)
+        settleBrainReply(
+            chatId, userText, historyText,
+            BrainFailure.Route.HORDE, rawAnswer.trim()
+        )
     }
 
     /** v0.12.1 — an own-key route call (Groq / Gemini /
@@ -4084,12 +4213,9 @@ class MainActivity : AppCompatActivity() {
         flight.brainStreak = 0
         noteRouteSuccess(route)
         BrainLane.shared.chatFinished(System.currentTimeMillis())
-        val answer = rawAnswer.trim()
-        if (!ChatOutputGuard.isClean(answer)) {
-            guardRegenerateOrPlain(chatId, userText, historyText, route, answer)
-            return
-        }
-        deliverChatAnswer(chatId, historyText, answer)
+        settleBrainReply(
+            chatId, userText, historyText, route, rawAnswer.trim()
+        )
     }
 
     // ---------- smart recovery helpers (mirror free_agent/recovery.py) ----------

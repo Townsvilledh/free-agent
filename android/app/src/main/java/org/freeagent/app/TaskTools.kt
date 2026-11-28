@@ -326,6 +326,39 @@ object TaskTools {
         return out
     }
 
+    /** Her own repository — a fact from her own records
+     *  (v1.0.13). A job about her own product targets it by
+     *  default: the target is STATED on the record and in
+     *  the job's first status, never asked of the user.
+     *  Born of the 2026-11-28 screenshot, where the brain
+     *  asked him to "share the repository URL" for a job
+     *  about Lille's own referral link. */
+    const val OWN_REPO = "Townsvilledh/free-agent"
+
+    /** Record field carrying the job's default target
+     *  repository, when [ownRepoTarget] settles one. */
+    const val TARGET_REPO_FIELD = "targetRepo"
+
+    /** The repository a job targets when the job is about
+     *  HER OWN product — her name in the job's words, her
+     *  referral system named as hers, or the app itself —
+     *  AND the job is repository work. Null otherwise: a
+     *  job about the world's code keeps whatever target
+     *  its own words name, and a non-repo job has no
+     *  repository target at all. */
+    fun ownRepoTarget(text: String, plan: Plan): String? {
+        if (ToolClass.REPO_CODE !in plan.requires) return null
+        val low = jobText(text).lowercase()
+        val hers = wordHit(low, "lille") ||
+            low.contains("your referral") ||
+            low.contains("your refferal") ||
+            low.contains("her referral") ||
+            low.contains("her refferal") ||
+            low.contains("your own app") ||
+            low.contains("this app")
+        return if (hers) OWN_REPO else null
+    }
+
     /** The plan for a general task's text, against the
      *  phone's current capabilities. (Packaged tasks are
      *  the caller's concern — see [isPackaged].) */
