@@ -24,10 +24,10 @@ model calls go through the Router (route chains, cooldowns, privacy
 routing), and a phrasing refusal of the task gets ONE transparent
 reframe + retry; harmful requests are never reframed.
 """
-import json, os, re, time
+import ast, hashlib, json, os, re, time
 from dataclasses import dataclass, field
 
-from . import recovery, sandbox, tasktools
+from . import recovery, sandbox, selffacts, tasktools
 from .config import Config
 from .router import Router, PrivacyBlocked, AllProvidersFailed
 
@@ -43,12 +43,13 @@ Rules:
 {"tool": "write_file", "args": {"path": "main.py", "content": "..."}}
 ```
 - All files live in your task sandbox; use relative paths only.
-- When the task is fully done, call the finish tool with a summary and list every output file you produced in "outputs" — claimed outputs are verified to exist, so do not claim files you did not create.
+- When the task is fully done, call the finish tool with a summary and list every output file you produced in "outputs" — claimed outputs are verified against the sandbox: a claimed file must exist AND have been created or changed by this run's own steps, so do not claim files you did not actually write.
+- If you say you verified something, an execution step (run_python / run_tests) must actually follow your last change to it — a finish claiming verification without one is rejected.
 - If a tool result is an error, read it, fix the cause, and try again. Do not repeat an identical failing call.
-- Never invent results: only claim what tool outputs actually showed.
+- Never invent results: only claim what tool outputs actually showed. Values a tool printed outrank your recollection — report them exactly as printed, never override them with your own calculation.
 - Browser tasks: work from browser_read's element refs (refs are reassigned on every read — re-read after each navigation). Passwords are NEVER typed by you or written into any file: create them with vault_gen_secret (you receive only a key name) and type them with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only wall (CAPTCHA, an emailed code, a phone demand): STOP immediately and call finish with a summary naming that exact wall — never try to solve, bypass, or route around it.
 - Mail/calendar tasks: if a gmail/calendar tool returns a *_NOT_CONNECTED result, Google is not set up on this host — STOP and call finish naming the single setup step it describes. Never ask the user to fetch, copy or paste mail or calendar contents for you: reaching the mailbox yourself is the point of the tool. gmail_send / calendar_create denials are correct-by-default; never work around one.
-"""
+""" + "\n\n" + selffacts.facts_block()
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 _TOOLCALL_XML_RE = re.compile(
@@ -86,12 +87,132 @@ def _summarise(text, limit=300):
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[:limit] + "…"
 
+_FINISH_CALL_RE = re.compile(r"^finish\s*\(")
+
+def _split_call_args(inner):
+    """Split a call's argument text on top-level commas,
+    respecting quotes and bracket nesting."""
+    parts, depth, quote, esc, cur = [], 0, None, False, []
+    for ch in inner:
+        if esc:
+            cur.append(ch)
+            esc = False
+            continue
+        if quote:
+            cur.append(ch)
+            if ch == "\\":
+                esc = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            cur.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    tail = "".join(cur).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+def _literal(text):
+    """Parse one call argument: a Python literal first (the
+    dialect is Python call syntax), then JSON."""
+    try:
+        return ast.literal_eval(text), True
+    except Exception:
+        pass
+    try:
+        return json.loads(text), True
+    except Exception:
+        return text, False
+
+def _parse_finish_call(content):
+    """Recover finish(...) emitted as literal text — the
+    schedule-a / format-a dialect from the 1.0.13 battery:
+    the model's whole reply is a Python-style call, e.g.
+    finish("summary", ["out.txt"]) or finish({...}, []).
+    Anchored at the reply's start: a finish(...) mentioned
+    inside narration (code-b's confabulated shell session)
+    is NOT a call and is never recovered."""
+    s = (content or "").strip()
+    if not _FINISH_CALL_RE.match(s):
+        return None
+    open_idx = s.index("(")
+    depth, quote, esc, close_idx = 0, None, False, -1
+    for i in range(open_idx, len(s)):
+        ch = s[i]
+        if esc:
+            esc = False
+            continue
+        if quote:
+            if ch == "\\":
+                esc = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_idx = i
+                break
+    if close_idx < 0:
+        return None
+    inner = s[open_idx + 1:close_idx]
+    summary, outputs = None, []
+    for part in _split_call_args(inner):
+        m = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.*)$", part, re.S)
+        key, raw = (m.group(1), m.group(2)) if m else (None, part)
+        val, ok = _literal(raw.strip())
+        if key == "outputs" or (key is None and isinstance(val, list)):
+            if isinstance(val, list):
+                outputs = [str(x) for x in val]
+        elif key == "summary" or (key is None and summary is None):
+            if isinstance(val, dict):
+                if "summary" in val:
+                    summary = str(val.get("summary", ""))
+                    o = val.get("outputs")
+                    if isinstance(o, list):
+                        outputs = [str(x) for x in o]
+                else:
+                    # format-a's shape: the deliverable itself
+                    # rode in as the first argument — it IS
+                    # the answer the task asked for.
+                    summary = json.dumps(val)
+            elif isinstance(val, str):
+                summary = val
+            elif ok:
+                summary = json.dumps(val)
+    if summary is None:
+        return None
+    return {"name": "finish",
+            "args": {"summary": summary, "outputs": outputs}}
+
 def parse_text_tool_call(content):
     """Text-fallback protocol. Returns (call, error):
     call = {"name":..., "args": {...}} or None; error = str when the
     reply clearly TRIED to make a tool call but it was malformed."""
     if not content:
         return None, None
+    # Dialect (1.0.13 battery, schedule-a/format-a): finish(...)
+    # emitted as literal call-syntax text instead of a tool
+    # call. Recovered as the call — spec mode's grading never
+    # needed it (it grades the trace), the plain loop did.
+    fc = _parse_finish_call(content)
+    if fc:
+        return fc, None
     # Dialect seen live (2026-11-26, AI Horde community models on
     # the loop path): an XML-ish tool call —
     #   <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>
@@ -136,6 +257,168 @@ def parse_text_tool_call(content):
     if not isinstance(args, dict):
         return None, "'args' is not a JSON object"
     return {"name": str(obj["tool"]), "args": args}, None
+
+# ---------- grounding: tool output outranks narration ----------
+# (v1.0.14, battery fixes 4 + 6.) schedule-b: her run_python
+# printed 2026-12-11; her text answered "Friday, 14 January
+# 2027". verify-a/b: her summaries presented invented hosts
+# for her own product. Both are the same shape — a claim in
+# the report that the trace's evidence contradicts or never
+# supported. The checks below run at finish acceptance: dates
+# are judged against EXECUTION evidence only (run_python /
+# run_tests output — a value the machine computed, not text
+# a search snippet carried), and URLs against all tool
+# evidence plus her canonical sources (selffacts).
+
+_MONTHS = {name: i + 1 for i, name in enumerate([
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november",
+    "december"])}
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+_LONG_DATE_RE = re.compile(
+    r"(?:\b(?:monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\s*,?\s+)?\b(\d{1,2})\s+"
+    r"(january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)\s+(\d{4})\b",
+    re.I)
+_LONG_DATE_US_RE = re.compile(
+    r"(?:\b(?:monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\s*,?\s+)?\b"
+    r"(january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)\s+(\d{1,2})"
+    r"(?:st|nd|rd|th)?\s*,?\s+(\d{4})\b",
+    re.I)
+_URL_RE = re.compile(r"https?://[^\s)\]<>\"']+")
+
+# Tools whose output is EXECUTION evidence: the machine ran
+# code and printed the value. Only these can outrank a claim.
+EXECUTION_TOOLS = ("run_python", "run_tests")
+
+
+def extract_dates(text):
+    """All dates a text asserts, as (start, end, iso) spans —
+    ISO and long forms, weekday prefix included in the span
+    so a correction replaces the whole assertion."""
+    out = []
+    text = text or ""
+    for m in _ISO_DATE_RE.finditer(text):
+        out.append((m.start(), m.end(),
+                    f"{m.group(1)}-{m.group(2)}-{m.group(3)}"))
+    for m in _LONG_DATE_RE.finditer(text):
+        iso = (f"{m.group(3)}-{_MONTHS[m.group(2).lower()]:02d}"
+               f"-{int(m.group(1)):02d}")
+        out.append((m.start(), m.end(), iso))
+    for m in _LONG_DATE_US_RE.finditer(text):
+        iso = (f"{m.group(3)}-{_MONTHS[m.group(1).lower()]:02d}"
+               f"-{int(m.group(2)):02d}")
+        out.append((m.start(), m.end(), iso))
+    out.sort()
+    # Drop spans contained in an earlier span (weekday forms
+    # can double-match their own tail).
+    deduped = []
+    for span in out:
+        if deduped and span[0] >= deduped[-1][0] \
+                and span[1] <= deduped[-1][1]:
+            continue
+        deduped.append(span)
+    return deduped
+
+
+def _observation_texts(messages, tools=None):
+    """The tool observations in a message history, optionally
+    restricted to named tools. Native turns resolve through
+    the assistant tool_calls' ids — walked IN ORDER, so an
+    observation is attributed to the call that preceded it
+    even if a later turn reuses an id; text-mode observations
+    carry the tool name in their prefix."""
+    id_to_name = {}
+    out = []
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            if tc.get("id"):
+                id_to_name[tc["id"]] = fn.get("name", "")
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        if m.get("role") == "tool":
+            name = id_to_name.get(m.get("tool_call_id", ""), "")
+            if tools is None or name in tools:
+                out.append(content)
+        elif m.get("role") == "user" \
+                and content.startswith("Tool result ("):
+            name = content[len("Tool result ("):].split(")", 1)[0]
+            if tools is None or name in tools:
+                out.append(content)
+    return out
+
+
+def verified_dates(messages):
+    """Dates an execution tool printed in this run — the
+    values a report must use when it speaks of them."""
+    found = set()
+    for obs in _observation_texts(messages, EXECUTION_TOOLS):
+        for _, _, iso in extract_dates(obs):
+            found.add(iso)
+    return found
+
+
+def date_contradiction(summary, messages):
+    """(asserted_spans, verified) when the summary asserts
+    date(s) and NONE of them is a date an execution tool
+    verified, while such a verified date exists — the
+    schedule-b shape. None when there is nothing to judge
+    or the summary agrees with the evidence."""
+    verified = verified_dates(messages)
+    if not verified:
+        return None
+    asserted = extract_dates(summary or "")
+    if not asserted:
+        return None
+    if any(iso in verified for _, _, iso in asserted):
+        return None
+    return asserted, verified
+
+
+def correct_dates(summary, verified):
+    """Substitute the single verified date for the summary's
+    contradicted assertions. Only defined when exactly one
+    verified date exists — otherwise there is no honest
+    mechanical correction and the caller must not close."""
+    if len(verified) != 1:
+        return None
+    target = next(iter(verified))
+    spans = extract_dates(summary or "")
+    if not spans:
+        return None
+    out, last = [], 0
+    for start, end, _ in spans:
+        out.append(summary[last:start])
+        out.append(target)
+        last = end
+    out.append(summary[last:])
+    return "".join(out)
+
+
+def ungrounded_urls(summary, messages):
+    """URLs the summary presents that appear in NO tool
+    observation and are not among her canonical sources —
+    invented addresses (verify-a/b's lille.dev/download,
+    fluidnames.com). Only http(s) URLs are judged."""
+    evidence = "\n".join(_observation_texts(messages))
+    evidence_hosts = set()
+    for m in _URL_RE.finditer(evidence):
+        evidence_hosts.add(
+            m.group(0).split("://", 1)[-1].split("/", 1)[0].lower())
+    bad = []
+    for m in _URL_RE.finditer(summary or ""):
+        url = m.group(0).rstrip(".,;")
+        host = url.split("://", 1)[-1].split("/", 1)[0].lower()
+        if host in evidence_hosts or host in selffacts.CANONICAL_HOSTS:
+            continue
+        bad.append(url)
+    return bad
+
 
 class WaitingRouteError(RuntimeError):
     """All routes are cooling down (Fallback Law). NOT a failure:
@@ -449,6 +732,82 @@ class TaskLoop:
                                    self.WIRE_CAP_BYTES)
         return self.model_call(messages, schemas)
 
+    # ---------- sandbox state: baseline / produced ----------
+    # (v1.0.14, battery fixes 1 + 2.) Verify-by-state needs to
+    # know what THIS run actually did: a fingerprint snapshot
+    # of the sandbox at run start (the baseline — fixtures a
+    # task was handed are in it), refreshed after every tool
+    # step. `produced` = files new or changed against the
+    # baseline; `changed_step` = the step that last changed
+    # each. .git internals are not work products and are
+    # never fingerprinted.
+    _HASH_CAP = 8 * 1024 * 1024
+
+    @staticmethod
+    def _fingerprint(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        if st.st_size > TaskLoop._HASH_CAP:
+            return f"{st.st_size}:{st.st_mtime_ns}"
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+        except OSError:
+            return None
+
+    @staticmethod
+    def _snapshot(task_dir):
+        out = {}
+        for root, dirs, files in os.walk(task_dir):
+            dirs[:] = sorted(d for d in dirs if d != ".git")
+            for fn in sorted(files):
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, task_dir)
+                fp = TaskLoop._fingerprint(full)
+                if fp is not None:
+                    out[rel] = fp
+        return out
+
+    def _refresh_produced(self, state, step_no):
+        """Diff the sandbox against the baseline after a tool
+        step: refresh `produced` and stamp the step that last
+        changed each produced file."""
+        current = self._snapshot(state["task_dir"])
+        baseline = state.get("baseline") or {}
+        last_seen = state.get("_last_fp") or {}
+        produced = state.setdefault("produced", [])
+        changed_step = state.setdefault("changed_step", {})
+        for rel, fp in current.items():
+            if baseline.get(rel) != fp and rel not in produced:
+                produced.append(rel)
+            if last_seen.get(rel) != fp \
+                    and baseline.get(rel) != fp:
+                # This step is the latest one to change it.
+                changed_step[rel] = step_no
+        state["_last_fp"] = current
+        produced.sort()
+
+    def _derive_browser_domains(self, state):
+        """Fix 5 (v1.0.14): the core Sentinel's browser
+        allowlist is derived from the job's own words, as the
+        device runner has done since v1.0.3 — a spec context
+        that already names domains keeps them; the derivation
+        only adds what the job itself authorises."""
+        existing = self.sentinel.spec_context.get(
+            "browser_domains") or []
+        derived = tasktools.derive_browser_domains(
+            state["task_text"])
+        merged = list(existing) + [d for d in derived
+                                   if d not in existing]
+        if merged:
+            self.sentinel.spec_context["browser_domains"] = merged
+        state["browser_domains"] = merged
+
     # ---------- checkpointing (v0.4 durable tasks) ----------
     def _checkpoint(self, state):
         if self.on_checkpoint is None:
@@ -462,6 +821,17 @@ class TaskLoop:
             "total_chars": state["total_chars"],
             "reframed": state["reframed"], "nudged": state["nudged"],
             "provider": state.get("provider"),
+            # v1.0.14 finish-landing state: the baseline the
+            # produced-diff judges against, the pending finish
+            # (her own completion statement, applicable without
+            # a model call), and the resume steer flag.
+            "baseline": state.get("baseline"),
+            "baseline_late": state.get("baseline_late", False),
+            "produced": state.get("produced", []),
+            "changed_step": state.get("changed_step", {}),
+            "pending_finish": state.get("pending_finish"),
+            "resume_steered": state.get("resume_steered", False),
+            "browser_domains": state.get("browser_domains", []),
             "ts": self.clock(),
         }
         try:
@@ -484,6 +854,7 @@ class TaskLoop:
         else:
             task_dir = os.path.join(self.workspace_root, task_id)
             os.makedirs(task_dir, exist_ok=True)
+        baseline = self._snapshot(task_dir)
         state = {
             "task_id": task_id, "task_text": task_text, "task_dir": task_dir,
             "messages": [
@@ -492,7 +863,13 @@ class TaskLoop:
             ],
             "steps": [], "iterations_done": 0, "total_chars": 0,
             "reframed": False, "nudged": 0, "provider": None,
+            # v1.0.14: verify-by-state + finish-landing state.
+            "baseline": baseline, "baseline_late": False,
+            "produced": [], "changed_step": {},
+            "pending_finish": None, "resume_steered": False,
+            "_last_fp": dict(baseline),
         }
+        self._derive_browser_domains(state)
         return self._execute(state)
 
     def resume(self, snap):
@@ -508,10 +885,174 @@ class TaskLoop:
             "reframed": snap.get("reframed", False),
             "nudged": snap.get("nudged", 0),
             "provider": snap.get("provider"),
+            # v1.0.14: a pre-1.0.14 checkpoint has no baseline —
+            # capture one now and mark it late (the produced
+            # check then stands down for this run: files the
+            # earlier segment produced are indistinguishable
+            # from fixtures, and existence still applies).
+            "baseline": snap.get("baseline"),
+            "baseline_late": snap.get("baseline") is None,
+            "produced": list(snap.get("produced", []) or []),
+            "changed_step": dict(snap.get("changed_step", {}) or {}),
+            "pending_finish": snap.get("pending_finish"),
+            "resume_steered": snap.get("resume_steered", False),
         }
+        if state["baseline"] is None:
+            state["baseline"] = self._snapshot(state["task_dir"])
+        state["_last_fp"] = self._snapshot(state["task_dir"])
+        self._derive_browser_domains(state)
+        # ROUTE RECOVERY RESUMES TO FINISH (v1.0.14): if the
+        # interrupted segment had already stated completion in
+        # her own words with work products on disk, the resume
+        # closes the record from that state — no model call is
+        # spent re-deciding what she already decided.
+        if state["pending_finish"]:
+            done = self._try_deterministic_finish(state)
+            if done is not None:
+                self._persist_trace(done)
+                return done
+            # The pending finish no longer verifies (outputs
+            # gone, guard or grounding refuses): clear it and
+            # let the loop work — never close on stale words.
+            state["pending_finish"] = None
         return self._execute(state)
 
+    # ---------- finish acceptance (v1.0.14) ----------
+    _CODE_EXTS = (".py", ".js", ".ts", ".sh", ".rb", ".go",
+                  ".rs", ".java", ".kt", ".php")
+
+    def _check_finish(self, state, args, deterministic=False):
+        """Verify a finish claim against state before the
+        completed state is written. Returns (rejection,
+        corrected_summary): rejection names the contradicting
+        evidence; corrected_summary is set only for a
+        deterministic close whose sole defect is a date the
+        execution evidence contradicts (exactly one verified
+        date exists to put in its place — the report uses
+        the tool's value)."""
+        summary = args.get("summary", "") or ""
+        outputs = args.get("outputs", []) or []
+        # (fix 2) Claimed outputs must be THIS run's work:
+        # created or changed against the run-start baseline.
+        # code-b claimed a cap fix on a fixture her trace
+        # never wrote; existence alone let it through.
+        if outputs and not state.get("baseline_late"):
+            produced = set(state.get("produced", []))
+            unproduced = [rel for rel in outputs
+                          if rel not in produced]
+            if unproduced:
+                return (f"claimed output(s) {unproduced} were not "
+                        "created or changed by any step in this "
+                        "run — they are identical to the state "
+                        "the task started from. A completion "
+                        "claim must rest on work this run "
+                        "actually did: make the change with a "
+                        "tool, verify it, then finish."), None
+            # (fix 2) A verification claim needs an execution
+            # step AFTER the last change to the claimed file.
+            if re.search(r"verif", summary, re.I):
+                exec_steps = [s.n for s in state["steps"]
+                              if s.kind == "tool"
+                              and s.tool in EXECUTION_TOOLS]
+                changed = state.get("changed_step", {})
+                for rel in outputs:
+                    if rel.lower().endswith(self._CODE_EXTS):
+                        last_change = changed.get(rel, 0)
+                        if not any(n > last_change
+                                   for n in exec_steps):
+                            return (
+                                f"you claim verification, but no "
+                                f"run_python/run_tests step "
+                                f"follows your last change to "
+                                f"{rel} (step {last_change}). Run "
+                                "it, read its output, then "
+                                "finish."), None
+        # (fix 6) Tool-verified dates outrank the summary's.
+        contra = date_contradiction(summary, state["messages"])
+        if contra:
+            _, verified = contra
+            if deterministic:
+                corrected = correct_dates(summary, verified)
+                if corrected is not None:
+                    return None, corrected
+            return (f"your summary's date(s) contradict the "
+                    f"value your own tool verified in this run "
+                    f"({', '.join(sorted(verified))}). Report "
+                    "the tool's value exactly."), None
+        # (fix 4) Addresses for her own product must be real:
+        # grounded in tool evidence or her canonical sources.
+        bad_urls = ungrounded_urls(summary, state["messages"])
+        if bad_urls:
+            return (f"your summary presents address(es) that "
+                    f"appear in no tool result and are not your "
+                    f"recorded sources: {bad_urls}. Your "
+                    f"canonical sources are: "
+                    f"{', '.join(selffacts.CANONICAL_URLS)}. "
+                    "Fetch the real source with a tool, then "
+                    "finish."), None
+        return None, None
+
+    def _try_deterministic_finish(self, state):
+        """Apply the pending finish — her own completion
+        statement plus verified work products — as a STATE
+        WRITE, with no model call (fix 1: a finish is a state
+        write, not a model call). Returns a done TaskResult,
+        or None when the pending finish does not verify
+        (outputs gone, the spec guard refuses, or a grounding
+        check refuses): the task then waits/resumes exactly
+        as before — never closed on stale words."""
+        pf = state.get("pending_finish")
+        if not pf:
+            return None
+        task_dir = state["task_dir"]
+        self._refresh_produced(state, len(state["steps"]))
+        outputs = list(pf.get("outputs", []) or [])
+        for rel in outputs:
+            try:
+                target = sandbox.resolve_inside(task_dir, rel)
+            except sandbox.SandboxError:
+                return None
+            if not os.path.isfile(target):
+                return None
+        args = {"summary": pf.get("summary", ""), "outputs": outputs}
+        if self.finish_guard is not None \
+                and self.finish_guard(state["steps"], args):
+            return None
+        rejection, corrected = self._check_finish(
+            state, args, deterministic=True)
+        if rejection:
+            return None
+        summary = corrected if corrected is not None \
+            else args["summary"]
+        steps = state["steps"]
+        steps.append(Step(
+            len(steps) + 1, "finish", "finish",
+            tasktools.args_summary("finish", args),
+            _summarise("closed deterministically from her own "
+                       "completion statement — the finish is "
+                       "a state write, not a model call")))
+        state["pending_finish"] = None
+        self._checkpoint(state)
+        return TaskResult("done", summary, task_dir,
+                          state["task_id"], steps,
+                          provider=state.get("provider"))
+
     def _execute(self, state):
+        try:
+            return self._execute_inner(state)
+        except (WaitingRouteError, WaitingNetworkError):
+            # The route dropped mid-task. If she had already
+            # stated completion over verified work products,
+            # the finish lands NOW — the record closes from
+            # state instead of parking finished work until
+            # some later resume (fix 1).
+            done = self._try_deterministic_finish(state)
+            if done is not None:
+                self._persist_trace(done)
+                return done
+            raise
+
+    def _execute_inner(self, state):
         task_id = state["task_id"]
         task_dir = state["task_dir"]
         task_text = state["task_text"]
@@ -535,6 +1076,23 @@ class TaskLoop:
             self._checkpoint(state)
 
         self._checkpoint(state)
+        # RESUME STEER (v1.0.14): a resumed run is told, once,
+        # what its earlier segment already produced — the
+        # finish-first fact pattern behind "route recovery
+        # resumes to FINISH". Fresh runs (iterations_done == 0)
+        # never see it.
+        if state["iterations_done"] >= 1 \
+                and not state.get("resume_steered") and messages:
+            state["resume_steered"] = True
+            made = ", ".join(state.get("produced", [])) or "none recorded"
+            messages.append({"role": "user", "content":
+                "This run was interrupted and has now resumed. "
+                f"Work products already in the sandbox from the "
+                f"earlier steps: {made}. If the task is "
+                "complete, call finish NOW — do not redo "
+                "finished work. Otherwise continue from the "
+                "trace."})
+            self._checkpoint(state)
         steered_streaks = set()
         brief_swapped = state["iterations_done"] >= 1
         for step_no in range(state["iterations_done"] + 1, self.max_steps + 1):
@@ -661,6 +1219,22 @@ class TaskLoop:
                            result_summary="task rephrased once after a phrasing refusal")
                     sync()
                     continue
+                # PENDING FINISH (v1.0.14, fix 1): a plain-text
+                # reply AFTER real tool work is her completion
+                # statement in words. Record it — summary in
+                # her own words, outputs the verified work
+                # products — so the finish can land as a state
+                # write if the route drops, the nudges run out,
+                # or the process dies before a finish call.
+                if content and any(s.kind == "tool" for s in steps):
+                    self._refresh_produced(state, step_no)
+                    if state.get("produced") or any(
+                            s.tool in EXECUTION_TOOLS
+                            for s in steps if s.kind == "tool"):
+                        state["pending_finish"] = {
+                            "summary": content,
+                            "outputs": list(state.get("produced", [])),
+                        }
                 if nudged < TaskLoop.MAX_PLAIN_TEXT_NUDGES:
                     nudged += 1
                     messages.append({"role": "assistant", "content": content or ""})
@@ -673,9 +1247,25 @@ class TaskLoop:
                     record("text", result_summary="plain-text reply; nudged to use tools/finish")
                     sync()
                     continue
+                done = self._try_deterministic_finish(state)
+                if done is not None:
+                    result = done
+                    break
                 record("stop", result_summary="model ended with plain text, no finish call")
+                stopped_summary = content or "Model stopped without a summary."
+                # (fix 6) Even a stopped report uses the
+                # tool-verified value over her narration.
+                contra = date_contradiction(stopped_summary, messages)
+                if contra:
+                    corrected = correct_dates(stopped_summary,
+                                              contra[1])
+                    if corrected is not None:
+                        stopped_summary = corrected
+                        record("grounding-correction",
+                               result_summary="report date corrected "
+                                              "to the tool-verified value")
                 result = TaskResult("stopped",
-                                    content or "Model stopped without a summary.",
+                                    stopped_summary,
                                     task_dir, task_id, steps,
                                     provider=reply.get("provider"))
                 break
@@ -742,6 +1332,20 @@ class TaskLoop:
                                tasktools.args_summary(name, args), obs)
                         self._observe(messages, c, obs)
                         continue
+                    # VERIFY-BY-STATE (v1.0.14): existence is
+                    # not evidence of work — the claim is
+                    # checked against the run's produced set,
+                    # its verification evidence, and the
+                    # trace's tool-verified values before the
+                    # completed state may be written.
+                    self._refresh_produced(state, len(steps))
+                    rejection2, _ = self._check_finish(state, args)
+                    if rejection2:
+                        obs = f"finish REJECTED: {rejection2}"
+                        record("finish-rejected", name,
+                               tasktools.args_summary(name, args), obs)
+                        self._observe(messages, c, obs)
+                        continue
                     record("finish", name, tasktools.args_summary(name, args),
                            args.get("summary", ""))
                     finished = TaskResult("done", args.get("summary", "Task done."),
@@ -751,6 +1355,9 @@ class TaskLoop:
                 obs = tasktools.execute(name, args, task_dir)
                 total_chars += len(obs)
                 record("tool", name, tasktools.args_summary(name, args), obs)
+                # len(steps) is the recorded step's own number
+                # — the numbering changed_step is judged in.
+                self._refresh_produced(state, len(steps))
                 self._observe(messages, c, obs)
 
             sync()
@@ -764,11 +1371,15 @@ class TaskLoop:
                     task_dir, task_id, steps)
                 break
         else:
-            record("stop", result_summary=f"step budget ({self.max_steps}) exhausted")
-            result = TaskResult("stopped",
-                f"Stopped after {self.max_steps} steps without a verified finish. "
-                "The trace above shows how far the task got.",
-                task_dir, task_id, steps)
+            done = self._try_deterministic_finish(state)
+            if done is not None:
+                result = done
+            else:
+                record("stop", result_summary=f"step budget ({self.max_steps}) exhausted")
+                result = TaskResult("stopped",
+                    f"Stopped after {self.max_steps} steps without a verified finish. "
+                    "The trace above shows how far the task got.",
+                    task_dir, task_id, steps)
 
         self._persist_trace(result)
         return result

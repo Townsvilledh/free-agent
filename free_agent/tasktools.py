@@ -33,6 +33,77 @@ def set_runtime_context(ctx):
         _RUNTIME_CONTEXT.update(ctx)
     browsertools.set_context(_RUNTIME_CONTEXT)
 
+# ---------- job-derived browser allowlist (v1.0.14) ----------
+# The device runner has derived the Sentinel's per-task browser
+# allowlist from the job's own words since v1.0.3
+# (TaskTools.domainsFor): the URLs and bare domains the job
+# names, plus the canonical domains of services it names. The
+# CORE path never got the derivation — a plain task's
+# browser_open met a Sentinel with no authorised domains at
+# all, and the 1.0.13 battery's browser tasks zeroed on it
+# (browser-a/b, and the live-source checks in research-b /
+# verify-a / verify-b). This is the same derivation, mirrored:
+# derived once from the job text, never widened at runtime.
+import re as _re
+
+_URL_RE = _re.compile(r"https?://[^\s)\]<>\"']+")
+_BARE_DOMAIN_RE = _re.compile(
+    r"\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|co|cc|gg|me|so|to|fm|tv|xyz|site|online)\b")
+
+# Web services a job may name by name; naming one authorises
+# its canonical domain(s). Mirrors TaskTools.SERVICE_DOMAINS
+# on the device, plus Wikipedia — a general-knowledge source
+# jobs name constantly (the battery's browser-a named it and
+# nothing else).
+SERVICE_DOMAINS = [
+    ("discord", ["discord.com"]),
+    ("github", ["github.com"]),
+    ("lu.ma", ["lu.ma", "luma.com"]),
+    ("tiktok", ["tiktok.com"]),
+    ("devpost", ["devpost.com"]),
+    ("dorahacks", ["dorahacks.io"]),
+    ("x.com", ["x.com"]),
+    ("twitter", ["x.com", "twitter.com"]),
+    ("wikipedia", ["en.wikipedia.org", "wikipedia.org"]),
+]
+
+
+def _word_hit(low, phrase):
+    if " " in phrase:
+        return phrase in low
+    return _re.search(r"\b" + _re.escape(phrase) + r"\b", low) is not None
+
+
+def derive_browser_domains(task_text):
+    """The browser allowlist the job's own words authorise:
+    domains of URLs it links, bare domains it names, the
+    canonical domains of services it names, and — for a job
+    about her own product — her canonical sources
+    (selffacts). First-mention order, deduplicated."""
+    from . import selffacts
+    low = (task_text or "").lower()
+    out = []
+
+    def add(domain):
+        d = (domain or "").strip().lower()
+        if d.startswith("www."):
+            d = d[4:]
+        if d and d not in out:
+            out.append(d)
+
+    for m in _URL_RE.finditer(low):
+        add(browsertools.domain_of(m.group(0)))
+    for m in _BARE_DOMAIN_RE.finditer(low):
+        add(m.group(0))
+    for name, domains in SERVICE_DOMAINS:
+        if _word_hit(low, name):
+            for d in domains:
+                add(d)
+    if selffacts.mentions_own_product(task_text):
+        for d in selffacts.CANONICAL_HOSTS:
+            add(d)
+    return out
+
 FINISH = "finish"
 
 TOOL_SCHEMAS = [
