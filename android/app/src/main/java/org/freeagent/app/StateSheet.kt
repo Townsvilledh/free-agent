@@ -118,6 +118,12 @@ object StateSheet {
                     facts.walletFamilies.joinToString(", ") + "."
             )
         }
+        // HER OWN FACTS (v1.0.14): the canonical sources
+        // are recorded facts on every state sheet — a
+        // verify question about her own product is
+        // answered from these, never from an invented
+        // address (the battery's verify-a/b failure).
+        out.append("\n- ").append(SelfFacts.sheetLine())
         return out.toString()
     }
 

@@ -111,7 +111,7 @@ class TaskRunner(private val context: Context) {
             lanHealthOk = ok
             return ok
         }
-        private const val SYSTEM_PROMPT =
+        private val SYSTEM_PROMPT =
             "You are Lille, an autonomous agent completing a task on the user's phone by calling tools. " +
             "Reply with exactly ONE fenced JSON block per step, like:\n" +
             "```json\n{\"tool\": \"write_note\", \"args\": {\"path\": \"note.txt\", \"content\": \"...\"}}\n```\n" +
@@ -119,7 +119,8 @@ class TaskRunner(private val context: Context) {
             "memory_read{}, memory_write{block,fact}, memory_search{query}, " +
             "plan_note{facts,subgoals,done,dropped}, finish{summary, outputs}. " +
             "All files are notes inside the app sandbox; use relative paths. " +
-            "When fully done, call finish and list produced notes in outputs. Never invent tool results."
+            "When fully done, call finish and list produced notes in outputs. Never invent tool results. " +
+            SelfFacts.promptLine()
         private const val BROWSER_SYSTEM_PROMPT =
             "You are Lille, an autonomous agent completing a task in your OWN browser on the user's phone by calling tools. " +
             "Reply with exactly ONE fenced JSON block per step, like:\n" +
@@ -142,7 +143,7 @@ class TaskRunner(private val context: Context) {
             "finish, and the task parks until the user hands back. Never use it for work you can do " +
             "yourself, and never ask the user for a password: passwords are typed by the user in the " +
             "parked session, never by you. Never invent tool results."
-        private const val GENERAL_BROWSER_SYSTEM_PROMPT =
+        private val GENERAL_BROWSER_SYSTEM_PROMPT =
             "You are Lille, an autonomous agent completing a task on the user's phone by calling tools. " +
             "Reply with exactly ONE fenced JSON block per step, like:\n" +
             "```json\n{\"tool\": \"browser_open\", \"args\": {\"url\": \"https://example.com\"}}\n```\n" +
@@ -163,7 +164,8 @@ class TaskRunner(private val context: Context) {
             "take it; otherwise call finish naming that exact wall. browser_handoff{step} hands your " +
             "browser to the user for a step the TASK ITSELF names (e.g. signing in with their OWN " +
             "account): it is honoured only on tasks that carry a user step — the task text will say " +
-            "so. Never invent tool results."
+            "so. Never invent tool results. " +
+            SelfFacts.promptLine()
         private val CHALLENGE_RE =
             Regex("^CHALLENGE kind=(\\S+) detail=(.*?) — ", RegexOption.DOT_MATCHES_ALL)
         private const val X_POST_MIN_INTERVAL_MS = 90_000L
@@ -307,6 +309,13 @@ class TaskRunner(private val context: Context) {
         // (plan mode above all) read the record's truth,
         // not the pre-update snapshot.
         task = store.get(id) ?: task
+        // ROUTE RECOVERY RESUMES TO FINISH (v1.0.14): a
+        // pending finish left by an interrupted run — her
+        // own completion statement over verified work
+        // products — closes the record here, before any
+        // model call is spent re-deciding it.
+        if (applyPendingFinish(id)) return TaskStates.COMPLETED
+        task = store.get(id) ?: task
         // LANE ROUTING (v1.0.4): the classes this phone can
         // never carry (repo/code, video) are ROUTED, not
         // dropped — the spec export is written once, and
@@ -412,6 +421,12 @@ class TaskRunner(private val context: Context) {
             }
         }
         var stepsDone = task.optInt("steps", 0)
+        // v1.0.14 finish-landing trackers: whether this run
+        // has landed real tool work (the pending-finish
+        // precondition), and whether the grounding bounce
+        // has already been spent in this run.
+        var sawToolWork = false
+        var groundingBounced = false
         val maxSteps = if (browserToolsActive) BROWSER_MAX_STEPS else MAX_STEPS
         // The step budget is spent in WINDOWS (v1.0.3,
         // StepBudget): stepsInWindow persists across runs
@@ -877,6 +892,29 @@ class TaskRunner(private val context: Context) {
             stepsDone += 1
             windowSteps += 1
             if (call == null) {
+                // PENDING FINISH (v1.0.14): a plain-text
+                // reply after real tool work is her
+                // completion statement in words. Record it
+                // on the record — her summary, the outputs
+                // this task produced, the step it was
+                // stated at — so the finish can land as a
+                // state write if the route drops or a later
+                // run resumes the record. (A reply before
+                // any tool work states nothing about work
+                // and is never recorded.)
+                if (content.isNotBlank() &&
+                    (sawToolWork || stepsDone > 1)
+                ) {
+                    val producedNow = PendingFinish.produced(
+                        store.get(id) ?: task
+                    )
+                    store.update(id) {
+                        PendingFinish.stamp(
+                            it, content, producedNow, stepsDone
+                        )
+                        it.put("messages", messages)
+                    }
+                }
                 // A reply with no tool call spends budget
                 // but is not progress (the budget verdict
                 // counts it as a failed step, though not as
@@ -990,6 +1028,53 @@ class TaskRunner(private val context: Context) {
                 // failure finishes honestly with the check
                 // named on the record.
                 val summaryText = args.optString("summary", "Done.")
+                // VERIFY-BY-STATE (v1.0.14, battery fix 2):
+                // a claimed output must be this task's own
+                // work — in its produced set (stamped by
+                // the writers) or evidenced by a recorded
+                // write observation. The code-b shape — a
+                // completion claim over a file no step ever
+                // wrote — is refused here, before any
+                // probe runs.
+                val finishObservations =
+                    FinishChecks.observationsOf(messages)
+                val unproduced = FinishChecks.unproducedClaims(
+                    claimedOutputs(outputs),
+                    PendingFinish.produced(store.get(id) ?: task),
+                    finishObservations
+                )
+                if (unproduced.isNotEmpty()) {
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "finish rejected: claimed outputs were " +
+                            "not produced by any step of this " +
+                            "task: $unproduced. Work a step of " +
+                            "this task did not do cannot be " +
+                            "claimed as its product — write the " +
+                            "note with a tool, then finish."))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
+                // TOOL OUTPUT OUTRANKS NARRATION (v1.0.14,
+                // battery fix 6): a summary date that the
+                // record's own tool observations contradict
+                // bounces ONCE with the evidence named.
+                val contra = FinishChecks.dateContradiction(
+                    summaryText, finishObservations
+                )
+                if (contra != null && !groundingBounced) {
+                    groundingBounced = true
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "finish rejected: your summary's date " +
+                            "contradicts what your own tool " +
+                            "results in this task show (" +
+                            contra.joinToString(", ") +
+                            "). Report the value your tools " +
+                            "showed, exactly."))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
                 var recipeFailed = false
                 val verify = if (recipe != null) {
                     val passed = Recipes.checkPasses(
@@ -1222,6 +1307,9 @@ class TaskRunner(private val context: Context) {
             } else {
                 windowOk += 1
                 consecErrors = 0
+                // v1.0.14: real tool work landed in this
+                // run — the pending-finish precondition.
+                sawToolWork = true
             }
             if (browserToolsActive) {
                 lastChallenge = trackChallenge(name, observation, lastChallenge)
@@ -1449,7 +1537,76 @@ class TaskRunner(private val context: Context) {
         return TaskStates.PARKED_AT_WALL
     }
 
+    /** The finish call's claimed outputs as a list. */
+    private fun claimedOutputs(outputs: JSONArray?): List<String> {
+        if (outputs == null) return emptyList()
+        val out = mutableListOf<String>()
+        for (i in 0 until outputs.length()) {
+            val rel = outputs.optString(i)
+            if (rel.isNotEmpty()) out.add(rel)
+        }
+        return out
+    }
+
+    /** Apply the record's pending finish (v1.0.14) when
+     *  it still verifies: her completion statement is
+     *  fresh (no tool work followed it), its outputs are
+     *  on disk and were this task's own work, no gate
+     *  refuses it (FinishGate, plan mode, an unresolved
+     *  wall), and its dates do not contradict the record's
+     *  own tool evidence. The close is a state write —
+     *  COMPLETED with her summary — and spends no model
+     *  call. Returns true when the record was closed. */
+    private fun applyPendingFinish(id: String): Boolean {
+        val task = store.get(id) ?: return false
+        val pending = PendingFinish.read(task) ?: return false
+        if (task.optInt("steps", 0) > pending.atStep) return false
+        if (FinishGate.isGated(task) && !FinishGate.holds(task)) {
+            return false
+        }
+        if (PlanAct.isPlanMode(task)) return false
+        val wall = task.optJSONObject("wall")
+        if (wall != null &&
+            task.optLong("handedBackAt", 0L) <= task.optLong("wallAt", 0L)
+        ) {
+            return false
+        }
+        val dir = taskDir(id)
+        if (pending.outputs.any { !File(dir, it).isFile }) return false
+        val observations = FinishChecks.observationsOf(
+            task.optJSONArray("messages") ?: JSONArray()
+        )
+        if (FinishChecks.unproducedClaims(
+                pending.outputs, PendingFinish.produced(task),
+                observations
+            ).isNotEmpty()
+        ) {
+            return false
+        }
+        if (FinishChecks.dateContradiction(
+                pending.summary, observations
+            ) != null
+        ) {
+            return false
+        }
+        store.update(id, TaskStates.COMPLETED) {
+            it.put("summary", pending.summary)
+            it.put("note", PendingFinish.APPLIED_NOTE)
+            PendingFinish.clear(it)
+            EventLog.append(
+                it, "pending_finish_applied",
+                System.currentTimeMillis()
+            )
+        }
+        return true
+    }
+
     private fun wait(id: String, state: String, note: String, waitMs: Long): String {
+        // FINISH MUST LAND (v1.0.14): before the run
+        // settles into a wait, a pending finish that still
+        // verifies closes the record instead — finished
+        // work does not park behind a dropped route.
+        if (applyPendingFinish(id)) return TaskStates.COMPLETED
         store.update(id, state) {
             it.put("note", note)
             it.put("nextRetryAt", System.currentTimeMillis() + waitMs)
@@ -1780,14 +1937,24 @@ class TaskRunner(private val context: Context) {
     private fun parseToolCall(content: String): Pair<String, JSONObject>? {
         val start = content.indexOf('{')
         val end = content.lastIndexOf('}')
-        if (start < 0 || end <= start) return null
-        return try {
-            val obj = JSONObject(content.substring(start, end + 1))
-            if (!obj.has("tool")) return null
-            obj.optString("tool") to (obj.optJSONObject("args") ?: JSONObject())
-        } catch (e: Exception) {
-            null
+        if (start >= 0 && end > start) {
+            try {
+                val obj = JSONObject(content.substring(start, end + 1))
+                if (obj.has("tool")) {
+                    return obj.optString("tool") to
+                        (obj.optJSONObject("args") ?: JSONObject())
+                }
+            } catch (e: Exception) {
+                // Not the JSON dialect — fall through to the
+                // finish-call dialect below.
+            }
         }
+        // FINISH DIALECT (v1.0.14): finish(...) emitted as
+        // literal text is recovered as the call (the
+        // schedule-a / format-a shape from the battery).
+        val fin = FinishDialect.parse(content)
+        if (fin != null) return "finish" to fin
+        return null
     }
 
     // ---------- note tools (v0.4 scope) ----------
@@ -1846,6 +2013,10 @@ class TaskRunner(private val context: Context) {
                     )
                 )
                 it.put("lastNotePath", rel)
+                // PRODUCED EVIDENCE (v1.0.14): the write
+                // stamps itself as this task's work — the
+                // finish checks judge claims against it.
+                PendingFinish.addProduced(it, rel)
             }
         }
         return obs
@@ -2424,6 +2595,13 @@ class TaskRunner(private val context: Context) {
                     val f = BrowserSession.screenshot(
                         context, taskDir(id), shotName
                     )
+                    // PRODUCED EVIDENCE (v1.0.14): a written
+                    // screenshot is this task's work product.
+                    if (f.isFile) {
+                        store.update(id) {
+                            PendingFinish.addProduced(it, shotName)
+                        }
+                    }
                     val ch = BrowserSession.lastState?.challenge
                     if (ch != null) {
                         BrowserPerception.challengeObservation(ch) +
