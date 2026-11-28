@@ -1091,7 +1091,7 @@ class TaskRunner(private val context: Context) {
                 // from battery round 2).
                 val demandedFiles = FinishChecks.demandedFiles(
                     text,
-                    File(taskDir(id)).listFiles()
+                    taskDir(id).listFiles()
                         ?.filter { it.isFile }
                         ?.map { it.name } ?: emptyList()
                 )
@@ -1113,7 +1113,7 @@ class TaskRunner(private val context: Context) {
                     continue
                 }
                 if (demandedFiles.isNotEmpty()) {
-                    val dir = File(taskDir(id))
+                    val dir = taskDir(id)
                     val unreadFiles = mutableListOf<String>()
                     val readContents = mutableListOf<String>()
                     for (rel in demandedFiles) {
