@@ -119,36 +119,99 @@ object IntentContract {
     private const val CHAT_LINE = "intent: chat"
     private const val COMMAND_PREFIX = "intent: command"
 
+    /** Does [first] (a trimmed, lowercased first line)
+     *  carry the verdict [token]? Exact, or the token
+     *  followed by a separator and trailing matter —
+     *  models append rationale to verdict lines (the
+     *  held-out proof's third case answered "INTENT:
+     *  TASK — the message asks you to DO work…"), and a
+     *  verdict with an explanation is still the verdict.
+     *  A longer WORD never matches ("intent: taskforce"
+     *  is no verdict). Returns the trailing matter, or
+     *  null when the line carries no such verdict. */
+    private fun verdictTail(first: String, token: String): String? {
+        if (first == token) return ""
+        if (!first.startsWith(token)) return null
+        val next = first[token.length]
+        if (next.isLetterOrDigit()) return null
+        return first.substring(token.length)
+            .trimStart(' ', '\t', '—', '–', '-', ':', '·')
+    }
+
+    /** The trailing matter of a verdict line in its
+     *  ORIGINAL case (the CHAT body must not be
+     *  lowercased by the parse). [rawFirst] is the
+     *  trimmed first line as written; detection mirrors
+     *  [verdictTail] case-insensitively. */
+    private fun rawTail(rawFirst: String, token: String): String? {
+        if (verdictTail(rawFirst.lowercase(), token) == null) {
+            return null
+        }
+        if (rawFirst.length == token.length) return ""
+        return rawFirst.substring(token.length)
+            .trimStart(' ', '\t', '—', '–', '-', ':', '·')
+    }
+
+    /** A leading <think>…</think> block is reasoning,
+     *  not reply text: raw-completion routes inline it
+     *  (the held-out proof's explanation case led with
+     *  one). Dropped before the verdict scan; an
+     *  UNCLOSED block leaves the reply untouched (the
+     *  scan then decides, as before). */
+    private fun stripLeadingThink(text: String): String {
+        val t = text.trimStart()
+        if (!t.lowercase().startsWith("<think>")) return text
+        val close = t.indexOf("</think>")
+        if (close < 0) return text
+        return t.substring(close + "</think>".length)
+    }
+
     /** Parse a finished reply's verdict. The verdict
-     *  line is the first non-empty line; matching is
-     *  case-insensitive and tolerant of surrounding
-     *  whitespace only — the contract is strict because
-     *  execution hangs on it. No verdict line → the
-     *  whole reply is CHAT, exactly as before. */
+     *  line is the first non-empty line that CARRIES
+     *  one, scanning at most the first three non-empty
+     *  lines: weak raw-completion models sometimes echo
+     *  the contract or correct themselves before
+     *  settling (the held-out proof's fourth case opened
+     *  with an echoed contract line, then gave the real
+     *  verdict two lines down) — the settled verdict is
+     *  the model's answer, and any preamble is meta-text
+     *  that is never shown. Matching is case-insensitive
+     *  with the [verdictTail] tolerance. No verdict line
+     *  in the window → the whole reply is CHAT, exactly
+     *  as before. */
     fun parse(reply: String): Verdict {
-        val lines = reply.lines()
-        val firstIdx = lines.indexOfFirst { it.isNotBlank() }
-        if (firstIdx < 0) return Verdict.Chat(reply)
-        val first = lines[firstIdx].trim().lowercase()
-        val rest = lines.drop(firstIdx + 1)
-            .joinToString("\n").trim()
-        return when {
-            first == TASK_LINE -> Verdict.Task
-            first == CHAT_LINE -> Verdict.Chat(rest)
-            first == COMMAND_PREFIX ||
-                first.startsWith("$COMMAND_PREFIX ") -> {
+        val stripped = stripLeadingThink(reply)
+        val lines = stripped.lines()
+        val nonEmpty = lines.indices.filter { lines[it].isNotBlank() }
+        for (idx in nonEmpty.take(3)) {
+            val rawFirst = lines[idx].trim()
+            val first = rawFirst.lowercase()
+            val rest = lines.drop(idx + 1)
+                .joinToString("\n").trim()
+            verdictTail(first, TASK_LINE)?.let {
+                return Verdict.Task
+            }
+            rawTail(rawFirst, CHAT_LINE)?.let { tail ->
+                val body = listOf(tail, rest)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n").trim()
+                return Verdict.Chat(body)
+            }
+            if (first == COMMAND_PREFIX ||
+                first.startsWith("$COMMAND_PREFIX ")
+            ) {
                 val token = first.removePrefix(COMMAND_PREFIX)
                     .trim().split(Regex("\\s+"))
                     .firstOrNull { it.isNotEmpty() } ?: ""
                 val target = UiScreens.targetForToken(token)
-                if (target != null) {
+                return if (target != null) {
                     Verdict.Command(target)
                 } else {
                     Verdict.UnknownCommand
                 }
             }
-            else -> Verdict.Chat(reply)
         }
+        return Verdict.Chat(stripped)
     }
 
     /**
@@ -165,24 +228,48 @@ object IntentContract {
      * precede the action on screen either.
      */
     fun displayText(partial: String): String? {
+        // Reasoning is never displayed: while a leading
+        // think block is unclosed, nothing shows; once
+        // it closes, the gate judges what follows it.
+        val lead = partial.trimStart()
+        if (lead.lowercase().startsWith("<think>")) {
+            val close = lead.indexOf("</think>")
+            if (close < 0) return null
+            return displayText(
+                lead.substring(close + "</think>".length)
+            )
+        }
         val trimmed = partial.trimStart()
         if (trimmed.isEmpty()) return null
         val nl = trimmed.indexOf('\n')
-        val firstLine = if (nl >= 0) {
-            trimmed.substring(0, nl).trim().lowercase()
+        val rawFirstLine = if (nl >= 0) {
+            trimmed.substring(0, nl).trim()
         } else {
-            trimmed.trim().lowercase()
+            trimmed.trim()
         }
+        val firstLine = rawFirstLine.lowercase()
         if (nl < 0) {
-            // The first line is still arriving: hold the
-            // display while it could be a verdict line
-            // (a prefix of one, or a finished verdict
-            // awaiting its newline).
+            // The first line is still arriving. A line
+            // that already CARRIES a verdict (with or
+            // without trailing rationale) is governed by
+            // it: TASK/COMMAND text never shows; a CHAT
+            // verdict streams its trailing matter.
+            if (verdictTail(firstLine, TASK_LINE) != null) {
+                return null
+            }
+            rawTail(rawFirstLine, CHAT_LINE)?.let { tail ->
+                return tail.ifEmpty { null }
+            }
+            if (firstLine == COMMAND_PREFIX ||
+                firstLine.startsWith("$COMMAND_PREFIX ")
+            ) {
+                return null
+            }
+            // Hold the display while the line could still
+            // BECOME a verdict (a prefix of one).
             val couldBeVerdict = TASK_LINE.startsWith(firstLine) ||
                 CHAT_LINE.startsWith(firstLine) ||
-                COMMAND_PREFIX.startsWith(firstLine) ||
-                firstLine == TASK_LINE || firstLine == CHAT_LINE ||
-                firstLine.startsWith("$COMMAND_PREFIX ")
+                COMMAND_PREFIX.startsWith(firstLine)
             if (couldBeVerdict) return null
             // A long first line is plainly not a verdict.
             return if (firstLine.length > COMMAND_PREFIX.length + 12) {
@@ -192,10 +279,17 @@ object IntentContract {
             }
         }
         return when {
-            firstLine == TASK_LINE -> null
-            firstLine == CHAT_LINE ->
-                trimmed.substring(nl + 1).trimStart()
-                    .ifEmpty { null }
+            verdictTail(firstLine, TASK_LINE) != null -> null
+            verdictTail(firstLine, CHAT_LINE) != null -> {
+                // The body streams: any trailing matter
+                // on the verdict line (original case),
+                // then the lines after it.
+                val tail = rawTail(rawFirstLine, CHAT_LINE) ?: ""
+                val after = trimmed.substring(nl + 1).trimStart()
+                listOf(tail, after)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n").ifEmpty { null }
+            }
             firstLine == COMMAND_PREFIX ||
                 firstLine.startsWith("$COMMAND_PREFIX ") -> null
             else -> partial

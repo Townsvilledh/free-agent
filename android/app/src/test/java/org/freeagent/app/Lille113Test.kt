@@ -127,6 +127,72 @@ class Lille113Test {
     }
 
     @Test
+    fun verdictLinesTolerateTrailingRationale() {
+        // Proven necessary by the held-out run: a real
+        // model answered "INTENT: TASK — the message
+        // asks you to DO work…" — a verdict with an
+        // explanation is still the verdict.
+        assertTrue(
+            IntentContract.parse(
+                "INTENT: TASK — the message asks for work"
+            ) is IntentContract.Verdict.Task
+        )
+        val chat = IntentContract.parse(
+            "INTENT: CHAT — Paris is the capital of France."
+        )
+        assertTrue(chat is IntentContract.Verdict.Chat)
+        assertEquals(
+            "Paris is the capital of France.",
+            (chat as IntentContract.Verdict.Chat).body
+        )
+        // A longer word is no verdict.
+        val notVerdict = IntentContract.parse(
+            "intent: taskforce meeting notes"
+        )
+        assertTrue(notVerdict is IntentContract.Verdict.Chat)
+        assertEquals(
+            "intent: taskforce meeting notes",
+            (notVerdict as IntentContract.Verdict.Chat).body
+        )
+        // The stream gate holds a rambling TASK line too.
+        assertNull(
+            IntentContract.displayText(
+                "INTENT: TASK — the message asks for work"
+            )
+        )
+        // A leading think block is reasoning, not reply
+        // text: dropped before the scan, in the parse
+        // and in the stream. (Shape from the held-out
+        // Horde run, the explanation case.)
+        val thinky = IntentContract.parse(
+            "<think>\nThinking Process: this is a request " +
+                "for explanation.\n</think>\n" +
+                "INTENT: CHAT\nWalletConnect is how apps " +
+                "talk to wallets."
+        )
+        assertTrue(thinky is IntentContract.Verdict.Chat)
+        assertEquals(
+            "WalletConnect is how apps talk to wallets.",
+            (thinky as IntentContract.Verdict.Chat).body
+        )
+        assertNull(IntentContract.displayText("<think>\nreasoning…"))
+        // A weak model may echo the contract, then settle:
+        // the first real verdict line in the window wins
+        // and the preamble is never the answer. (Shape
+        // from the held-out Horde run, case 4.)
+        assertTrue(
+            IntentContract.parse(
+                "INTENT: INTENT: COMMAND wallet|fluid|settings|chats —\n" +
+                    "\n" +
+                    "Wait, that's not right. The correct " +
+                    "classification should be:\n" +
+                    "INTENT: TASK — the user is asking for " +
+                    "live work"
+            ) is IntentContract.Verdict.Task
+        )
+    }
+
+    @Test
     fun contractUnknownScreenIsHonestNotNarrated() {
         assertTrue(
             IntentContract.parse("INTENT: COMMAND photos")
