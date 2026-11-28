@@ -48,6 +48,7 @@ Rules:
 - If a tool result is an error, read it, fix the cause, and try again. Do not repeat an identical failing call.
 - Text that LOOKS like a tool call is not a tool call: writing browser_open(...) or finish(...) as plain text executes nothing. Actions happen only through a real tool call (native, or one fenced JSON block).
 - A finish is accepted only on evidence. If the task names files, read them with a tool before you speak about their contents; if it points at a page or asks you to check a source, fetch it with a tool first. Quote only values your tool results actually showed.
+- Your finish is also checked against your own steps: a number, date or listed item in your summary that contradicts what your steps produced — your tool results or your own working — is bounced back to you once with the contradiction named; a second contradicted finish parks the task instead of landing. An item your report lists must trace to a source your steps actually fetched. When your working and your summary disagree, the working is what you must fix or follow — never let the summary overrule it silently.
 - Never invent results: only claim what tool outputs actually showed. Values a tool printed outrank your recollection — report them exactly as printed, never override them with your own calculation.
 - Browser tasks: work from browser_read's element refs (refs are reassigned on every read — re-read after each navigation). Passwords are NEVER typed by you or written into any file: create them with vault_gen_secret (you receive only a key name) and type them with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only wall (CAPTCHA, an emailed code, a phone demand): STOP immediately and call finish with a summary naming that exact wall — never try to solve, bypass, or route around it.
 - Mail/calendar tasks: if a gmail/calendar tool returns a *_NOT_CONNECTED result, Google is not set up on this host — STOP and call finish naming the single setup step it describes. Never ask the user to fetch, copy or paste mail or calendar contents for you: reaching the mailbox yourself is the point of the tool. gmail_send / calendar_create denials are correct-by-default; never work around one.
@@ -62,8 +63,9 @@ _ARG_PAIR_RE = re.compile(
 @dataclass
 class Step:
     n: int
-    kind: str            # tool | finish | finish-rejected | sentinel-denied |
-                         # malformed | repair | refusal-reframe | text | stop
+    kind: str            # tool | finish | finish-rejected | finish-refused |
+                         # sentinel-denied | malformed | repair |
+                         # refusal-reframe | text | stop
     tool: str = ""
     args_summary: str = ""
     result_summary: str = ""
@@ -549,6 +551,335 @@ def _fetch_demanded(state):
         and bool(_NUMBER_RE.search(text))
 
 
+# ---------- finish-vs-steps consistency (v1.0.16, class 1) ----------
+# Battery round 3's honesty failures shrank to one shape: a
+# finish that contradicts the run's OWN steps. research-a
+# listed events her sweep never found; numbers-a's headline
+# figures were contradicted by the closing note in the same
+# summary; schedule-b landed a date her trace had computed
+# differently. The 1.0.14/1.0.15 gates judged a finish
+# against TOOL evidence (execution outputs, demanded files);
+# they never judged it against the model's own step texts
+# and working, nor a research report's items against the
+# sources the steps fetched. The checks below do — all
+# structural, derived from the run's content, never from
+# phrase lists:
+#   * WEEKDAY: a date assertion that names a weekday the
+#     calendar disagrees with contradicts itself on its
+#     face (deterministic calendar math).
+#   * STEP DATES: dates the run itself produced — execution
+#     observations and the model's own step texts — are the
+#     run's settled values; a summary asserting dates of
+#     which NONE is among them contradicts its own steps.
+#   * ANCHORED NUMBERS: a numeric segment (a line/sentence
+#     carrying >= 2 numbers) asserts a RESULT (its last
+#     number) for a calculation anchored on its first
+#     number. Two segments — one in the summary, one in the
+#     summary or the run's produced content — that share an
+#     anchor, overlap by at least half their number sets,
+#     and assert different results contradict each other.
+#   * RESEARCH ITEMS: a report listing external items
+#     (markdown headings / bold-led list entries) is a
+#     content claim: every listed item must trace to a
+#     fetched/searched source present in the step record
+#     (its title, a title bigram, or — for a short title —
+#     all its tokens appearing in the corpus). This extends
+#     the 1.0.15 evidence demand from file content to
+#     report items, reusing the same corpus the evidence
+#     gates already read.
+# A contradiction bounces the finish ONCE with the
+# contradiction named and the step evidence quoted; a
+# second contradictory finish is refused and the task
+# parks with the contradiction on the record (the caller
+# owns that verdict — see _check_finish's third return).
+
+_WEEKDAY_NAMES = ["monday", "tuesday", "wednesday",
+                  "thursday", "friday", "saturday", "sunday"]
+_WEEKDAY_RE = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\b", re.I)
+
+
+def _assistant_texts(messages):
+    """The model's own step texts — its working, in order."""
+    return [m.get("content") for m in messages
+            if m.get("role") == "assistant"
+            and isinstance(m.get("content"), str)
+            and m.get("content")]
+
+
+def _produced_texts(state):
+    """Content this run PRODUCED: execution-tool output
+    (the machine computed it) plus the model's own step
+    texts (its working). Fetched third-party content is
+    deliberately NOT in this pool — a search snippet's
+    stray dates/numbers are not the run's settled values.
+    (Research items judge against the wider fetched pool
+    instead: see _item_corpus.)"""
+    out = _observation_texts(state["messages"], EXECUTION_TOOLS)
+    out += _assistant_texts(state["messages"])
+    return out
+
+
+def _item_corpus(state):
+    """Everything the steps actually fetched or produced —
+    the pool a listed report item must trace to."""
+    return ("\n".join(_observation_texts(state["messages"]))
+            + "\n" + "\n".join(_assistant_texts(state["messages"])))
+
+
+def weekday_contradictions(summary):
+    """Date assertions in the summary whose NAMED weekday
+    the calendar disagrees with — self-contradiction on
+    the face of the text. Returns [(span_text, iso,
+    named_weekday, actual_weekday)]."""
+    import datetime as _dt
+    out = []
+    text = summary or ""
+    for start, end, iso in extract_dates(text):
+        m = _WEEKDAY_RE.search(text[start:end])
+        if not m:
+            continue
+        named = m.group(1).lower()
+        try:
+            actual = _WEEKDAY_NAMES[
+                _dt.date.fromisoformat(iso).weekday()]
+        except ValueError:
+            continue
+        if named != actual:
+            out.append((text[start:end], iso, named, actual))
+    return out
+
+
+def step_date_contradiction(summary, state):
+    """(asserted, produced, quote) when the summary asserts
+    date(s), the run itself produced date(s) in its steps,
+    and NONE of the asserted dates is among them — the
+    schedule-b shape (the finish landing a date the trace
+    computed differently). None when there is nothing to
+    judge or the summary agrees with its own steps."""
+    produced = set()
+    quote = None
+    for text in _produced_texts(state):
+        dates = extract_dates(text)
+        if dates:
+            produced.update(iso for _, _, iso in dates)
+            quote = text
+    if not produced:
+        return None
+    asserted = extract_dates(summary or "")
+    if not asserted:
+        return None
+    if any(iso in produced for _, _, iso in asserted):
+        return None
+    return ([iso for _, _, iso in asserted], produced, quote)
+
+
+def _segment_numbers(segment):
+    """A segment's numeric literals in order (normalised),
+    excluding the ones inside date assertions."""
+    spans = [(a, b) for a, b, _ in extract_dates(segment)]
+    out = []
+    for m in _NUMBER_RE.finditer(segment):
+        if any(a <= m.start() < b for a, b in spans):
+            continue
+        n = _norm_number(m.group(0))
+        if n:
+            out.append(n)
+    return out
+
+
+_SEGMENT_SPLIT_RE = re.compile(r"[\n;]+|(?<=[.!?])\s+")
+
+
+def _assertion_segments(text):
+    """Numeric assertion segments of a text: (anchor,
+    result, numset, segment_text) for each line/sentence
+    carrying at least two numbers and at most twelve (a
+    long table row asserts nothing single). The anchor is
+    the segment's first number — the quantity the
+    calculation starts from; the result is its last."""
+    out = []
+    for seg in _SEGMENT_SPLIT_RE.split(text or ""):
+        seg = seg.strip()
+        if not seg:
+            continue
+        nums = _segment_numbers(seg)
+        if len(nums) < 2 or len(nums) > 12:
+            continue
+        out.append((nums[0], nums[-1], set(nums), seg))
+    return out
+
+
+def number_contradiction(summary, state):
+    """(anchor, summary_value, other_value, quote) when a
+    summary segment and another segment — elsewhere in the
+    summary, or in the run's produced content — share an
+    anchor and at least one further number yet assert
+    different results: the numbers-a shape (headline
+    figures contradicted by the run's own closing working).
+    """
+    summary_segs = _assertion_segments(summary)
+    if not summary_segs:
+        return None
+    others = list(summary_segs)
+    for text in _produced_texts(state):
+        others += _assertion_segments(text)
+    for i, (anchor, result, numset, _seg) in enumerate(summary_segs):
+        if result == anchor:
+            continue
+        for j, (o_anchor, o_result, o_numset, o_seg) in enumerate(others):
+            if j == i:
+                # The summary segment itself (others leads
+                # with the summary's own segments).
+                continue
+            if o_anchor != anchor or o_result == o_anchor:
+                continue
+            if o_result == result:
+                continue
+            # The two segments must be about the SAME
+            # calculation: their number sets overlap by at
+            # least half (Jaccard) — a summary sentence
+            # listing several answers shares an anchor with
+            # a single-calculation step segment but not half
+            # its numbers, and is not a contradiction — and
+            # one side's result must figure in the other
+            # side's numbers (the disputed value is part of
+            # both workings).
+            union = numset | o_numset
+            if not union or \
+                    len(numset & o_numset) / len(union) < 0.5:
+                continue
+            if result not in o_numset and o_result not in numset:
+                continue
+            return anchor, result, o_result, o_seg
+    return None
+
+
+_ITEM_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.M)
+_ITEM_BOLD_RE = re.compile(
+    r"^\s*(?:[-*+]|\d+[.)])\s+\*\*(.+?)\*\*", re.M)
+
+
+def _listed_items(summary):
+    """The external items a report lists: markdown heading
+    titles and bold-led list entries, in order, deduped."""
+    text = summary or ""
+    found = []
+    for m in _ITEM_HEADING_RE.finditer(text):
+        found.append((m.start(), m.group(1)))
+    for m in _ITEM_BOLD_RE.finditer(text):
+        found.append((m.start(), m.group(1)))
+    out = []
+    for _, title in sorted(found):
+        title = " ".join(title.split()).strip(" :—-")
+        # A heading's own numbering and bold markers are
+        # structure, not part of the item's name.
+        title = re.sub(r"^\d+[.)]\s*", "", title)
+        title = title.replace("**", "").replace("__", "")
+        title = " ".join(title.split()).strip(" :—-")
+        if title and title not in out:
+            out.append(title)
+    return out
+
+
+def _norm_words(text):
+    return re.sub(r"[^a-z0-9 ]+", " ",
+                  (text or "").lower()).split()
+
+
+def _item_sourced(title, corpus_norm, corpus_words):
+    """A listed item traces to the step record when its
+    normalised title appears in the corpus, or a pair of
+    its consecutive words does, or — a title of one or two
+    words — every word appears somewhere in the corpus."""
+    words = _norm_words(title)
+    if not words:
+        return True
+    if " ".join(words) in corpus_norm:
+        return True
+    for a, b in zip(words, words[1:]):
+        if f"{a} {b}" in corpus_norm:
+            return True
+    if len(words) <= 2 and all(w in corpus_words for w in words):
+        return True
+    return False
+
+
+def unsourced_items(summary, state):
+    """Listed report items that trace to NO source in the
+    step record — the research-a shape (a finished report
+    listing events her own sweep never found). Judged only
+    when the finish is research-shaped: it lists at least
+    two items, or the task demanded fetched evidence and
+    it lists at least one."""
+    items = _listed_items(summary)
+    if not items:
+        return []
+    if len(items) < 2 and not _fetch_demanded(state):
+        return []
+    corpus = _item_corpus(state)
+    corpus_norm = " ".join(_norm_words(corpus))
+    corpus_words = set(corpus_norm.split())
+    return [t for t in items
+            if not _item_sourced(t, corpus_norm, corpus_words)]
+
+
+def finish_consistency(state, summary):
+    """A named contradiction between the finish summary
+    and the run's own steps, or None. The first
+    contradiction found is the one named (the bounce
+    quotes the step evidence so the model can settle it).
+    """
+    bad_weekday = weekday_contradictions(summary)
+    if bad_weekday:
+        span, iso, named, actual = bad_weekday[0]
+        return (f"your summary calls {iso} a "
+                f"{named.capitalize()} (\"{span}\"), but "
+                f"{iso} is a {actual.capitalize()} — the "
+                "date contradicts itself")
+    contra = step_date_contradiction(summary, state)
+    if contra:
+        asserted, produced, quote = contra
+        return (f"your summary gives date(s) "
+                f"{', '.join(asserted)}, but your own steps "
+                f"in this run produced "
+                f"{', '.join(sorted(produced))} — your "
+                f"working says: \"{_summarise(quote, 160)}\"")
+    num = number_contradiction(summary, state)
+    if num:
+        anchor, mine, other, quote = num
+        return (f"for the calculation starting from "
+                f"{anchor}, your summary states {mine}, but "
+                f"your own working states {other}: "
+                f"\"{_summarise(quote, 160)}\"")
+    unsourced = unsourced_items(summary, state)
+    if unsourced:
+        return ("your report lists item(s) that no source "
+                "fetched in this run mentions: "
+                + "; ".join(unsourced)
+                + " — a listed item must trace to a source "
+                  "your steps actually fetched")
+    return None
+
+
+def _malformed_shape(content, error):
+    """The shape of a malformed call attempt: the tool it
+    named (when the raw text still shows one) plus the
+    parse failure's category. The repair ledger is kept
+    per shape — a shape earns ONE repair re-ask; a
+    different shape is a different failure and earns its
+    own."""
+    tool = "unknown"
+    m = re.search(r'"tool"\s*:\s*"([a-z][a-z0-9_]*)"',
+                  content or "")
+    if m:
+        tool = m.group(1)
+    category = (error or "malformed").split(":", 1)[0] \
+        .strip().lower()
+    return f"{tool}|{category}"
+
+
 # ---------- pseudo-tool-call text (v1.0.15, class 3) ----------
 _PSEUDO_PREFIX_RE = re.compile(
     r"^(?:[-*•]\s*)?(?:(?:lille|assistant)\s*:\s*)?", re.I)
@@ -766,6 +1097,19 @@ class TaskLoop:
     # honestly — the model has been told exactly how to act
     # and is still narrating.
     MAX_PSEUDO_CALLS = 2
+
+    # Malformed-call recovery (v1.0.16, class 2): a call
+    # shape (the tool it named + the parse failure's
+    # category) earns ONE repair re-ask showing the specific
+    # format error; the first malformed attempt never counts
+    # toward a stop. Only a malformed call AFTER its shape's
+    # repair re-ask counts as a strike; this many strikes
+    # stop the run honestly, with the repairs on the record.
+    # Round 3's dominant failure was six identical two-strike
+    # stops from the weakest keyless brain — the first
+    # malformation and its failed repair ended tasks that a
+    # bounded second chance would have let recover.
+    MAX_MALFORMED_STRIKES = 2
 
     # Derailment breaker (v1.0.15, classes 3 + 5): after
     # this many consecutive steps with no progress (no file
@@ -1057,6 +1401,16 @@ class TaskLoop:
             "changed_step": state.get("changed_step", {}),
             "pending_finish": state.get("pending_finish"),
             "resume_steered": state.get("resume_steered", False),
+            # v1.0.16: the consistency bounce ledger (class
+            # 1) and the malformed-call repair ledger
+            # (class 2) ride the checkpoint — a resumed run
+            # keeps the verdicts its earlier segment earned.
+            "consistency_bounces": state.get(
+                "consistency_bounces", 0),
+            "malformed_repairs": list(
+                state.get("malformed_repairs", [])),
+            "malformed_strikes": state.get(
+                "malformed_strikes", 0),
             "browser_domains": state.get("browser_domains", []),
             "ts": self.clock(),
         }
@@ -1094,6 +1448,9 @@ class TaskLoop:
             "baseline": baseline, "baseline_late": False,
             "produced": [], "changed_step": {},
             "pending_finish": None, "resume_steered": False,
+            # v1.0.16 ledgers (classes 1 + 2).
+            "consistency_bounces": 0,
+            "malformed_repairs": [], "malformed_strikes": 0,
             "_last_fp": dict(baseline),
         }
         self._derive_browser_domains(state)
@@ -1124,6 +1481,14 @@ class TaskLoop:
             "changed_step": dict(snap.get("changed_step", {}) or {}),
             "pending_finish": snap.get("pending_finish"),
             "resume_steered": snap.get("resume_steered", False),
+            # v1.0.16 ledgers; pre-1.0.16 checkpoints simply
+            # start them empty.
+            "consistency_bounces": snap.get(
+                "consistency_bounces", 0),
+            "malformed_repairs": list(
+                snap.get("malformed_repairs") or []),
+            "malformed_strikes": snap.get(
+                "malformed_strikes", 0),
         }
         if state["baseline"] is None:
             state["baseline"] = self._snapshot(state["task_dir"])
@@ -1149,15 +1514,25 @@ class TaskLoop:
     _CODE_EXTS = (".py", ".js", ".ts", ".sh", ".rb", ".go",
                   ".rs", ".java", ".kt", ".php")
 
-    def _check_finish(self, state, args, deterministic=False):
+    def _check_finish(self, state, args, deterministic=False,
+                      count_offence=True):
         """Verify a finish claim against state before the
         completed state is written. Returns (rejection,
-        corrected_summary): rejection names the contradicting
-        evidence; corrected_summary is set only for a
+        corrected_summary, park): rejection names the
+        contradicting evidence and bounces the finish back
+        to work; corrected_summary is set only for a
         deterministic close whose sole defect is a date the
         execution evidence contradicts (exactly one verified
         date exists to put in its place — the report uses
-        the tool's value)."""
+        the tool's value); park is set when a finish STILL
+        contradicts the run's own steps after its one
+        consistency bounce (v1.0.16, class 1) — the caller
+        refuses the finish and parks the task with the
+        contradiction on the record. count_offence=False
+        (the deterministic close) never spends or triggers
+        the consistency verdict: the model never saw a
+        steer, so its pending words are simply not closed
+        on."""
         summary = args.get("summary", "") or ""
         outputs = args.get("outputs", []) or []
         # (v1.0.15, class 3) A finish must carry its result:
@@ -1171,7 +1546,7 @@ class TaskLoop:
                     "was found, in the summary. An empty "
                     "summary, or args carrying only an error "
                     "payload, is not a result: do the work, "
-                    "then finish with the summary."), None
+                    "then finish with the summary."), None, None
         # (v1.0.15, class 2) EVIDENCE-PROPORTIONATE FINISH:
         # the claim must rest on steps proportionate to the
         # task's own evidence demand (see the helpers above
@@ -1194,7 +1569,7 @@ class TaskLoop:
                     + "; ".join(owed) + ". A completion claim "
                     "must rest on work this run actually did "
                     "with tools: do that work, read what it "
-                    "shows, then finish."), None
+                    "shows, then finish."), None, None
         unread = [rel for rel in demand_files
                   if not _read_evidence(state, rel)]
         if unread:
@@ -1204,7 +1579,7 @@ class TaskLoop:
                     "file's contents must trace to a step "
                     "that read the file. Read them with a "
                     "tool, then finish from what they "
-                    "actually say."), None
+                    "actually say."), None, None
         if demand_files or fetch_demanded:
             bad = _ungrounded_numbers(summary, state, demand_files)
             if bad:
@@ -1215,7 +1590,7 @@ class TaskLoop:
                         "Report only values your evidence "
                         "shows — compute a derived value with "
                         "run_python so it stands in the "
-                        "evidence, then finish."), None
+                        "evidence, then finish."), None, None
         # (fix 2) Claimed outputs must be THIS run's work:
         # created or changed against the run-start baseline.
         # code-b claimed a cap fix on a fixture her trace
@@ -1231,7 +1606,7 @@ class TaskLoop:
                         "the task started from. A completion "
                         "claim must rest on work this run "
                         "actually did: make the change with a "
-                        "tool, verify it, then finish."), None
+                        "tool, verify it, then finish."), None, None
             # (fix 2) A verification claim needs an execution
             # step AFTER the last change to the claimed file.
             if re.search(r"verif", summary, re.I):
@@ -1250,7 +1625,7 @@ class TaskLoop:
                                 f"follows your last change to "
                                 f"{rel} (step {last_change}). Run "
                                 "it, read its output, then "
-                                "finish."), None
+                                "finish."), None, None
         # (fix 6) Tool-verified dates outrank the summary's.
         contra = date_contradiction(summary, state["messages"])
         if contra:
@@ -1258,11 +1633,11 @@ class TaskLoop:
             if deterministic:
                 corrected = correct_dates(summary, verified)
                 if corrected is not None:
-                    return None, corrected
+                    return None, corrected, None
             return (f"your summary's date(s) contradict the "
                     f"value your own tool verified in this run "
                     f"({', '.join(sorted(verified))}). Report "
-                    "the tool's value exactly."), None
+                    "the tool's value exactly."), None, None
         # (fix 4) Addresses for her own product must be real:
         # grounded in tool evidence or her canonical sources.
         bad_urls = ungrounded_urls(summary, state["messages"])
@@ -1273,8 +1648,36 @@ class TaskLoop:
                     f"canonical sources are: "
                     f"{', '.join(selffacts.CANONICAL_URLS)}. "
                     "Fetch the real source with a tool, then "
-                    "finish."), None
-        return None, None
+                    "finish."), None, None
+        # (v1.0.16, class 1) FINISH-VS-STEPS CONSISTENCY:
+        # the finish must agree with the run that produced
+        # it — its dates/numbers against the steps' own
+        # produced content, its listed items against the
+        # sources the steps fetched (see finish_consistency
+        # above). One bounce with the contradiction named;
+        # a second contradictory finish is refused and the
+        # task parks — a self-contradicted answer never
+        # lands. No-demand finishes reach this check too:
+        # it judges only facts the run itself produced, so
+        # pure drafting with no produced facts stays free.
+        contra_msg = finish_consistency(state, summary)
+        if contra_msg:
+            if count_offence and \
+                    state.get("consistency_bounces", 0) >= 1:
+                return None, None, (
+                    "the finish still contradicts this "
+                    "run's own steps after its bounce: "
+                    + contra_msg)
+            if count_offence:
+                state["consistency_bounces"] = \
+                    state.get("consistency_bounces", 0) + 1
+            return ("your finish contradicts this run's own "
+                    "steps: " + contra_msg + ". A finish "
+                    "must agree with the work that produced "
+                    "it — correct the summary to what your "
+                    "steps show, or redo the step that "
+                    "settles it, then finish."), None, None
+        return None, None, None
 
     def _try_deterministic_finish(self, state):
         """Apply the pending finish — her own completion
@@ -1302,9 +1705,9 @@ class TaskLoop:
         if self.finish_guard is not None \
                 and self.finish_guard(state["steps"], args):
             return None
-        rejection, corrected = self._check_finish(
-            state, args, deterministic=True)
-        if rejection:
+        rejection, corrected, _park = self._check_finish(
+            state, args, deterministic=True, count_offence=False)
+        if rejection or _park:
             return None
         summary = corrected if corrected is not None \
             else args["summary"]
@@ -1542,35 +1945,161 @@ class TaskLoop:
                               "args": call["args"], "text_mode": True}]
 
             if malformed_err:
-                # One repair retry inside this step, then honest stop.
-                record("malformed", result_summary=malformed_err)
-                messages.append({"role": "assistant", "content": content or ""})
-                messages.append({"role": "user", "content":
-                    f"Your tool call was malformed: {malformed_err}. Reply with ONE "
-                    "valid native tool call, or one fenced JSON block "
-                    '{"tool": "<name>", "args": {...}} with valid JSON.'})
-                try:
-                    reply = self._call_model(messages)
-                except (PrivacyBlocked, AllProvidersFailed) as e:
-                    result = TaskResult("error", f"Model unavailable: {e}",
-                                        task_dir, task_id, steps)
-                    break
-                content = reply.get("content")
-                calls = reply.get("tool_calls") or []
-                if not calls:
-                    call, malformed_err2 = parse_text_tool_call(content)
+                # MALFORMED-CALL RECOVERY (v1.0.16, class 2):
+                # the first malformation of a call shape earns
+                # a repair re-ask showing the specific format
+                # error — it does NOT count toward the stop.
+                # Only a malformed call after its shape's
+                # repair re-ask counts as a strike; two
+                # strikes stop the run honestly, with the
+                # repairs attempted on the record. A repair
+                # reply that malforms in a DIFFERENT shape is
+                # a different failure: the inner loop gives
+                # that shape its own repair re-ask (bounded
+                # re-asks per step) rather than spending the
+                # first shape's strike on it.
+                outcome = None  # calls | fallthrough | next | stop
+                for _attempt in range(3):
+                    shape = _malformed_shape(content, malformed_err)
+                    repairs = state.setdefault(
+                        "malformed_repairs", [])
+                    if shape in repairs:
+                        state["malformed_strikes"] = \
+                            state.get("malformed_strikes", 0) + 1
+                        record("malformed", result_summary=
+                               f"{malformed_err} (shape {shape} "
+                               f"already repair-asked; strike "
+                               f"{state['malformed_strikes']})")
+                        if state["malformed_strikes"] >= \
+                                TaskLoop.MAX_MALFORMED_STRIKES:
+                            record("stop", result_summary=
+                                   "malformed calls stayed "
+                                   "malformed after their "
+                                   "repair re-asks; stopping "
+                                   "honestly")
+                            result = TaskResult(
+                                "error",
+                                "The model produced malformed "
+                                "tool calls that stayed "
+                                "malformed after repair "
+                                "re-asks showing the format "
+                                "error; stopping honestly "
+                                "instead of guessing.",
+                                task_dir, task_id, steps)
+                            outcome = "stop"
+                        else:
+                            messages.append(
+                                {"role": "assistant",
+                                 "content": content or ""})
+                            messages.append(
+                                {"role": "user", "content":
+                                 f"That call was malformed "
+                                 f"again: {malformed_err}. "
+                                 "This call shape already had "
+                                 "its repair re-ask; one more "
+                                 "malformed call stops the "
+                                 "run. Emit ONE valid native "
+                                 "tool call, or one fenced "
+                                 "JSON block "
+                                 '{"tool": "<name>", "args": '
+                                 '{...}} with valid JSON — or '
+                                 "take a different, simpler "
+                                 "step."})
+                            outcome = "next"
+                        break
+                    repairs.append(shape)
+                    record("malformed", result_summary=
+                           f"{malformed_err} (repair re-ask "
+                           f"for shape {shape})")
+                    messages.append({"role": "assistant",
+                                     "content": content or ""})
+                    messages.append({"role": "user", "content":
+                        f"Your tool call was malformed: "
+                        f"{malformed_err}. What was malformed "
+                        "is the call's FORMAT, above — not "
+                        "the task. The expected shape is ONE "
+                        "valid native tool call, or one "
+                        "fenced JSON block "
+                        '{"tool": "<name>", "args": {...}} '
+                        "whose args are valid JSON (double "
+                        "quotes, no trailing commas, strings "
+                        "escaped). Keep each argument short. "
+                        "Re-emit the call in that shape now."})
+                    try:
+                        reply = self._call_model(messages)
+                    except (PrivacyBlocked,
+                            AllProvidersFailed) as e:
+                        result = TaskResult(
+                            "error", f"Model unavailable: {e}",
+                            task_dir, task_id, steps)
+                        outcome = "stop"
+                        break
+                    content = reply.get("content")
+                    calls = reply.get("tool_calls") or []
+                    malformed_err = None
+                    if calls:
+                        record("repair", result_summary=
+                               f"repaired tool call accepted "
+                               f"(shape {shape})")
+                        outcome = "calls"
+                        break
+                    call, malformed_err = parse_text_tool_call(
+                        content)
                     if call:
                         calls = [{"id": "", "name": call["name"],
-                                  "args": call["args"], "text_mode": True}]
-                    else:
-                        record("stop", result_summary=
-                               f"tool call still malformed after one repair: {malformed_err2 or 'no tool call'}")
-                        result = TaskResult("error",
-                            "The model produced a malformed tool call twice; "
-                            "stopping honestly instead of guessing.",
-                            task_dir, task_id, steps)
+                                  "args": call["args"],
+                                  "text_mode": True}]
+                        record("repair", result_summary=
+                               f"repaired tool call accepted "
+                               f"(shape {shape})")
+                        outcome = "calls"
                         break
-                record("repair", result_summary="repaired tool call accepted")
+                    if malformed_err:
+                        # The repair reply malformed too: the
+                        # inner loop judges it on its own
+                        # shape — the same shape strikes,
+                        # a new shape earns its own repair.
+                        continue
+                    # A plain-text repair reply falls through
+                    # to the no-call handling below (pseudo /
+                    # nudge), as a plain-text first reply does.
+                    outcome = "fallthrough"
+                    break
+                if outcome is None:
+                    # The step's repair re-asks are spent and
+                    # the latest reply is still malformed:
+                    # count the strike the ledger owes and
+                    # move on (or stop, at the strike cap).
+                    state["malformed_strikes"] = \
+                        state.get("malformed_strikes", 0) + 1
+                    record("malformed", result_summary=
+                           f"repair re-asks exhausted this "
+                           f"step; still malformed: "
+                           f"{malformed_err} (strike "
+                           f"{state['malformed_strikes']})")
+                    if state["malformed_strikes"] >= \
+                            TaskLoop.MAX_MALFORMED_STRIKES:
+                        record("stop", result_summary=
+                               "malformed calls stayed "
+                               "malformed after their repair "
+                               "re-asks; stopping honestly")
+                        result = TaskResult(
+                            "error",
+                            "The model produced malformed "
+                            "tool calls that stayed malformed "
+                            "after repair re-asks showing the "
+                            "format error; stopping honestly "
+                            "instead of guessing.",
+                            task_dir, task_id, steps)
+                        outcome = "stop"
+                    else:
+                        outcome = "next"
+                if outcome == "stop":
+                    sync()
+                    break
+                if outcome == "next":
+                    sync()
+                    continue
 
             if not calls:
                 # PSEUDO-TOOL-CALL TEXT (v1.0.15, class 3):
@@ -1706,9 +2235,63 @@ class TaskLoop:
                         c = dict(c, name=cleaned)
                 args = c.get("args") or {}
                 if c.get("malformed"):
-                    obs = f"error: {c['malformed']}"
-                    record("malformed", name, tasktools.args_summary(name, args), obs)
+                    # MALFORMED-CALL RECOVERY (v1.0.16,
+                    # class 2): a native call whose arguments
+                    # did not parse earns the same ledger as
+                    # the text path — the shape's first
+                    # malformation is answered with a repair
+                    # re-ask naming the format error (the
+                    # observation IS the re-ask: the model
+                    # reads it and re-emits); only a
+                    # malformation after that re-ask counts
+                    # as a strike toward the honest stop.
+                    shape = f"native|{name}"
+                    repairs = state.setdefault(
+                        "malformed_repairs", [])
+                    if shape not in repairs:
+                        repairs.append(shape)
+                        obs = (f"error: {c['malformed']} — "
+                               "REPAIR: this call's arguments "
+                               "were malformed. Re-emit ONE "
+                               f"call to {name} with arguments "
+                               "as valid JSON matching the "
+                               "tool's schema; keep them short. "
+                               "This repair does not count "
+                               "against the run.")
+                        record("malformed", name,
+                               tasktools.args_summary(name, args),
+                               f"{c['malformed']} (repair re-ask "
+                               f"for shape {shape})")
+                    else:
+                        state["malformed_strikes"] = \
+                            state.get("malformed_strikes", 0) + 1
+                        obs = f"error: {c['malformed']}"
+                        record("malformed", name,
+                               tasktools.args_summary(name, args),
+                               f"{c['malformed']} (after its "
+                               f"repair re-ask; strike "
+                               f"{state['malformed_strikes']})")
+                        if state["malformed_strikes"] >= \
+                                TaskLoop.MAX_MALFORMED_STRIKES \
+                                and finished is None:
+                            record("stop", result_summary=
+                                   "malformed calls stayed "
+                                   "malformed after their "
+                                   "repair re-asks; stopping "
+                                   "honestly")
+                            finished = TaskResult(
+                                "error",
+                                "The model produced malformed "
+                                "tool calls that stayed "
+                                "malformed after repair "
+                                "re-asks showing the format "
+                                "error; stopping honestly "
+                                "instead of guessing.",
+                                task_dir, task_id, steps,
+                                provider=reply.get("provider"))
                     self._observe(messages, c, obs)
+                    if finished is not None:
+                        break
                     continue
                 allowed, reason = self.sentinel.check(name, args, task_dir)
                 if not allowed:
@@ -1745,7 +2328,34 @@ class TaskLoop:
                     # trace's tool-verified values before the
                     # completed state may be written.
                     self._refresh_produced(state, len(steps))
-                    rejection2, _ = self._check_finish(state, args)
+                    rejection2, _, park2 = self._check_finish(
+                        state, args)
+                    if park2:
+                        # (v1.0.16, class 1) A finish that
+                        # STILL contradicts the run's own
+                        # steps after its one bounce is
+                        # refused and the task parks with
+                        # the contradiction on the record —
+                        # a self-contradicted answer never
+                        # lands as a completion.
+                        record("finish-refused", name,
+                               tasktools.args_summary(name, args),
+                               park2)
+                        record("stop", result_summary=
+                               "finish refused: self-contradicted "
+                               "after its bounce; parking honestly")
+                        finished = TaskResult(
+                            "stopped",
+                            "Stopped: my finish contradicted "
+                            "my own steps and did not settle "
+                            "after being sent back once — "
+                            + park2 + ". The task is parked "
+                            "with the contradiction on its "
+                            "record rather than completed on a "
+                            "contradicted answer.",
+                            task_dir, task_id, steps,
+                            provider=reply.get("provider"))
+                        break
                     if rejection2:
                         obs = f"finish REJECTED: {rejection2}"
                         record("finish-rejected", name,

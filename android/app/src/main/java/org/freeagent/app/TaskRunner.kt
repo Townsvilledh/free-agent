@@ -427,6 +427,11 @@ class TaskRunner(private val context: Context) {
         // has already been spent in this run.
         var sawToolWork = false
         var groundingBounced = false
+        // v1.0.16 (class 2): the malformed-call repair
+        // ledger for this run — the shapes that have had
+        // their repair re-ask, and the post-repair strikes.
+        val malformedRepairs = mutableSetOf<String>()
+        var malformedStrikes = 0
         val maxSteps = if (browserToolsActive) BROWSER_MAX_STEPS else MAX_STEPS
         // The step budget is spent in WINDOWS (v1.0.3,
         // StepBudget): stepsInWindow persists across runs
@@ -915,6 +920,66 @@ class TaskRunner(private val context: Context) {
                     checkpoint(id, messages, stepsDone, windowSteps)
                     continue
                 }
+                // MALFORMED-CALL RECOVERY (v1.0.16, class 2
+                // mirror): a reply that TRIED a JSON-shaped
+                // call and failed to parse is a malformed
+                // call, not plain text. Its shape earns ONE
+                // repair re-ask showing the specific format
+                // error (the repair turn spends no failure
+                // budget); only a malformed call after its
+                // shape's repair counts as a strike, and
+                // MalformedRepair.MAX_STRIKES strikes park
+                // the run honestly with the repairs on the
+                // record.
+                val malformedAttempt = MalformedRepair.attempted(content)
+                if (malformedAttempt != null) {
+                    if (malformedAttempt.shape in malformedRepairs) {
+                        malformedStrikes += 1
+                        if (malformedStrikes >=
+                            MalformedRepair.MAX_STRIKES
+                        ) {
+                            store.update(id, TaskStates.PAUSED) {
+                                it.put(
+                                    "note",
+                                    "Stopped: my tool calls " +
+                                        "stayed malformed after " +
+                                        "a repair re-ask showing " +
+                                        "the format error " +
+                                        "(${malformedAttempt.reason}). " +
+                                        "Parked honestly instead " +
+                                        "of guessing at the call."
+                                )
+                                it.put("messages", messages)
+                                it.put("steps", stepsDone)
+                                EventLog.append(
+                                    it, "malformed_stop",
+                                    System.currentTimeMillis(),
+                                    JSONObject()
+                                        .put("shape",
+                                            malformedAttempt.shape)
+                                        .put("repairs",
+                                            malformedRepairs.size)
+                                )
+                            }
+                            return TaskStates.PAUSED
+                        }
+                        windowFailed += 1
+                        messages.put(JSONObject().put(
+                            "role", "user").put(
+                            "content",
+                            MalformedRepair.strikeSteer(
+                                malformedAttempt)))
+                    } else {
+                        malformedRepairs.add(malformedAttempt.shape)
+                        messages.put(JSONObject().put(
+                            "role", "user").put(
+                            "content",
+                            MalformedRepair.repairSteer(
+                                malformedAttempt)))
+                    }
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
                 // PENDING FINISH (v1.0.14): a plain-text
                 // reply after real tool work is her
                 // completion statement in words. Record it
@@ -1182,6 +1247,77 @@ class TaskRunner(private val context: Context) {
                             contra.joinToString(", ") +
                             "). Report the value your tools " +
                             "showed, exactly."))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
+                // FINISH-VS-STEPS CONSISTENCY (v1.0.16,
+                // class 1 mirror): the finish must agree
+                // with ALL the content this task produced —
+                // her tool results AND her own step texts —
+                // and every item it lists must trace to a
+                // source the steps fetched. One bounce with
+                // the contradiction named (the ledger rides
+                // the record); a second contradictory finish
+                // is refused and the task parks with the
+                // contradiction on the record — a
+                // self-contradicted answer never lands.
+                val consistency = FinishChecks
+                    .consistencyContradiction(
+                        summaryText, finishObservations,
+                        FinishChecks.assistantTextsOf(messages),
+                        planDemandsTools ||
+                            demandedFiles.isNotEmpty())
+                if (consistency != null) {
+                    val bounces = (store.get(id) ?: task).optInt(
+                        FinishChecks.CONSISTENCY_BOUNCES_FIELD, 0)
+                    if (bounces >= 1) {
+                        store.update(id, TaskStates.PAUSED) {
+                            it.put(
+                                "note",
+                                "Stopped: my finish " +
+                                    "contradicted my own " +
+                                    "steps and did not settle " +
+                                    "after being sent back " +
+                                    "once — $consistency. " +
+                                    "Parked with the " +
+                                    "contradiction on the " +
+                                    "record rather than " +
+                                    "completed on a " +
+                                    "contradicted answer."
+                            )
+                            it.put(
+                                FinishChecks.CONSISTENCY_FIELD,
+                                consistency)
+                            it.put("messages", messages)
+                            it.put("steps", stepsDone)
+                            EventLog.append(
+                                it, "finish_refused",
+                                System.currentTimeMillis(),
+                                JSONObject().put(
+                                    "contradiction", consistency)
+                            )
+                        }
+                        return TaskStates.PAUSED
+                    }
+                    store.update(id) {
+                        it.put(
+                            FinishChecks.CONSISTENCY_BOUNCES_FIELD,
+                            bounces + 1)
+                        it.put(
+                            FinishChecks.CONSISTENCY_FIELD,
+                            consistency)
+                    }
+                    messages.put(JSONObject().put(
+                        "role", "user").put(
+                        "content",
+                        "finish rejected: your finish " +
+                            "contradicts this task's own " +
+                            "steps: $consistency. A finish " +
+                            "must agree with the work that " +
+                            "produced it — correct the " +
+                            "summary to what your steps show, " +
+                            "or redo the step that settles " +
+                            "it, then finish."))
                     checkpoint(id, messages, stepsDone, windowSteps)
                     continue
                 }
@@ -1695,6 +1831,21 @@ class TaskRunner(private val context: Context) {
         }
         if (FinishChecks.dateContradiction(
                 pending.summary, observations
+            ) != null
+        ) {
+            return false
+        }
+        // FINISH-VS-STEPS CONSISTENCY (v1.0.16, class 1
+        // mirror): the deterministic close judges the same
+        // consistency as the finish path — a statement that
+        // contradicts the record's own steps does not close
+        // the record; the loop works it instead. (No bounce
+        // is spent here: she never saw a steer.)
+        if (FinishChecks.consistencyContradiction(
+                pending.summary, observations,
+                FinishChecks.assistantTextsOf(
+                    task.optJSONArray("messages") ?: JSONArray()),
+                false
             ) != null
         ) {
             return false
