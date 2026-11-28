@@ -627,6 +627,15 @@ object TaskTools {
 
     fun isMutating(tool: String): Boolean = tool in MUTATING_TOOLS
 
+    /** Every tool name a general task may call — the
+     *  pseudo-call detector's vocabulary (v1.0.15, class
+     *  3): text impersonating one of these names in call
+     *  shape is a written tool call, not prose. */
+    val ALL_TOOL_NAMES: Set<String> =
+        BROWSER_FAMILY + NOTE_FAMILY + CALENDAR_FAMILY +
+            MAIL_FAMILY + MEMORY_FAMILY +
+            setOf("finish", "propose_plan")
+
     /** Which executor a tool call belongs to, for a task
      *  whose browser tools are [browserActive]. The X lane
      *  tools (x_*) belong to packaged X tasks alone: on a

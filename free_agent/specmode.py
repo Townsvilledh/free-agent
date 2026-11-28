@@ -275,7 +275,7 @@ def build_task_brief(spec):
     if spec["criteria"]:
         lines.append("CRITERIA (verified from evidence):")
         lines += [f"- {c[:110]}" for c in spec["criteria"]]
-    lines.append("(Full spec text: spec.json in this task's "
+    lines.append("(Full spec text: spec.json in your working "
                  "directory — read_file it if a detail is missing.)")
     return "\n".join(lines)
 
@@ -311,14 +311,15 @@ def build_task_text(spec, repo_note):
             "NARRATION_FAILED, proceed captions-only and say so.\n"
             "4. assemble_video: scenes in order — card/capture frames "
             "with their captions and matching audio files — out = "
-            "repo/<deliverable>.mp4. Scene durations must sum inside "
+            "<deliverable>.mp4 (your working directory IS the repo "
+            "root). Scene durations must sum inside "
             "the brief's duration range (narration extends a scene to "
             "fit its line).\n"
             "5. verify_video on the result. The finish guard requires "
             "VIDEO_OK evidence; criteria are graded from the ffprobe "
             "numbers, the capture manifest and the narration route — "
             "not from your summary.\n"
-            "6. finish listing repo/<deliverable>.mp4 as the output.")
+            "6. finish listing <deliverable>.mp4 as the output.")
     if spec.get("browser_domains"):
         lines.append(
             "\nBROWSER WORKFLOW (this spec authorises browsing: "
@@ -374,8 +375,9 @@ def build_task_text(spec, repo_note):
         lines.append("\nWork: inspect the repo (repo_tree/read_file), make the "
                      "changes with write_file, run_tests until green, git_diff "
                      "to sanity-check, git_commit, git_push if authorised above, "
-                     "then finish listing the repo files you produced as outputs "
-                     "(paths like repo/<file>).")
+                     "then finish listing the files you produced as outputs "
+                     "(paths relative to the repo root, e.g. <file> — your "
+                     "working directory IS the repo root).")
     return "\n".join(lines)
 
 
@@ -462,7 +464,12 @@ def gather_evidence(result, task_dir, initial_head=None):
         elif head and not initial_head and ev["commit_hashes"]:
             pass
     if not ev["x_handle"]:
+        # v1.0.15: the spec loop's working directory is the
+        # repo (see run_spec), so a session file the browser
+        # tools wrote lands in repo/ — check both places.
         sess = os.path.join(task_dir, "x_session.json")
+        if not os.path.isfile(sess):
+            sess = os.path.join(repo, "x_session.json")
         if os.path.isfile(sess):
             try:
                 import json as _json
@@ -849,22 +856,37 @@ def run_spec(spec_text, repo=None, workspace_root=None, config=None,
                                   [(c, False, msg) for c in spec["criteria"]])
             return report, None, task_dir
         initial_head = gittools.head_hash(os.path.join(task_dir, "repo"))
-        repo_note = ("The repo is ALREADY cloned at repo/ (host-side pre-clone). "
-                     "Do not git_clone.")
+        repo_note = ("The repo is ALREADY cloned (host-side pre-clone) and "
+                     "is your working directory: every path you use is "
+                     "relative to the repo root. Do not git_clone.")
     elif repo:
-        repo_note = f"Clone the repo first with git_clone: {repo} (it lands at repo/)."
+        # v1.0.15 (class 4): pre-clone host-side, like a local
+        # repo, so the run starts INSIDE the repo (the
+        # working-directory contract — see _execute_spec).
+        # A failed clone keeps the legacy flow: the loop runs
+        # at the task root and the model clones first.
+        clone_msg = gittools.clone(task_dir, repo)
+        if os.path.isdir(os.path.join(task_dir, "repo", ".git")):
+            initial_head = gittools.head_hash(
+                os.path.join(task_dir, "repo"))
+            repo_note = ("The repo is ALREADY cloned (host-side "
+                         "pre-clone) and is your working directory: "
+                         "every path you use is relative to the "
+                         "repo root. Do not git_clone.")
+        else:
+            repo_note = (f"Clone the repo first with git_clone: {repo} "
+                         f"(it lands at repo/). Host-side pre-clone "
+                         f"said: {clone_msg}")
     else:
-        repo_note = ("There is no repo to clone: create repo/ yourself is NOT "
-                     "possible — work with write_file under repo/ paths only if "
-                     "files are the deliverable; otherwise report the blocker.")
         # For file-only specs, create the repo dir + git init host-side.
         repo_dir = os.path.join(task_dir, "repo")
         os.makedirs(repo_dir, exist_ok=True)
         import subprocess
         subprocess.run(["git", "init", "--quiet", repo_dir],
                        capture_output=True, timeout=30)
-        repo_note = ("A fresh empty git repo is ready at repo/ — build the "
-                     "deliverable there.")
+        repo_note = ("A fresh empty git repo is ready and is your "
+                     "working directory — build the deliverable here; "
+                     "every path you use is relative to the repo root.")
     task_text = build_task_text(spec, repo_note)
     return _execute_spec(spec, task_dir, task_id, initial_head, ws,
                          config=config, model_call=model_call,
@@ -976,6 +998,34 @@ def _execute_spec(spec, task_dir, task_id, initial_head, ws, *,
             _json.dump(spec, f)
     except Exception:
         pass
+    # WORKING-DIRECTORY CONTRACT (v1.0.15, battery class 4):
+    # a spec run executes with the REPOSITORY as its working
+    # directory — the same directory evaluate_criteria
+    # verifies deliverables and commits in, and the directory
+    # the spec format has always described ("work this spec
+    # end to end in the repo"). Before this fix the loop's
+    # sandbox was the task dir while the verifier checked
+    # repo/: two battery rounds ended BLOCKED with correct
+    # files written one level too high (hello.txt/count.txt
+    # in the task root, repo/ empty). When no repo exists yet
+    # (the model must clone it herself, after a failed
+    # host-side pre-clone), the legacy task-root contract
+    # applies to that run only.
+    repo_dir = os.path.join(task_dir, "repo")
+    work_dir = repo_dir if os.path.isdir(
+        os.path.join(repo_dir, ".git")) else task_dir
+    if work_dir != task_dir:
+        # The task brief points her at spec.json for detail;
+        # keep a copy inside the working directory, excluded
+        # from git so it never becomes part of the work.
+        try:
+            with open(os.path.join(work_dir, "spec.json"), "w") as f:
+                _json.dump(spec, f)
+            exclude = os.path.join(work_dir, ".git", "info", "exclude")
+            with open(exclude, "a") as f:
+                f.write("\nspec.json\n")
+        except Exception:
+            pass
     _snap_holder = {"snap": snap}
 
     def _keep_snap(s):
@@ -1020,7 +1070,7 @@ def _execute_spec(spec, task_dir, task_id, initial_head, ws, *,
     while True:
         try:
             result = loop.resume(snap) if snap else \
-                loop.run(task_text, task_id=task_id)
+                loop.run(task_text, task_id=task_id, task_dir=work_dir)
             break
         except (WaitingRouteError, WaitingNetworkError) as e:
             snap = _snap_holder["snap"] or snap

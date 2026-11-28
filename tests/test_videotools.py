@@ -253,14 +253,14 @@ class VideoSpecModeTests(unittest.TestCase):
 
     def test_video_spec_end_to_end_mocked(self):
         model = ScriptedModel([
-            native("render_card", {"out": "repo/card.png", "title": "Demo",
+            native("render_card", {"out": "card.png", "title": "Demo",
                                    "width": 360, "height": 640}),
             native("assemble_video", {
-                "out": "repo/demo.mp4", "width": 360, "height": 640,
-                "scenes": [{"image": "repo/card.png", "duration": 2,
+                "out": "demo.mp4", "width": 360, "height": 640,
+                "scenes": [{"image": "card.png", "duration": 2,
                             "caption": "hello"}]}),
             native("finish", {"summary": "video made",
-                              "outputs": ["repo/demo.mp4"]}),
+                              "outputs": ["demo.mp4"]}),
         ])
         report, result, _ = specmode.run_spec(
             VIDEO_SPEC, workspace_root=self.root, model_call=model)
@@ -284,17 +284,17 @@ class VideoSpecModeTests(unittest.TestCase):
             n = state["calls"]
             if n == 1:
                 return native("render_card", {
-                    "out": "repo/card.png", "title": "Demo",
+                    "out": "card.png", "title": "Demo",
                     "width": 360, "height": 640}, "c1")
             if n == 2:
                 raise WaitingRouteError(retry_at=0)
             if n == 3:
                 return native("assemble_video", {
-                    "out": "repo/demo.mp4", "width": 360, "height": 640,
-                    "scenes": [{"image": "repo/card.png", "duration": 2,
+                    "out": "demo.mp4", "width": 360, "height": 640,
+                    "scenes": [{"image": "card.png", "duration": 2,
                                 "caption": "hello"}]}, "c2")
             return native("finish", {"summary": "video made",
-                                     "outputs": ["repo/demo.mp4"]}, "c3")
+                                     "outputs": ["demo.mp4"]}, "c3")
 
         with mock.patch("free_agent.specmode.time.sleep", lambda s: None):
             report, result, _ = specmode.run_spec(
@@ -308,14 +308,14 @@ class VideoSpecModeTests(unittest.TestCase):
     def test_finish_guard_blocks_unverified_video(self):
         model = ScriptedModel([
             native("finish", {"summary": "trust me", "outputs": []}),
-            native("render_card", {"out": "repo/card.png", "title": "Demo",
+            native("render_card", {"out": "card.png", "title": "Demo",
                                    "width": 360, "height": 640}),
             native("assemble_video", {
-                "out": "repo/demo.mp4", "width": 360, "height": 640,
-                "scenes": [{"image": "repo/card.png", "duration": 2,
+                "out": "demo.mp4", "width": 360, "height": 640,
+                "scenes": [{"image": "card.png", "duration": 2,
                             "caption": "hello"}]}),
             native("finish", {"summary": "video made",
-                              "outputs": ["repo/demo.mp4"]}),
+                              "outputs": ["demo.mp4"]}),
         ])
         report, result, _ = specmode.run_spec(
             VIDEO_SPEC, workspace_root=self.root, model_call=model)

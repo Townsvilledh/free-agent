@@ -892,6 +892,29 @@ class TaskRunner(private val context: Context) {
             stepsDone += 1
             windowSteps += 1
             if (call == null) {
+                // PSEUDO-TOOL-CALL TEXT (v1.0.15, class 3
+                // mirror): the reply WRITES a tool call
+                // instead of making one — nothing was
+                // executed. It is never stamped as a
+                // pending finish (it states no result) and
+                // the steer names the real format, once per
+                // reply; the window budget ends a run that
+                // keeps narrating.
+                val pseudo = FinishChecks.pseudoCallName(
+                    content, TaskTools.ALL_TOOL_NAMES)
+                if (pseudo != null) {
+                    windowFailed += 1
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "You wrote $pseudo(...) as TEXT. Text " +
+                            "that looks like a tool call does " +
+                            "nothing — nothing was executed. " +
+                            "Emit the call for real: exactly " +
+                            "one fenced JSON tool block. Do " +
+                            "not narrate actions; execute them."))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
                 // PENDING FINISH (v1.0.14): a plain-text
                 // reply after real tool work is her
                 // completion statement in words. Record it
@@ -1054,6 +1077,93 @@ class TaskRunner(private val context: Context) {
                             "note with a tool, then finish."))
                     checkpoint(id, messages, stepsDone, windowSteps)
                     continue
+                }
+                // EVIDENCE-PROPORTIONATE FINISH (v1.0.15,
+                // class 2 mirror): a finish must rest on
+                // steps proportionate to the task's own
+                // evidence demand — a plan requiring tool
+                // classes, or files in the task sandbox the
+                // task's words name. Zero tool observations
+                // under such a demand, a demanded file no
+                // step read, or a summary value that traces
+                // to no evidence: the finish bounces back
+                // to work (the summary-b / browser-a shapes
+                // from battery round 2).
+                val demandedFiles = FinishChecks.demandedFiles(
+                    text,
+                    File(taskDir(id)).listFiles()
+                        ?.filter { it.isFile }
+                        ?.map { it.name } ?: emptyList()
+                )
+                val planDemandsTools =
+                    plan?.requires?.isNotEmpty() == true
+                if ((planDemandsTools || demandedFiles.isNotEmpty()) &&
+                    finishObservations.isEmpty()
+                ) {
+                    messages.put(JSONObject().put("role", "user").put(
+                        "content",
+                        "finish rejected: this task requires " +
+                            "evidence first — its words name " +
+                            "work tools must do (reading, " +
+                            "fetching, acting), but no tool has " +
+                            "run in this task yet. Do the work " +
+                            "with tools, read what they show, " +
+                            "then finish."))
+                    checkpoint(id, messages, stepsDone, windowSteps)
+                    continue
+                }
+                if (demandedFiles.isNotEmpty()) {
+                    val dir = File(taskDir(id))
+                    val unreadFiles = mutableListOf<String>()
+                    val readContents = mutableListOf<String>()
+                    for (rel in demandedFiles) {
+                        val content = try {
+                            File(dir, rel).readText()
+                                .take(65_536)
+                        } catch (e: Exception) {
+                            ""
+                        }
+                        if (FinishChecks.readEvidenced(
+                                rel, content, finishObservations)
+                        ) {
+                            readContents.add(content)
+                        } else {
+                            unreadFiles.add(rel)
+                        }
+                    }
+                    if (unreadFiles.isNotEmpty()) {
+                        messages.put(JSONObject().put(
+                            "role", "user").put(
+                            "content",
+                            "finish rejected: your summary " +
+                                "speaks about $unreadFiles, " +
+                                "but no step of this task read " +
+                                "them — claims about a file's " +
+                                "contents must trace to a step " +
+                                "that read the file. Read them " +
+                                "with a tool, then finish from " +
+                                "what they actually say."))
+                        checkpoint(id, messages, stepsDone, windowSteps)
+                        continue
+                    }
+                    val badValues =
+                        FinishChecks.ungroundedContentValues(
+                            summaryText, finishObservations,
+                            text, readContents)
+                    if (badValues.isNotEmpty()) {
+                        messages.put(JSONObject().put(
+                            "role", "user").put(
+                            "content",
+                            "finish rejected: your summary " +
+                                "states value(s) $badValues " +
+                                "that appear in no tool result " +
+                                "of this task, in the task " +
+                                "text, or in a file this task " +
+                                "read. Report only values your " +
+                                "evidence shows."))
+                        checkpoint(id, messages, stepsDone, windowSteps)
+                        continue
+                    }
                 }
                 // TOOL OUTPUT OUTRANKS NARRATION (v1.0.14,
                 // battery fix 6): a summary date that the
@@ -1588,6 +1698,40 @@ class TaskRunner(private val context: Context) {
             ) != null
         ) {
             return false
+        }
+        // EVIDENCE-PROPORTIONATE FINISH (v1.0.15, class 2
+        // mirror): the deterministic close judges the same
+        // evidence demand as the finish path — a statement
+        // speaking about a demanded file no step read, or
+        // asserting a value no evidence carries, does not
+        // close the record; the loop works it instead.
+        val pendingDemanded = FinishChecks.demandedFiles(
+            task.optString("text"),
+            dir.listFiles()?.filter { it.isFile }
+                ?.map { it.name } ?: emptyList()
+        )
+        if (pendingDemanded.isNotEmpty()) {
+            val readContents = mutableListOf<String>()
+            for (rel in pendingDemanded) {
+                val content = try {
+                    File(dir, rel).readText().take(65_536)
+                } catch (e: Exception) {
+                    ""
+                }
+                if (!FinishChecks.readEvidenced(
+                        rel, content, observations)
+                ) {
+                    return false
+                }
+                readContents.add(content)
+            }
+            if (FinishChecks.ungroundedContentValues(
+                    pending.summary, observations,
+                    task.optString("text"), readContents
+                ).isNotEmpty()
+            ) {
+                return false
+            }
         }
         store.update(id, TaskStates.COMPLETED) {
             it.put("summary", pending.summary)

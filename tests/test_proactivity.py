@@ -258,8 +258,8 @@ class ScriptedFinish:
         blob = json.dumps(messages)
         if "wrote entry.txt" in blob:
             return native("finish", {"summary": "entered",
-                                     "outputs": ["repo/entry.txt"]})
-        return native("write_file", {"path": "repo/entry.txt",
+                                     "outputs": ["entry.txt"]})
+        return native("write_file", {"path": "entry.txt",
                                      "content": "in"})
 
 

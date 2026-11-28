@@ -46,6 +46,8 @@ Rules:
 - When the task is fully done, call the finish tool with a summary and list every output file you produced in "outputs" — claimed outputs are verified against the sandbox: a claimed file must exist AND have been created or changed by this run's own steps, so do not claim files you did not actually write.
 - If you say you verified something, an execution step (run_python / run_tests) must actually follow your last change to it — a finish claiming verification without one is rejected.
 - If a tool result is an error, read it, fix the cause, and try again. Do not repeat an identical failing call.
+- Text that LOOKS like a tool call is not a tool call: writing browser_open(...) or finish(...) as plain text executes nothing. Actions happen only through a real tool call (native, or one fenced JSON block).
+- A finish is accepted only on evidence. If the task names files, read them with a tool before you speak about their contents; if it points at a page or asks you to check a source, fetch it with a tool first. Quote only values your tool results actually showed.
 - Never invent results: only claim what tool outputs actually showed. Values a tool printed outrank your recollection — report them exactly as printed, never override them with your own calculation.
 - Browser tasks: work from browser_read's element refs (refs are reassigned on every read — re-read after each navigation). Passwords are NEVER typed by you or written into any file: create them with vault_gen_secret (you receive only a key name) and type them with browser_type_secret. If any tool result starts with CHALLENGE, the page is a human-only wall (CAPTCHA, an emailed code, a phone demand): STOP immediately and call finish with a summary naming that exact wall — never try to solve, bypass, or route around it.
 - Mail/calendar tasks: if a gmail/calendar tool returns a *_NOT_CONNECTED result, Google is not set up on this host — STOP and call finish naming the single setup step it describes. Never ask the user to fetch, copy or paste mail or calendar contents for you: reaching the mailbox yourself is the point of the tool. gmail_send / calendar_create denials are correct-by-default; never work around one.
@@ -420,6 +422,195 @@ def ungrounded_urls(summary, messages):
     return bad
 
 
+# ---------- evidence-proportionate finishes (v1.0.15, class 2) ----------
+# Battery round 2's worst failure (summary-b): a finish
+# accepted with ZERO executed tool steps on a task whose text
+# demands reading two named files — the report asserted a
+# fabricated table of their contents. Verify-by-state (1.0.14)
+# fingerprints claimed OUTPUT files; it did not refuse a
+# finish whose report asserts work no step performed. The
+# mechanisms below judge the finish against the task's own
+# evidence demand, derived structurally — never from phrase
+# lists:
+#   * FILE demand: a file that exists in the run-start
+#     baseline AND is named by the task's own words.
+#   * FETCH demand: the task points at a page (a URL or a
+#     bare domain in its words), or it asks about her own
+#     product with a number/version at stake (her product's
+#     facts live at canonical sources — selffacts).
+# A demanded task cannot finish on zero executed tool steps;
+# a demanded file cannot be spoken about without a step that
+# read it; and a numeric value the summary asserts about
+# demanded work must appear in the run's evidence (a tool
+# observation, the task text, or a demanded file this run
+# actually read) — derived values earn their place by being
+# computed with an execution tool, whose output IS evidence.
+
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _norm_number(tok):
+    t = (tok or "").replace(",", "").rstrip(".")
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return t
+
+
+def _asserted_numbers(summary):
+    """Numeric literals a summary asserts, excluding the
+    ones inside date assertions (dates have their own
+    grounding check — extract_dates / date_contradiction)."""
+    text = summary or ""
+    spans = [(a, b) for a, b, _ in extract_dates(text)]
+    out = []
+    for m in _NUMBER_RE.finditer(text):
+        if any(a <= m.start() < b for a, b in spans):
+            continue
+        n = _norm_number(m.group(0))
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def _file_demand(task_text, baseline):
+    """Baseline files the task's own words name — the files
+    the task is ABOUT. A filename match against the
+    run-start snapshot, never a phrase list."""
+    low = (task_text or "").lower()
+    out = []
+    for rel in (baseline or {}):
+        base = os.path.basename(rel).lower()
+        if base and base in low:
+            out.append(rel)
+    return sorted(out)
+
+
+def _read_evidence(state, rel):
+    """True when an executed step of this run read the file:
+    a read_file step naming it, or an observation carrying
+    its content (an execution step that printed it)."""
+    for s in state["steps"]:
+        if s.kind == "tool" and s.tool == "read_file" \
+                and rel in (s.args_summary or ""):
+            return True
+    try:
+        path = sandbox.resolve_inside(state["task_dir"], rel)
+        with open(path, "r", errors="replace") as f:
+            content = f.read(4096)
+    except Exception:
+        return False
+    probe = " ".join(content.split())
+    if not probe:
+        return True  # an empty file holds nothing to fabricate
+    probe = probe[:60]
+    for obs in _observation_texts(state["messages"]):
+        if probe in " ".join(obs.split()):
+            return True
+    return False
+
+
+def _ungrounded_numbers(summary, state, demand_files):
+    """Numeric literals the summary asserts that appear in
+    NO evidence: no tool observation, not the task text,
+    and not the content of a demanded file this run
+    actually read."""
+    nums = _asserted_numbers(summary)
+    if not nums:
+        return []
+    allowed = ("\n".join(_observation_texts(state["messages"]))
+               + "\n" + (state["task_text"] or "")).replace(",", "")
+    read_contents = []
+    for rel in demand_files:
+        if _read_evidence(state, rel):
+            try:
+                path = sandbox.resolve_inside(state["task_dir"], rel)
+                with open(path, "r", errors="replace") as f:
+                    read_contents.append(f.read().replace(",", ""))
+            except Exception:
+                pass
+    bad = []
+    for n in nums:
+        if n in allowed:
+            continue
+        if any(n in c for c in read_contents):
+            continue
+        bad.append(n)
+    return bad
+
+
+def _fetch_demanded(state):
+    """The task demands fetched evidence: it points at a
+    page, or it stakes a number/version on her own product
+    (whose facts live at her canonical sources)."""
+    text = state["task_text"] or ""
+    if tasktools.names_a_page(text):
+        return True
+    return selffacts.mentions_own_product(text) \
+        and bool(_NUMBER_RE.search(text))
+
+
+# ---------- pseudo-tool-call text (v1.0.15, class 3) ----------
+_PSEUDO_PREFIX_RE = re.compile(
+    r"^(?:[-*•]\s*)?(?:(?:lille|assistant)\s*:\s*)?", re.I)
+_PSEUDO_CALL_RE = re.compile(r"^([a-z][a-z0-9_]*)\s*\(")
+
+
+def detect_pseudo_tool_call(content):
+    """A reply that WRITES tool calls as text instead of
+    making them (battery round 2, browser-b: a whole script
+    of browser_open(...) / 'Lille: browser_read()' lines —
+    nothing executed, and the run ended by narrating a
+    finish). Returns the first REAL tool name the text
+    impersonates, or None. A call shape counts when it
+    leads a line (after bullet / speaker-prefix stripping)
+    and names a tool that exists; prose that merely
+    mentions a call mid-sentence is not a pseudo call, and
+    replies the real parsers claimed never reach here."""
+    if not content:
+        return None
+    names = set(tasktools.HANDLERS) | {"finish"}
+    for raw in content.splitlines():
+        line = _PSEUDO_PREFIX_RE.sub("", raw.strip())
+        m = _PSEUDO_CALL_RE.match(line)
+        if m and m.group(1) in names:
+            return m.group(1)
+    return None
+
+
+# ---------- progress / derailment (v1.0.15, classes 3 + 5) ----------
+def _progress_marks(state):
+    """For each recorded step, whether it made progress: it
+    changed a file (changed_step stamps the step), it is a
+    finish, or it is a tool step whose (tool, result) pair
+    is NEW information in this run. Text, malformed,
+    denied, and repeated-identical steps are not progress."""
+    changed = set((state.get("changed_step") or {}).values())
+    seen = set()
+    marks = []
+    for s in state["steps"]:
+        mark = False
+        if s.n in changed or s.kind == "finish":
+            mark = True
+        elif s.kind == "tool":
+            key = (s.tool, s.result_summary)
+            if key not in seen:
+                mark = True
+            seen.add(key)
+        marks.append(mark)
+    return marks
+
+
+def _unproductive_streak(state):
+    """(streak, last_progress_index): how many consecutive
+    recorded steps since the last progress step."""
+    marks = _progress_marks(state)
+    last = -1
+    for i, m in enumerate(marks):
+        if m:
+            last = i
+    return len(marks) - 1 - last, last
+
+
 class WaitingRouteError(RuntimeError):
     """All routes are cooling down (Fallback Law). NOT a failure:
     the task waits and resumes at/after retry_at. The message
@@ -506,10 +697,18 @@ class TaskLoop:
         # v0.5 spec mode: optional deterministic finish guard —
         # callable(steps_so_far, finish_args) -> rejection str | None.
         self.finish_guard = finish_guard
+        # v1.0.15 (class 1): the router is kept when the loop
+        # builds it, so checkpoints can carry the route audit
+        # tail — round 2's traces recorded only the final
+        # serving provider, which left the starvation partly
+        # undiagnosable after the fact.
+        self.router = None
+        self._audit_seen = 0
         if model_call is not None:
             self.model_call = model_call
         else:
             router = Router(config)
+            self.router = router
             self.model_call = self._router_model_call(router)
 
     # ---------- default model call: Router-backed ----------
@@ -560,6 +759,21 @@ class TaskLoop:
     # often recovers into productive tool steps (v0.8 X proof —
     # attempts repeatedly ended one nudge after a wobble).
     MAX_PLAIN_TEXT_NUDGES = 3
+
+    # Pseudo-tool-call text (v1.0.15, class 3): a reply that
+    # writes a tool call as text gets ONE explicit steer
+    # (emit it for real); a second one stops the run
+    # honestly — the model has been told exactly how to act
+    # and is still narrating.
+    MAX_PSEUDO_CALLS = 2
+
+    # Derailment breaker (v1.0.15, classes 3 + 5): after
+    # this many consecutive steps with no progress (no file
+    # changed, no new information), steer back to the task's
+    # own unfinished work; after twice that, stop honestly
+    # instead of burning the budget on repetition.
+    UNPRODUCTIVE_STEER = 4
+    UNPRODUCTIVE_STOP = 8
 
     # History budget for the model's view (v0.8): the keyless
     # anonymous endpoint 413s oversized request bodies, and a long
@@ -812,6 +1026,17 @@ class TaskLoop:
     def _checkpoint(self, state):
         if self.on_checkpoint is None:
             return
+        # v1.0.15 (class 1): fold the router's audit tail
+        # into the record (bounded, metadata only — provider
+        # + outcome, never content), so a parked task's
+        # record shows what every route actually did.
+        if self.router is not None:
+            fresh = self.router.audit[self._audit_seen:]
+            self._audit_seen = len(self.router.audit)
+            ev = state.setdefault("route_events", [])
+            ev.extend({"provider": e.provider, "outcome": e.outcome}
+                      for e in fresh)
+            del ev[:-100]
         snap = {
             "task_id": state["task_id"], "task_text": state["task_text"],
             "task_dir": state["task_dir"],
@@ -821,6 +1046,7 @@ class TaskLoop:
             "total_chars": state["total_chars"],
             "reframed": state["reframed"], "nudged": state["nudged"],
             "provider": state.get("provider"),
+            "route_events": list(state.get("route_events", [])),
             # v1.0.14 finish-landing state: the baseline the
             # produced-diff judges against, the pending finish
             # (her own completion statement, applicable without
@@ -848,12 +1074,12 @@ class TaskLoop:
             return "run"
 
     # ---------- the loop ----------
-    def run(self, task_text, task_id=None):
+    def run(self, task_text, task_id=None, task_dir=None):
         if task_id is None:
             task_id, task_dir = sandbox.make_task_dir(self.workspace_root)
-        else:
+        elif task_dir is None:
             task_dir = os.path.join(self.workspace_root, task_id)
-            os.makedirs(task_dir, exist_ok=True)
+        os.makedirs(task_dir, exist_ok=True)
         baseline = self._snapshot(task_dir)
         state = {
             "task_id": task_id, "task_text": task_text, "task_dir": task_dir,
@@ -863,6 +1089,7 @@ class TaskLoop:
             ],
             "steps": [], "iterations_done": 0, "total_chars": 0,
             "reframed": False, "nudged": 0, "provider": None,
+            "route_events": [],
             # v1.0.14: verify-by-state + finish-landing state.
             "baseline": baseline, "baseline_late": False,
             "produced": [], "changed_step": {},
@@ -885,6 +1112,7 @@ class TaskLoop:
             "reframed": snap.get("reframed", False),
             "nudged": snap.get("nudged", 0),
             "provider": snap.get("provider"),
+            "route_events": list(snap.get("route_events") or []),
             # v1.0.14: a pre-1.0.14 checkpoint has no baseline —
             # capture one now and mark it late (the produced
             # check then stands down for this run: files the
@@ -932,6 +1160,62 @@ class TaskLoop:
         the tool's value)."""
         summary = args.get("summary", "") or ""
         outputs = args.get("outputs", []) or []
+        # (v1.0.15, class 3) A finish must carry its result:
+        # an empty summary — or one whose args carry only an
+        # error payload under some other key (browser-a's
+        # finish, accepted in round 2 with outputs=[] and no
+        # summary at all) — is not a completion.
+        if not summary.strip():
+            return ("this finish carries no summary — a "
+                    "finish must state what was done and what "
+                    "was found, in the summary. An empty "
+                    "summary, or args carrying only an error "
+                    "payload, is not a result: do the work, "
+                    "then finish with the summary."), None
+        # (v1.0.15, class 2) EVIDENCE-PROPORTIONATE FINISH:
+        # the claim must rest on steps proportionate to the
+        # task's own evidence demand (see the helpers above
+        # _file_demand / _fetch_demanded). summary-b finished
+        # on zero tool steps with a fabricated table of two
+        # files' contents; browser-a "finished" a fetch task
+        # with no browser step at all.
+        demand_files = _file_demand(state["task_text"],
+                                    state.get("baseline"))
+        fetch_demanded = _fetch_demanded(state)
+        tool_steps = [s for s in state["steps"] if s.kind == "tool"]
+        if (demand_files or fetch_demanded) and not tool_steps:
+            owed = []
+            if demand_files:
+                owed.append("read " + ", ".join(demand_files))
+            if fetch_demanded:
+                owed.append("fetch the source the task points at")
+            return ("this finish rests on no executed step: "
+                    "the task requires evidence first — "
+                    + "; ".join(owed) + ". A completion claim "
+                    "must rest on work this run actually did "
+                    "with tools: do that work, read what it "
+                    "shows, then finish."), None
+        unread = [rel for rel in demand_files
+                  if not _read_evidence(state, rel)]
+        if unread:
+            return ("your summary speaks about "
+                    f"{', '.join(unread)}, but no step of "
+                    "this run read them — claims about a "
+                    "file's contents must trace to a step "
+                    "that read the file. Read them with a "
+                    "tool, then finish from what they "
+                    "actually say."), None
+        if demand_files or fetch_demanded:
+            bad = _ungrounded_numbers(summary, state, demand_files)
+            if bad:
+                return ("your summary states value(s) "
+                        f"{', '.join(bad)} that appear in no "
+                        "tool result of this run, in the task "
+                        "text, or in a file this run read. "
+                        "Report only values your evidence "
+                        "shows — compute a derived value with "
+                        "run_python so it stands in the "
+                        "evidence, then finish."), None
         # (fix 2) Claimed outputs must be THIS run's work:
         # created or changed against the run-start baseline.
         # code-b claimed a cap fix on a fixture her trace
@@ -1037,6 +1321,47 @@ class TaskLoop:
                           state["task_id"], steps,
                           provider=state.get("provider"))
 
+    def _return_to_work_note(self, state, headline):
+        """Class 5 (v1.0.15): a loop break points back at the
+        task's OWN unfinished work, derived from the record —
+        the last productive tool and what it was doing, the
+        demanded files still unread, the output still
+        unproduced. It never names a tool class the job did
+        not call for: the pre-1.0.15 steer sent every looped
+        task to browser_read, which diverted files-b (a file
+        task) into Sentinel-denied browser attempts instead
+        of back to the summary it had already read for."""
+        steps = state["steps"]
+        parts = [headline]
+        marks = _progress_marks(state)
+        last_tool = None
+        for s, m in zip(reversed(steps), reversed(marks)):
+            if s.kind == "tool" and m:
+                last_tool = s
+                break
+        if last_tool is None:
+            last_tool = next((s for s in reversed(steps)
+                              if s.kind == "tool"), None)
+        if last_tool is not None:
+            parts.append(
+                f"Your last productive step was {last_tool.tool} "
+                f"({last_tool.args_summary}) — continue that work.")
+        demand = _file_demand(state["task_text"],
+                              state.get("baseline"))
+        unread = [r for r in demand
+                  if not _read_evidence(state, r)]
+        if unread:
+            parts.append("Still unread: " + ", ".join(unread)
+                         + " — read them with a tool.")
+        elif demand and not state.get("produced"):
+            parts.append(
+                "You have read what the task names; the output "
+                "it asks for has not been produced yet — "
+                "produce it from what you read.")
+        parts.append("Do not switch to tools this task does "
+                     "not call for.")
+        return " ".join(parts)
+
     def _execute(self, state):
         try:
             return self._execute_inner(state)
@@ -1094,6 +1419,7 @@ class TaskLoop:
                 "trace."})
             self._checkpoint(state)
         steered_streaks = set()
+        unproductive_steered_for = None
         brief_swapped = state["iterations_done"] >= 1
         for step_no in range(state["iterations_done"] + 1, self.max_steps + 1):
             if self.task_brief and not brief_swapped \
@@ -1124,8 +1450,7 @@ class TaskLoop:
                     "malformed — the arguments are too long or "
                     "broken. Do NOT retry that call. Keep every "
                     "argument SHORT (one line), and take the "
-                    "task's first real step now (for a browser "
-                    "task: browser_open)."}) 
+                    "task's next real step now."})
             tool_steps = [s for s in steps if s.kind == "tool"]
             if len(tool_steps) >= 3:
                 last3 = tool_steps[-3:]
@@ -1134,14 +1459,53 @@ class TaskLoop:
                         (s.tool, s.args_summary) == sig for s in last3) \
                         and sig not in steered_streaks:
                     steered_streaks.add(sig)
+                    # Class 5 (v1.0.15): the steer returns
+                    # her to the task's own work — the old
+                    # text named browser actions for EVERY
+                    # task, which diverted files-b into
+                    # Sentinel-denied browser_read attempts.
                     messages.append({"role": "user", "content":
-                        f"Loop check: you have called {sig[0]} with the "
-                        "same arguments three times in a row and the "
-                        "situation has not changed. Stop repeating it. "
-                        "Take a different action: browser_read the "
-                        "current page carefully, or browser_open the "
-                        "page the task actually needs, and continue "
-                        "from there."})
+                        self._return_to_work_note(
+                            state,
+                            f"Loop check: you have called {sig[0]} "
+                            "with the same arguments three times "
+                            "in a row and the situation has not "
+                            "changed. Stop repeating it.")})
+            # DERAILMENT BREAKER (v1.0.15, classes 3 + 5): a
+            # run whose steps stop producing anything — no
+            # file changed, no new information — is steered
+            # back to its own unfinished work once per streak,
+            # and stopped honestly when the streak runs twice
+            # the steer threshold (format-a's vault/pip loops
+            # burned the whole budget this way in round 2).
+            streak, last_prog = _unproductive_streak(state)
+            if streak >= TaskLoop.UNPRODUCTIVE_STOP:
+                done = self._try_deterministic_finish(state)
+                if done is not None:
+                    result = done
+                    break
+                record("stop", result_summary=
+                       f"no progress in {streak} consecutive "
+                       "steps; stopping honestly")
+                made = ", ".join(state.get("produced", [])) or "none"
+                result = TaskResult(
+                    "stopped",
+                    "Stopped: repeated steps stopped making "
+                    "progress on this task's own work, so I am "
+                    "not going to keep narrating attempts. "
+                    f"Work products so far: {made}.",
+                    task_dir, task_id, steps,
+                    provider=state.get("provider"))
+                break
+            if streak >= TaskLoop.UNPRODUCTIVE_STEER \
+                    and unproductive_steered_for != last_prog:
+                unproductive_steered_for = last_prog
+                messages.append({"role": "user", "content":
+                    self._return_to_work_note(
+                        state,
+                        f"Loop check: the last {streak} steps "
+                        "changed nothing and brought no new "
+                        "information.")})
             ctl = self._control()
             if ctl in ("pause", "cancel"):
                 record("stop", result_summary=f"task {ctl}led by user")
@@ -1209,6 +1573,48 @@ class TaskLoop:
                 record("repair", result_summary="repaired tool call accepted")
 
             if not calls:
+                # PSEUDO-TOOL-CALL TEXT (v1.0.15, class 3):
+                # the reply WRITES a tool call instead of
+                # making one. Nothing was executed, so there
+                # is nothing to nudge toward a finish — steer
+                # once with the exact real format; a second
+                # pseudo reply stops the run honestly rather
+                # than narrating a script of actions that
+                # never happened (browser-b, round 2).
+                pseudo = detect_pseudo_tool_call(content) if content else None
+                if pseudo:
+                    pseudo_count = sum(
+                        1 for s in steps if s.kind == "pseudo-call") + 1
+                    record("pseudo-call", pseudo, "",
+                           "tool call written as text; nothing executed")
+                    messages.append({"role": "assistant",
+                                     "content": content or ""})
+                    if pseudo_count >= TaskLoop.MAX_PSEUDO_CALLS:
+                        record("stop", result_summary=
+                               "repeated pseudo-tool-call text; "
+                               "stopping honestly")
+                        result = TaskResult(
+                            "stopped",
+                            "Stopped: I kept writing actions as "
+                            "text instead of calling tools, so "
+                            "nothing was executed and no result "
+                            "is claimed.",
+                            task_dir, task_id, steps,
+                            provider=reply.get("provider"))
+                        sync()
+                        break
+                    messages.append({"role": "user", "content":
+                        f"You wrote {pseudo}(...) as TEXT. Text "
+                        "that looks like a tool call does "
+                        "nothing — nothing was executed, no "
+                        "page was opened, nothing was read. "
+                        "Emit the call for real: one native "
+                        "tool call, or exactly one fenced JSON "
+                        "block {\"tool\": \"" + pseudo + "\", "
+                        "\"args\": {...}}. Do not narrate "
+                        "actions; execute them."})
+                    sync()
+                    continue
                 # No tool call at all: refusal? plain-text ending?
                 if content and recovery.is_refusal(content) and not reframed \
                         and not recovery.is_harmful_request(task_text):

@@ -104,6 +104,17 @@ def derive_browser_domains(task_text):
             add(d)
     return out
 
+
+def names_a_page(task_text):
+    """True when the job's own words POINT at a page: a URL
+    or a bare domain appears in the text. Naming a service
+    is not pointing at a page (a drafting job about a
+    service demands no fetch) — the distinction the finish
+    evidence gate (v1.0.15, loop._check_finish) judges a
+    task's fetch demand by."""
+    low = (task_text or "").lower()
+    return bool(_URL_RE.search(low) or _BARE_DOMAIN_RE.search(low))
+
 FINISH = "finish"
 
 TOOL_SCHEMAS = [

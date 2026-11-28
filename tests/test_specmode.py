@@ -180,12 +180,12 @@ class SpecRunMockedTests(unittest.TestCase):
                 "class T(unittest.TestCase):\n"
                 "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n")
         model = ScriptedModel([
-            native("write_file", {"path": "repo/calc.py", "content": calc}),
-            native("write_file", {"path": "repo/test_calc.py", "content": test}),
+            native("write_file", {"path": "calc.py", "content": calc}),
+            native("write_file", {"path": "test_calc.py", "content": test}),
             native("run_tests", {"repo": "repo"}),
             native("git_commit", {"repo": "repo", "message": "add calc"}),
             native("finish", {"summary": "calc built, tests green, committed",
-                              "outputs": ["repo/calc.py", "repo/test_calc.py"]}),
+                              "outputs": ["calc.py", "test_calc.py"]}),
         ])
         report, result, task_dir = specmode.run_spec(
             SPEC, repo=None, workspace_root=self.root, model_call=model,
@@ -199,12 +199,12 @@ class SpecRunMockedTests(unittest.TestCase):
                 "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n")
         model = ScriptedModel([
             native("finish", {"summary": "done already", "outputs": []}),
-            native("write_file", {"path": "repo/calc.py", "content": calc}),
-            native("write_file", {"path": "repo/test_calc.py", "content": test}),
+            native("write_file", {"path": "calc.py", "content": calc}),
+            native("write_file", {"path": "test_calc.py", "content": test}),
             native("run_tests", {"repo": "repo"}),
             native("git_commit", {"repo": "repo", "message": "add calc"}),
             native("finish", {"summary": "now really done",
-                              "outputs": ["repo/calc.py", "repo/test_calc.py"]}),
+                              "outputs": ["calc.py", "test_calc.py"]}),
         ])
         report, result, task_dir = specmode.run_spec(
             SPEC, repo=None, workspace_root=self.root, model_call=model,
@@ -261,10 +261,10 @@ Deliverables
 
     def test_checkpoint_written_and_resume_continues(self):
         model = ScriptedModel([
-            native("write_file", {"path": "repo/fact.txt",
+            native("write_file", {"path": "fact.txt",
                                   "content": "a fact"}),
             native("finish", {"summary": "done",
-                              "outputs": ["repo/fact.txt"]}, "c2"),
+                              "outputs": ["fact.txt"]}, "c2"),
         ])
         with tempfile.TemporaryDirectory() as td:
             report, result, task_dir = specmode.run_spec(
@@ -281,7 +281,7 @@ Deliverables
             # evidence on disk.
             model2 = ScriptedModel([
                 native("finish", {"summary": "resumed and done",
-                                  "outputs": ["repo/fact.txt"]}),
+                                  "outputs": ["fact.txt"]}),
             ])
             out = specmode.resume_spec(task_dir, model_call=model2,
                                        max_steps=10)

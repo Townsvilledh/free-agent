@@ -108,4 +108,118 @@ object FinishChecks {
         }
         return out
     }
+
+    // ---- v1.0.15 (battery round 2, classes 2 + 3): the
+    // device mirror of the core loop's evidence gates
+    // (free_agent.loop._check_finish / detect_pseudo_tool_call).
+    // Round 2's worst failure was a finish accepted with
+    // ZERO executed tool steps on a task whose text demands
+    // reading named files, its report asserting a fabricated
+    // table of their contents. The gates below judge a
+    // finish against the task's own evidence demand,
+    // derived structurally: files that exist in the task
+    // sandbox AND are named by the task's words; a plan
+    // that requires tool classes; values that must trace
+    // to an executed step's output.
+
+    private val NUMBER_RE = Regex("""\d[\d,]*(?:\.\d+)?""")
+
+    /** Numeric literals a text asserts, normalised
+     *  (commas dropped, trailing zeros trimmed), excluding
+     *  the ones inside date assertions — dates have their
+     *  own check above. */
+    fun numericLiterals(text: String): List<String> {
+        var stripped = ISO_DATE_RE.replace(text, " ")
+        stripped = LONG_DATE_RE.replace(stripped, " ")
+        stripped = LONG_DATE_US_RE.replace(stripped, " ")
+        val out = mutableListOf<String>()
+        for (m in NUMBER_RE.findAll(stripped)) {
+            var n = m.value.replace(",", "").trimEnd('.')
+            if ('.' in n) n = n.trimEnd('0').trimEnd('.')
+            if (n.isNotEmpty() && n !in out) out.add(n)
+        }
+        return out
+    }
+
+    /** Existing files the task's own words name — the
+     *  files the task is ABOUT. */
+    fun demandedFiles(
+        taskText: String, existingFiles: List<String>
+    ): List<String> {
+        val low = taskText.lowercase()
+        return existingFiles.filter { rel ->
+            val base = rel.substringAfterLast('/').lowercase()
+            base.isNotEmpty() && base in low
+        }.sorted()
+    }
+
+    /** A demanded file counts as read when an executed
+     *  step's observation carries its content (the read
+     *  tools return the content itself) or names the read. */
+    fun readEvidenced(
+        rel: String, content: String, observations: List<String>
+    ): Boolean {
+        val base = rel.substringAfterLast('/')
+        if (observations.any {
+                it.contains("read_note") && it.contains(base)
+            }) {
+            return true
+        }
+        val probe = content.split(Regex("""\s+"""))
+            .joinToString(" ").take(60)
+        if (probe.isEmpty()) return true
+        return observations.any { obs ->
+            obs.split(Regex("""\s+""")).joinToString(" ")
+                .contains(probe)
+        }
+    }
+
+    /** Values the summary asserts that appear in NO
+     *  evidence: no tool observation, not the task text,
+     *  and not the content of a demanded file this run
+     *  actually read. */
+    fun ungroundedContentValues(
+        summary: String,
+        observations: List<String>,
+        taskText: String,
+        readContents: List<String>
+    ): List<String> {
+        val nums = numericLiterals(summary)
+        if (nums.isEmpty()) return emptyList()
+        val allowed = (observations.joinToString("\n") + "\n" +
+            taskText).replace(",", "")
+        val contents = readContents.map { it.replace(",", "") }
+        return nums.filter { n ->
+            n !in allowed && contents.none { c -> n in c }
+        }
+    }
+
+    private val PSEUDO_CALL_RE = Regex("""^([a-z][a-z0-9_]*)\s*\(""")
+
+    /** Pseudo-tool-call text (class 3): the first REAL
+     *  tool name a reply impersonates in call shape at a
+     *  line's start (after bullet / speaker-prefix
+     *  stripping), or null. Prose that merely mentions a
+     *  call mid-sentence is not a pseudo call. */
+    fun pseudoCallName(
+        content: String, toolNames: Set<String>
+    ): String? {
+        if (content.isBlank()) return null
+        for (raw in content.split('\n')) {
+            var line = raw.trim()
+            line = line.removePrefix("- ").removePrefix("* ")
+            if (line.startsWith("Lille:", ignoreCase = true)) {
+                line = line.substring(6).trim()
+            } else if (line.startsWith(
+                    "Assistant:", ignoreCase = true)
+            ) {
+                line = line.substring(10).trim()
+            }
+            val m = PSEUDO_CALL_RE.find(line) ?: continue
+            if (m.groupValues[1] in toolNames) {
+                return m.groupValues[1]
+            }
+        }
+        return null
+    }
 }

@@ -113,8 +113,22 @@ def preclone_local(task_dir, local_path):
 
 
 def repo_dir_of(task_dir, repo_arg):
-    """Resolve the repo subdir inside the sandbox (default 'repo')."""
-    return sandbox.resolve_inside(task_dir, repo_arg or "repo")
+    """Resolve the repo subdir inside the sandbox (default 'repo').
+
+    v1.0.15 (spec working-directory contract): a spec run's
+    loop executes with the repo AS its working directory, so
+    the task dir itself may BE the git root. Resolution: the
+    named subdir when it is a git repo; else the task dir
+    itself when IT is the git root; else the named subdir
+    (whose callers then report the usual 'no git repo'
+    error). Plain tasks are unaffected — their task dir is
+    never a git root."""
+    candidate = sandbox.resolve_inside(task_dir, repo_arg or "repo")
+    if os.path.isdir(os.path.join(candidate, ".git")):
+        return candidate
+    if os.path.isdir(os.path.join(task_dir, ".git")):
+        return task_dir
+    return candidate
 
 
 def repo_tree(task_dir, repo_arg=None):

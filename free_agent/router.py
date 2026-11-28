@@ -17,6 +17,10 @@ ROUTES.md). The router:
   COOLS THAT ROUTE DOWN — records an unlock time from the provider's
   Retry-After when the transport reports one, else the route's
   configured cooldown — and moves to the next route automatically;
+  auth/config failures (401/403/404) demote the same way (v1.0.15),
+  a 404 first rotates to the route's next listed model, and when
+  every route is cooling but the earliest recovery is near, the
+  call WAITS it out in-run and re-walks rather than queueing;
 - SKIPS routes still cooling down, and returns to the preferred route
   once its cooldown expires (health re-probe is simply trying it
   first again);
@@ -48,7 +52,22 @@ from datetime import datetime, timezone
 from . import chatguard, recovery
 
 FALLBACK_STATUSES = {402, 429, 503}
+# v1.0.15 (battery round 2, class 1): statuses that DEMOTE a
+# route in the health system. 402/429/503 are quota/transient.
+# 401/403/404 are auth/config failures — the route is not
+# merely busy, it is answering wrongly for this caller (a dead
+# key, a credential the egress never swapped, a model the
+# account does not have). Before this fix they recorded NO
+# cooldown and NO fail count: a dead route led every walk,
+# burned a round trip on every call, never demoted — and
+# contributed no unlock time, which also hid it from the
+# queued result's retry maths.
+DEMOTE_STATUSES = FALLBACK_STATUSES | {401, 403, 404}
 MAX_STREAM_CONTINUATIONS = 3
+# v1.0.15 (class 1): how many times one call may wait out a
+# near route recovery in-run before returning its queued
+# result (see Router.route_wait_budget).
+MAX_ROUTE_WAITS = 2
 
 # Groq's edge rejects the default Python urllib User-Agent with an
 # HTTP 403 (live-verified 2026-11-26 via the hostkeys bridge: a valid
@@ -163,6 +182,21 @@ class Router:
         self.horde_max_polls = 24                         # ~6 min of queue
         self.audit = audit if audit is not None else []   # list[RouteEvent]
         self.clock = clock or time.time                   # injectable for tests
+        self.sleeper = time.sleep                         # injectable for tests (v1.0.15 in-run route waiting)
+        # v1.0.15 (class 1): when a walk ends with every route
+        # cooling but the earliest unlock is near, the router
+        # WAITS it out in-run and re-walks instead of returning
+        # a queued result that parks the task — a single
+        # route's transient exhaustion must not park work
+        # while recovery is seconds away. The budget covers
+        # second-scale recoveries (a rate limiter's
+        # Retry-After of a few seconds); minute-scale
+        # recoveries stay the durable scheduler's job (it
+        # resumes the task at retry_at). Bounded: at most
+        # MAX_ROUTE_WAITS waits per call, and a re-walk that
+        # comes back queued with no later retry_at than the
+        # one just waited out is never waited on again.
+        self.route_wait_budget = 40.0
         self.cooldowns = {}                               # provider -> unlock ts
         self.fail_counts = {}                             # provider -> consecutive failures (v0.12 health: escalates the cooldown; a success clears it)
 
@@ -404,12 +438,93 @@ class Router:
         except Exception:
             return 0, None, None
 
+    # ---------- route health (v1.0.15, class 1) ----------
+    def _note_failure(self, provider, status, retry_after):
+        """Record a route failure in the health system and
+        return the route's unlock time, or None when the
+        status carries no health signal (a plain 400, say —
+        the walk simply falls through). Fallback, transport
+        (0) and auth/config failures all demote: the cooldown
+        is the provider's Retry-After when the transport
+        reported one, else the configured cooldown escalated
+        x1/x2/x4/x8 by the consecutive-failure count (v0.12
+        maths, unchanged); a success clears both records."""
+        if status not in DEMOTE_STATUSES and status != 0:
+            return None
+        fails = self.fail_counts.get(provider.name, 0) + 1
+        self.fail_counts[provider.name] = fails
+        if retry_after:
+            cd = retry_after
+        else:
+            cd = provider.cooldown_seconds * (2 ** min(fails - 1, 3))
+        unlock = self.clock() + cd
+        self.cooldowns[provider.name] = unlock
+        return unlock
+
+    @staticmethod
+    def _rotate_model(provider):
+        """A 404 from a multi-model route usually means THIS
+        account cannot serve the lead model — the config
+        lists spares precisely for that, but every transport
+        sends models[0] only, so before v1.0.15 the spare
+        was unreachable. Move the failed model to the back
+        and let the walk retry the same route on the spare.
+        The rotation persists for the process (the config
+        object is per-process); a success on the new lead
+        clears the route's health record as usual."""
+        if len(provider.models) > 1:
+            provider.models.append(provider.models.pop(0))
+            return True
+        return False
+
+    def _wait_out_recovery(self, result, category, waits, waited_for=()):
+        """True when this queued result should be waited out
+        in-run: the earliest route recovery is near (inside
+        route_wait_budget), this call has waits left, and
+        this exact retry_at was not already waited out once
+        (a re-walk that returns the same unlock made no
+        progress — waiting on it again would only sleep
+        twice for nothing). Sleeps until the unlock; the
+        re-walk then re-probes the recovered route first,
+        as the Fallback Law already prescribes."""
+        if not result.get("queued") or waits >= MAX_ROUTE_WAITS:
+            return False
+        retry_at = result.get("retry_at") or 0
+        if retry_at in waited_for:
+            return False
+        delay = retry_at - self.clock()
+        if delay <= 0 or delay > self.route_wait_budget:
+            return False
+        self.audit.append(RouteEvent("none", category, "route-wait"))
+        self.sleeper(delay + 0.05)
+        return True
+
     def complete(self, messages, tools=None, category="task", private=False,
                  override_privacy=False):
         """Route one raw completion (Fallback Law + privacy routing,
         same rules as _chat_once) for the tool-call loop. Returns
         {"provider", "message"} or a queued dict; raises
-        PrivacyBlocked / AllProvidersFailed exactly like chat()."""
+        PrivacyBlocked / AllProvidersFailed exactly like chat().
+
+        v1.0.15 (class 1): a queued result whose earliest
+        recovery is near is waited out in-run and the walk
+        retried — the caller only sees the queued result when
+        recovery is genuinely minutes away."""
+        waits, waited_for = 0, []
+        while True:
+            result = self._complete_walk(
+                messages, tools=tools, category=category,
+                private=private, override_privacy=override_privacy)
+            if not self._wait_out_recovery(result, category, waits,
+                                           waited_for):
+                return result
+            waited_for.append(result.get("retry_at") or 0)
+            waits += 1
+
+    def _complete_walk(self, messages, tools=None, category="task", private=False,
+                       override_privacy=False):
+        """One pass over the route chain (the pre-v1.0.15
+        complete() body)."""
         now = self.clock()
         tried, unlock_times, saw_trusted = [], [], False
         for p in effective_providers(self.config.providers):
@@ -427,24 +542,30 @@ class Router:
                 self.audit.append(RouteEvent(p.name, category, "cooldown-skip"))
                 unlock_times.append(unlock)
                 continue
-            if getattr(p, "kind", "openai") == "horde":
-                # Raw-completion route: it cannot honour NATIVE
-                # tool calls, but the loop's text protocol (one
-                # fenced JSON block per reply, parsed by the loop)
-                # runs fine over plain completions — so the loop
-                # path routes through it as the fallback of last
-                # resort, with the tool catalogue rendered as text
-                # (the route never sees the API tools parameter).
-                # Wired 2026-11-26 after the keyless primary hit
-                # its hard 100-replies/day cap (402 FREE_LIMIT)
-                # and the loop path had NO second route at all.
-                status, text, retry_after = self.horde_transport(
-                    p, _with_tool_catalogue(messages, tools))
-                message = {"role": "assistant", "content": text} \
-                    if status == 200 and text else None
-            else:
-                status, message, retry_after = self.raw_transport(
-                    p, messages, tools)
+            while True:
+                if getattr(p, "kind", "openai") == "horde":
+                    # Raw-completion route: it cannot honour NATIVE
+                    # tool calls, but the loop's text protocol (one
+                    # fenced JSON block per reply, parsed by the loop)
+                    # runs fine over plain completions — so the loop
+                    # path routes through it as the fallback of last
+                    # resort, with the tool catalogue rendered as text
+                    # (the route never sees the API tools parameter).
+                    # Wired 2026-11-26 after the keyless primary hit
+                    # its hard 100-replies/day cap (402 FREE_LIMIT)
+                    # and the loop path had NO second route at all.
+                    status, text, retry_after = self.horde_transport(
+                        p, _with_tool_catalogue(messages, tools))
+                    message = {"role": "assistant", "content": text} \
+                        if status == 200 and text else None
+                else:
+                    status, message, retry_after = self.raw_transport(
+                        p, messages, tools)
+                if status == 404 and self._rotate_model(p):
+                    self.audit.append(RouteEvent(p.name, category,
+                                                 "model-rotated"))
+                    continue
+                break
             if status == 200 and message is not None and (
                     message.get("content") or message.get("tool_calls")):
                 self.cooldowns.pop(p.name, None)
@@ -453,20 +574,8 @@ class Router:
                 return {"provider": p.name, "message": message}
             self.audit.append(RouteEvent(p.name, category, f"http-{status}"))
             tried.append((p.name, status))
-            if status in FALLBACK_STATUSES or status == 0:
-                # v0.12 route health: repeated failures
-                # escalate this route's cooldown (x1, x2, x4,
-                # x8 cap) — a demotion that recovers on its
-                # own when the cooldown expires and the next
-                # probe succeeds (success pops both records).
-                fails = self.fail_counts.get(p.name, 0) + 1
-                self.fail_counts[p.name] = fails
-                if retry_after:
-                    cd = retry_after
-                else:
-                    cd = p.cooldown_seconds * (2 ** min(fails - 1, 3))
-                unlock = self.clock() + cd
-                self.cooldowns[p.name] = unlock
+            unlock = self._note_failure(p, status, retry_after)
+            if unlock is not None:
                 unlock_times.append(unlock)
         if private and not override_privacy and not saw_trusted:
             raise PrivacyBlocked(
@@ -571,6 +680,24 @@ class Router:
 
     def _chat_once(self, messages, category="public", private=False, override_privacy=False,
                    exclude=None):
+        """One logical chat call: a walk over the chain, plus
+        (v1.0.15, class 1) in-run waiting when the walk ends
+        queued with a near recovery — same contract as
+        complete()."""
+        waits, waited_for = 0, []
+        while True:
+            result = self._chat_walk(messages, category=category,
+                                     private=private,
+                                     override_privacy=override_privacy,
+                                     exclude=exclude)
+            if not self._wait_out_recovery(result, category, waits,
+                                           waited_for):
+                return result
+            waited_for.append(result.get("retry_at") or 0)
+            waits += 1
+
+    def _chat_walk(self, messages, category="public", private=False, override_privacy=False,
+                   exclude=None):
         now = self.clock()
         tried = []            # (provider, status) actually attempted
         unlock_times = []     # unlock ts of every route that is cooling
@@ -595,7 +722,13 @@ class Router:
                 unlock_times.append(unlock)
                 continue
 
-            status, text, retry_after = self._dispatch(p, messages)
+            while True:
+                status, text, retry_after = self._dispatch(p, messages)
+                if status == 404 and self._rotate_model(p):
+                    self.audit.append(RouteEvent(p.name, category,
+                                                 "model-rotated"))
+                    continue
+                break
             if status == 200 and text:
                 self.cooldowns.pop(p.name, None)
                 self.fail_counts.pop(p.name, None)
@@ -603,22 +736,10 @@ class Router:
                 return {"provider": p.name, "text": text}
             self.audit.append(RouteEvent(p.name, category, f"http-{status}"))
             tried.append((p.name, status))
-            if status in FALLBACK_STATUSES or status == 0:
-                # v0.12 route health: repeated failures
-                # escalate this route's cooldown (x1, x2, x4,
-                # x8 cap) — a demotion that recovers on its
-                # own when the cooldown expires and the next
-                # probe succeeds (success pops both records).
-                fails = self.fail_counts.get(p.name, 0) + 1
-                self.fail_counts[p.name] = fails
-                if retry_after:
-                    cd = retry_after
-                else:
-                    cd = p.cooldown_seconds * (2 ** min(fails - 1, 3))
-                unlock = self.clock() + cd
-                self.cooldowns[p.name] = unlock
+            unlock = self._note_failure(p, status, retry_after)
+            if unlock is not None:
                 unlock_times.append(unlock)
-            # Non-quota errors also fall through (availability beats
+            # Non-demote errors also fall through (availability beats
             # loyalty to one free provider); they just don't cool down.
 
         # Nothing served. Decide the honest ending:
